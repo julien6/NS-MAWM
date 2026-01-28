@@ -70,7 +70,9 @@ class NSMAWM(nn.Module):
         if self.strategy == "residual":
             pred = torch.where(mask, omega_d, pred)
 
-        if apply_projection or self.strategy == "proj":
+        if self.strategy == "proj":
+            pred = torch.where(mask, omega_d, pred)
+        elif apply_projection or self.strategy == "reg+proj":
             pred = torch.where(mask, omega_d, pred)
 
         if apply_correction:
@@ -91,7 +93,7 @@ class NSMAWM(nn.Module):
         omega_d = output.omega_d
         loss_pred = torch.mean((pred - next_obs) ** 2)
         loss_symb = torch.tensor(0.0, device=loss_pred.device)
-        if self.strategy == "reg":
+        if self.strategy in {"reg", "reg+proj"}:
             if torch.any(mask):
                 loss_symb = torch.mean(((pred - omega_d) ** 2)[mask])
             loss = loss_pred + self.lambda_symb * loss_symb
