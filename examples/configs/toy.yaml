@@ -1,0 +1,26 @@
+model:
+  n_agents: 2
+  n_features: 2
+  action_dim: 2
+  latent_dim: 32
+  hidden_dim: 32
+  encoder_hidden: 64
+  decoder_hidden: 64
+  lstm_layers: 1
+  dropout: 0.0
+training:
+  batch_size: 64
+  max_epochs: 3
+  learning_rate: 0.001
+  weight_decay: 0.0
+  lambda_symb: 1.0
+  strategy: reg
+  seed: 7
+data:
+  dataset_size: 512
+  sequence_length: 1
+trainer:
+  accelerator: cpu
+  devices: 1
+  log_every_n_steps: 10
+  enable_checkpointing: false
