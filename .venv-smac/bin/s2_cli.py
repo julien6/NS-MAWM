@@ -1,7 +1,0 @@
-#!/home/soulej/Documents/NS-MAWM/.venv-smac/bin/python
-import sys
-from s2protocol.s2_cli import main
-if __name__ == '__main__':
-    if sys.argv[0].endswith('.exe'):
-        sys.argv[0] = sys.argv[0][:-4]
-    sys.exit(main())

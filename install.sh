@@ -31,5 +31,4 @@ pip install -e .
 
 cd ..
 
-git clone https://github.com/oxwhirl/smac.git
-pip install -e smac/
+./install_smac_pettingzoo.sh

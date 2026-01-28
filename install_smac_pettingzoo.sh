@@ -5,7 +5,7 @@ set -euo pipefail
 # Config
 # =========================
 PYTHON_BIN="${PYTHON_BIN:-python3.10}"
-VENV_DIR="${VENV_DIR:-.venv-smac}"
+VENV_DIR="${VENV_DIR:-venv}"
 SMAC_DIR="${SMAC_DIR:-./smac}"
 
 # Dossier final souhaité (FLAT layout):
@@ -155,7 +155,7 @@ if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
 fi
 
 echo "==> Creating venv: $VENV_DIR"
-"$PYTHON_BIN" -m venv "$VENV_DIR"
+# "$PYTHON_BIN" -m venv "$VENV_DIR"
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"
 
