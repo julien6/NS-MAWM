@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
+
 import torch
 import numpy as np
 
-from env_adapters.flat import ActionSpec, generic_schema
+from env_adapters.flat import ActionSpec, VariantSpec, default_variants, resolve_variant_id, semantic_schema
 from ns_mawm.features import FeatureSchema
 
 
@@ -15,15 +18,20 @@ class OvercookedAdapter:
         from overcooked_ai_py.mdp.overcooked_mdp import OvercookedGridworld
         from overcooked_ai_py.mdp.actions import Action
 
-        mdp = OvercookedGridworld.from_layout_name(layout)
-        self.env = OvercookedEnv.from_mdp(mdp, horizon=horizon)
+        with contextlib.redirect_stdout(io.StringIO()):
+            mdp = OvercookedGridworld.from_layout_name(layout)
+            self.env = OvercookedEnv.from_mdp(mdp, horizon=horizon)
         self.n_agents = 2
         self.action_dim = len(Action.ALL_ACTIONS)
         self.variant_id = f"overcooked:{layout}"
         self._actions = Action.ALL_ACTIONS
         first = self.reset()
         self.obs_dim = int(first.numel())
-        self._schema = generic_schema(self.obs_dim, "overcooked_feature", family="overcooked")
+        self._schema = semantic_schema(
+            self.obs_dim,
+            "overcooked",
+            ("position", "orientation", "carried_object", "pot_state", "object_persistence", "collision"),
+        )
         self._action_spec = ActionSpec(self.n_agents, self.action_dim, tuple(str(a) for a in self._actions))
 
     @property
@@ -35,11 +43,18 @@ class OvercookedAdapter:
         return self._action_spec
 
     def _flat_state(self) -> torch.Tensor:
-        features = self.env.featurize_state_mdp(self.env.state)
+        with contextlib.redirect_stdout(io.StringIO()):
+            features = self.env.featurize_state_mdp(self.env.state)
         return torch.as_tensor(np.asarray(features), dtype=torch.float32).reshape(-1)
 
-    def reset(self, seed: int | None = None) -> torch.Tensor:
-        self.env.reset()
+    def make_variants(self, split: str) -> tuple[VariantSpec, ...]:
+        return default_variants("overcooked", split)
+
+    def reset(self, seed: int | None = None, variant: str | VariantSpec | None = None) -> torch.Tensor:
+        variant_id, _seed_offset = resolve_variant_id(self.variant_id, variant)
+        self.variant_id = variant_id
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.env.reset()
         return self._flat_state()
 
     def step(self, action: torch.Tensor):

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from env_adapters.flat import ActionSpec, flatten_multiagent_obs, generic_schema
+from env_adapters.flat import ActionSpec, VariantSpec, default_variants, flatten_multiagent_obs, resolve_variant_id
 from ns_mawm.features import FeatureSchema, FeatureSpec, FeatureType
 
 
@@ -33,18 +33,46 @@ class GridCraftAdapter:
         return self._action_spec
 
     def _build_schema(self, raw_obs) -> FeatureSchema:
+        from gridcraft.constants import ITEM_NAMES, Item
+
         specs: list[FeatureSpec] = []
-        offset = 0
         for agent in self.agent_order:
-            flat = flatten_multiagent_obs({agent: raw_obs[agent]}, [agent])
-            for i in range(flat.numel()):
-                family = "agent_state" if i >= flat.numel() - 11 else "local_grid"
-                specs.append(FeatureSpec(f"{agent}.feature_{i}", FeatureType.CONTINUOUS, owner=agent, family=family))
-            offset += int(flat.numel())
+            grid = raw_obs[agent]["grid"]
+            layer_names = ("terrain", "block", "entity")
+            layer_families = {
+                "terrain": "boundary",
+                "block": "object_persistence",
+                "entity": "collision",
+            }
+            for layer_idx, layer_name in enumerate(layer_names):
+                for y in range(grid.shape[1]):
+                    for x in range(grid.shape[2]):
+                        center = y == grid.shape[1] // 2 and x == grid.shape[2] // 2
+                        family = "agent_state" if layer_name == "entity" and center else layer_families[layer_name]
+                        specs.append(
+                            FeatureSpec(
+                                f"{agent}.grid.{layer_name}.{y}.{x}",
+                                FeatureType.INTEGER,
+                                owner=agent,
+                                family=family,
+                                tolerance=0.5,
+                            )
+                        )
+            specs.append(FeatureSpec(f"{agent}.self.hp", FeatureType.INTEGER, owner=agent, family="agent_state", tolerance=0.5))
+            specs.append(FeatureSpec(f"{agent}.self.hunger", FeatureType.INTEGER, owner=agent, family="hunger", tolerance=0.5))
+            for item in Item:
+                item_name = ITEM_NAMES[item]
+                family = "crafting" if item_name in {"plank", "stick", "wood_sword", "stone_sword", "wood_pickaxe", "stone_pickaxe"} else "inventory"
+                specs.append(FeatureSpec(f"{agent}.self.inventory.{item_name}", FeatureType.INTEGER, owner=agent, family=family, tolerance=0.5))
         return FeatureSchema.from_specs(specs)
 
-    def reset(self, seed: int | None = None) -> torch.Tensor:
-        obs, _infos = self.env.reset(seed=seed)
+    def make_variants(self, split: str) -> tuple[VariantSpec, ...]:
+        return default_variants("gridcraft", split)
+
+    def reset(self, seed: int | None = None, variant: str | VariantSpec | None = None) -> torch.Tensor:
+        variant_id, seed_offset = resolve_variant_id("gridcraft_sv", variant)
+        self.variant_id = variant_id
+        obs, _infos = self.env.reset(seed=None if seed is None else seed + seed_offset)
         return flatten_multiagent_obs(obs, self.agent_order)
 
     def step(self, action: torch.Tensor):

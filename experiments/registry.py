@@ -1,7 +1,7 @@
 """B01-B45 baseline registry.
 
-This lives outside `ns_mawm` because it intentionally names environments, policies, and
-world-model architectures.
+The registry is part of the experiment layer because it names environments, policies,
+and world-model architectures.
 """
 
 from __future__ import annotations

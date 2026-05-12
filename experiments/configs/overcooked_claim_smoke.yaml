@@ -1,0 +1,17 @@
+mode: smoke
+baseline_id: B30
+environment: overcooked
+world_model: rssm
+policy: MAPPO
+strategy: none
+coverage: 0.0
+train_regime: MV
+eval_regime: UV
+seeds: [0, 1, 2, 3, 4]
+smoke_steps: 12
+train_updates: 2
+batch_size: 6
+sequence_length: 4
+smoke_horizons: [3, 5]
+reference_coverage: 0.34
+output_dir: runs/overcooked_claim_smoke

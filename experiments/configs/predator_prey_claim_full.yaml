@@ -1,0 +1,23 @@
+mode: full
+baseline_id: B31
+environment: predator_prey
+world_model: rssm
+policy: MAPPO
+strategy: none
+coverage: 0.0
+train_regime: MV
+eval_regime: UV
+seeds: [0, 1, 2, 3, 4]
+full_steps: 2048
+full_train_updates: 1000
+batch_size: 64
+sequence_length: 10
+wm_learning_rate: 0.001
+policy_learning_rate: 0.001
+kl_free_nats: 0.1
+kl_balance: 0.8
+horizons: [10, 25, 50]
+reference_coverage: 0.3
+planner_horizon: 10
+planner_candidates: 256
+output_dir: runs/predator_prey_claim_full

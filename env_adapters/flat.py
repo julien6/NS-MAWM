@@ -30,6 +30,14 @@ class ActionSpec:
         return self.n_agents * self.action_dim
 
 
+@dataclass(frozen=True)
+class VariantSpec:
+    variant_id: str
+    split: str
+    seed_offset: int = 0
+    kwargs: dict[str, Any] | None = None
+
+
 class EnvironmentAdapter(Protocol):
     n_agents: int
     action_dim: int
@@ -40,10 +48,11 @@ class EnvironmentAdapter(Protocol):
     def schema(self) -> FeatureSchema: ...
     @property
     def action_spec(self) -> ActionSpec: ...
-    def reset(self, seed: int | None = None) -> torch.Tensor: ...
+    def reset(self, seed: int | None = None, variant: str | VariantSpec | None = None) -> torch.Tensor: ...
     def step(self, action: torch.Tensor): ...
     def decode(self, obs: torch.Tensor) -> dict[str, object]: ...
     def encode_action(self, actions: Any) -> torch.Tensor: ...
+    def make_variants(self, split: str) -> tuple[VariantSpec, ...]: ...
 
 
 def flatten_value(value: Any) -> np.ndarray:
@@ -64,3 +73,32 @@ def generic_schema(width: int, prefix: str = "feature", owner: str | None = None
         FeatureSpec(f"{prefix}_{i}", FeatureType.CONTINUOUS, owner=owner, family=family)
         for i in range(width)
     )
+
+
+def semantic_schema(width: int, prefix: str, families: tuple[str, ...], owner: str | None = None) -> FeatureSchema:
+    if not families:
+        families = ("observation",)
+    specs = []
+    for i in range(width):
+        family = families[i % len(families)]
+        specs.append(FeatureSpec(f"{prefix}.{family}_{i}", FeatureType.CONTINUOUS, owner=owner, family=family))
+    return FeatureSchema.from_specs(specs)
+
+
+def default_variants(environment: str, split: str) -> tuple[VariantSpec, ...]:
+    key = split.upper()
+    if key == "SV":
+        return (VariantSpec(f"{environment}:sv:0", "SV", 0),)
+    if key == "KV":
+        return tuple(VariantSpec(f"{environment}:kv:{i}", "KV", i * 1000) for i in range(3))
+    if key == "UV":
+        return tuple(VariantSpec(f"{environment}:uv:{i}", "UV", 10000 + i * 1000) for i in range(3))
+    raise ValueError(f"Unknown variant split: {split}")
+
+
+def resolve_variant_id(base: str, variant: str | VariantSpec | None) -> tuple[str, int]:
+    if isinstance(variant, VariantSpec):
+        return variant.variant_id, variant.seed_offset
+    if isinstance(variant, str):
+        return variant, 0
+    return base, 0

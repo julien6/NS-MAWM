@@ -1,8 +1,12 @@
-"""Generated experiment configs for the B01-B45 reproduction matrix."""
+"""Experiment configs for the B01-B45 reproduction matrix."""
 
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
+from dataclasses import asdict
+
+import yaml
 
 from experiments.config import ExperimentConfig
 from experiments.registry import BASELINES, BaselineSpec
@@ -40,3 +44,24 @@ def config_for_baseline(spec: BaselineSpec, base: ExperimentConfig | None = None
 
 def all_baseline_configs(base: ExperimentConfig | None = None) -> dict[str, ExperimentConfig]:
     return {baseline_id: config_for_baseline(spec, base) for baseline_id, spec in BASELINES.items()}
+
+
+def configs_for_family(family: str, base: ExperimentConfig | None = None) -> dict[str, ExperimentConfig]:
+    return {
+        baseline_id: config_for_baseline(spec, base)
+        for baseline_id, spec in BASELINES.items()
+        if spec.family == family or family.lower() in spec.family.lower()
+    }
+
+
+def materialize_baseline_configs(output_dir: str | Path = "experiments/configs/materialized") -> list[Path]:
+    root = Path(output_dir)
+    written: list[Path] = []
+    for mode in ("smoke", "full"):
+        base = ExperimentConfig(mode=mode)
+        for baseline_id, config in all_baseline_configs(base).items():
+            path = root / mode / f"{baseline_id}.yaml"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(yaml.safe_dump(asdict(config), sort_keys=False), encoding="utf-8")
+            written.append(path)
+    return written

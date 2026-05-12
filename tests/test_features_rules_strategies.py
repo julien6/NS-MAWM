@@ -90,7 +90,7 @@ def test_residual_strategy_assembles_batch_with_uncovered_width():
     assert torch.equal(out.prediction[:, 0], obs[:, 0])
 
 
-def test_generated_baseline_configs_cover_b01_to_b45():
+def test_baseline_configs_cover_b01_to_b45():
     configs = all_baseline_configs()
     assert set(configs) == set(BASELINES)
     assert len(configs) == 45

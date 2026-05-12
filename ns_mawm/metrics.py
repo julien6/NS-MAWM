@@ -42,3 +42,23 @@ def residual_error(prediction: torch.Tensor, target: torch.Tensor, covered_mask:
     if not residual_mask.any():
         return prediction.new_tensor(0.0)
     return torch.mean((prediction[residual_mask] - target[residual_mask]) ** 2)
+
+
+def masked_mse(prediction: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    if not mask.any():
+        return prediction.new_tensor(0.0)
+    return torch.mean((prediction[mask] - target[mask]) ** 2)
+
+
+def feature_family_rvr(
+    prediction: torch.Tensor,
+    symbolic_values: torch.Tensor,
+    symbolic_mask: torch.Tensor,
+    schema: FeatureSchema,
+) -> dict[str, torch.Tensor]:
+    out: dict[str, torch.Tensor] = {}
+    for family in sorted({spec.family for spec in schema.specs}):
+        family_names = tuple(spec.name for spec in schema.specs if spec.family == family)
+        family_mask = symbolic_mask & schema.mask(family_names, device=symbolic_mask.device)
+        out[family] = rule_violation_rate(prediction, symbolic_values, family_mask, schema)
+    return out

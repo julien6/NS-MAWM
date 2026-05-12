@@ -25,6 +25,87 @@ class WorldModelProtocol(Protocol):
     output_dim: int
 
     def forward(self, obs: torch.Tensor, action: torch.Tensor, state: object | None = None) -> WorldModelOutput: ...
+    def forward_sequence(self, obs: torch.Tensor, action: torch.Tensor, state: object | None = None) -> WorldModelOutput: ...
+    def imagine(self, obs0: torch.Tensor, action_sequence: torch.Tensor, horizon: int | None = None, state: object | None = None) -> WorldModelOutput: ...
+    def loss(self, batch, schema: object | None = None, residual_selector: torch.Tensor | None = None) -> tuple[torch.Tensor, dict[str, torch.Tensor]]: ...
+    def initial_state(self, batch_size: int, device: torch.device) -> object | None: ...
+
+
+def structured_prediction_loss(prediction: torch.Tensor, target: torch.Tensor, schema: object | None = None) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    if schema is None:
+        loss = F.mse_loss(prediction, target)
+        return loss, {"obs_loss": loss}
+    losses: list[torch.Tensor] = []
+    metrics: dict[str, torch.Tensor] = {}
+    for spec in getattr(schema, "specs", ()):
+        sl = schema.slice(spec.name)
+        pred = prediction[..., sl]
+        truth = target[..., sl]
+        feature_type = getattr(spec.feature_type, "value", str(spec.feature_type))
+        if feature_type == "categorical":
+            loss = F.cross_entropy(pred.reshape(-1, pred.shape[-1]), truth.argmax(dim=-1).reshape(-1))
+        elif feature_type == "binary":
+            loss = F.binary_cross_entropy_with_logits(pred, truth)
+        elif feature_type == "integer":
+            loss = F.mse_loss(pred, truth)
+            tolerance = float(getattr(spec, "tolerance", 0.5))
+            rounded_ok = (pred.round() - truth.round()).abs().le(tolerance).float().mean()
+            metrics[f"integer_accuracy/{spec.family}"] = metrics.get(f"integer_accuracy/{spec.family}", pred.new_tensor(0.0)) + rounded_ok.detach()
+        else:
+            loss = F.mse_loss(pred, truth)
+        losses.append(loss)
+        metrics[f"obs_loss/{spec.family}"] = metrics.get(f"obs_loss/{spec.family}", pred.new_tensor(0.0)) + loss.detach()
+    total = torch.stack(losses).mean() if losses else F.mse_loss(prediction, target)
+    metrics["obs_loss"] = total
+    return total, metrics
+
+
+class WorldModelMixin:
+    obs_dim: int
+    output_dim: int
+
+    def initial_state(self, batch_size: int, device: torch.device) -> object | None:
+        return None
+
+    def forward_sequence(self, obs: torch.Tensor, action: torch.Tensor, state: object | None = None) -> WorldModelOutput:
+        return self.forward(obs, action, state)
+
+    @torch.no_grad()
+    def imagine(self, obs0: torch.Tensor, action_sequence: torch.Tensor, horizon: int | None = None, state: object | None = None) -> WorldModelOutput:
+        steps = horizon or action_sequence.shape[1]
+        current = obs0
+        preds: list[torch.Tensor] = []
+        rewards: list[torch.Tensor] = []
+        dones: list[torch.Tensor] = []
+        metrics: dict[str, torch.Tensor] = {}
+        model_state = state
+        for t in range(steps):
+            out = self.forward(current, action_sequence[:, t], model_state)
+            preds.append(out.prediction)
+            rewards.append(out.reward)
+            dones.append(out.done_logits)
+            model_state = out.state
+            metrics = out.metrics
+            current = out.prediction if out.prediction.shape[-1] == self.obs_dim else current
+        return WorldModelOutput(torch.stack(preds, dim=1), torch.stack(rewards, dim=1), torch.stack(dones, dim=1), model_state, metrics)
+
+    def loss(self, batch, schema: object | None = None, residual_selector: torch.Tensor | None = None) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        out = self.forward_sequence(batch.obs, batch.action)
+        target = batch.next_obs
+        if residual_selector is not None and out.prediction.shape[-1] != target.shape[-1]:
+            target = target[..., residual_selector.to(target.device)]
+        obs_loss, obs_metrics = structured_prediction_loss(out.prediction, target, schema if target.shape[-1] == getattr(schema, "width", target.shape[-1]) else None)
+        reward_loss = F.mse_loss(out.reward, batch.reward)
+        done_loss = F.binary_cross_entropy_with_logits(out.done_logits, batch.done)
+        kl = out.metrics.get("kl", out.prediction.new_tensor(0.0))
+        total = obs_loss + reward_loss + done_loss + kl
+        return total, {**obs_metrics, "reward_loss": reward_loss, "done_loss": done_loss, "kl": kl}
+
+    def save_checkpoint(self, path: str) -> None:
+        torch.save(self.state_dict(), path)
+
+    def load_checkpoint(self, path: str, map_location: str | torch.device = "cpu") -> None:
+        self.load_state_dict(torch.load(path, map_location=map_location))
 
 
 class StructuredDecoder(nn.Module):
@@ -36,7 +117,7 @@ class StructuredDecoder(nn.Module):
         return self.net(x)
 
 
-class DeterministicWorldModel(nn.Module):
+class DeterministicWorldModel(WorldModelMixin, nn.Module):
     def __init__(
         self,
         obs_dim: int,
@@ -73,7 +154,7 @@ class RSSMState:
     stoch: torch.Tensor
 
 
-class RSSMWorldModel(nn.Module):
+class RSSMWorldModel(WorldModelMixin, nn.Module):
     def __init__(
         self,
         obs_dim: int,
@@ -81,12 +162,16 @@ class RSSMWorldModel(nn.Module):
         hidden_dim: int = 64,
         stoch_dim: int = 16,
         output_dim: int | None = None,
+        kl_free_nats: float = 0.0,
+        kl_balance: float = 0.5,
     ):
         super().__init__()
         self.obs_dim = obs_dim
         self.action_dim = action_dim
         self.output_dim = output_dim or obs_dim
         self.stoch_dim = stoch_dim
+        self.kl_free_nats = kl_free_nats
+        self.kl_balance = kl_balance
         self.obs_encoder = nn.Sequential(nn.Linear(obs_dim, hidden_dim), nn.ReLU())
         self.rnn = nn.GRUCell(stoch_dim + action_dim, hidden_dim)
         self.prior = nn.Linear(hidden_dim, 2 * stoch_dim)
@@ -97,6 +182,9 @@ class RSSMWorldModel(nn.Module):
 
     def initial(self, batch: int, device: torch.device) -> RSSMState:
         return RSSMState(torch.zeros(batch, self.rnn.hidden_size, device=device), torch.zeros(batch, self.stoch_dim, device=device))
+
+    def initial_state(self, batch_size: int, device: torch.device) -> RSSMState:
+        return self.initial(batch_size, device)
 
     @staticmethod
     def _stats(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -124,7 +212,8 @@ class RSSMWorldModel(nn.Module):
             rewards.append(self.reward(feat))
             dones.append(self.done(feat))
             kl = torch.log(prior_std / post_std) + (post_std.pow(2) + (post_mean - prior_mean).pow(2)) / (2 * prior_std.pow(2)) - 0.5
-            kls.append(kl.mean(dim=-1, keepdim=True))
+            kl_step = kl.mean(dim=-1, keepdim=True).clamp_min(self.kl_free_nats)
+            kls.append(kl_step)
             s = RSSMState(deter, stoch)
         pred = torch.stack(preds, dim=1)
         reward = torch.stack(rewards, dim=1)
@@ -132,10 +221,20 @@ class RSSMWorldModel(nn.Module):
         kl_t = torch.stack(kls, dim=1).mean()
         if single:
             pred, reward, done = pred[:, 0], reward[:, 0], done[:, 0]
-        return WorldModelOutput(pred, reward, done, s, {"kl": kl_t})
+        return WorldModelOutput(
+            pred,
+            reward,
+            done,
+            s,
+            {
+                "kl": kl_t,
+                "kl_free_nats": pred.new_tensor(float(self.kl_free_nats)),
+                "kl_balance": pred.new_tensor(float(self.kl_balance)),
+            },
+        )
 
 
-class TransformerWorldModel(nn.Module):
+class TransformerWorldModel(WorldModelMixin, nn.Module):
     def __init__(
         self,
         obs_dim: int,

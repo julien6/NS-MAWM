@@ -43,6 +43,8 @@ class RuleAudit:
 class SymbolicRule(Protocol):
     rule_id: str
     covered_features: tuple[str, ...]
+    feature_families: tuple[str, ...]
+    dropout_eligible: bool
 
     def predict(self, context: RuleContext) -> RulePrediction: ...
 
@@ -119,6 +121,8 @@ class NoisyRule:
         self.seed = seed
         self.rule_id = f"noisy:{base_rule.rule_id}"
         self.covered_features = base_rule.covered_features
+        self.feature_families = getattr(base_rule, "feature_families", ())
+        self.dropout_eligible = getattr(base_rule, "dropout_eligible", True)
 
     def predict(self, context: RuleContext) -> RulePrediction:
         pred = self.base_rule.predict(context)

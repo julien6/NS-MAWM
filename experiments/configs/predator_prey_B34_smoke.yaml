@@ -1,0 +1,16 @@
+mode: smoke
+baseline_id: B34
+environment: predator_prey
+world_model: rssm
+policy: MAPPO
+strategy: regularization
+coverage: 0.3
+train_regime: MV
+eval_regime: UV
+seeds: [0, 1, 2, 3, 4]
+smoke_steps: 12
+train_updates: 2
+batch_size: 6
+sequence_length: 4
+smoke_horizons: [3, 5]
+output_dir: runs/predator_prey_B34_smoke

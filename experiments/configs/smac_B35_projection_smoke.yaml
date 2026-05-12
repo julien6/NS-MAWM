@@ -1,0 +1,19 @@
+mode: smoke
+baseline_id: B35
+environment: smacv2
+world_model: rssm
+policy: MAPPO
+strategy: projection
+coverage: 0.18
+train_regime: MV
+eval_regime: UV
+seeds: [0, 1, 2, 3, 4]
+smoke_steps: 12
+train_updates: 2
+batch_size: 6
+sequence_length: 4
+smoke_horizons: [3, 5]
+comparison_arm: projection
+reference_coverage: 0.18
+paired_baseline_id: B32
+output_dir: runs/smac_claim_smoke

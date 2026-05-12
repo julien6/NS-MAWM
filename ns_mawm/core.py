@@ -11,6 +11,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from ns_mawm.features import FeatureSchema
+from ns_mawm.metrics import masked_mse, projection_magnitude, residual_error
 from ns_mawm.rules import RuleContext, SymbolicWorldModel
 
 
@@ -41,7 +42,7 @@ class NSMAWMOutput:
 class NSMAWM(nn.Module):
     """Composes any neural WM with any symbolic transition model.
 
-    This class does not know about environments, policies, or concrete WM architectures.
+    The integration layer depends only on tensor contracts and symbolic predictions.
     """
 
     def __init__(
@@ -74,8 +75,11 @@ class NSMAWM(nn.Module):
         projection = pred.new_tensor(0.0)
         if rollout and self.strategy in {IntegrationStrategy.PROJECTION, IntegrationStrategy.RESIDUAL}:
             assembled = torch.where(sym.mask, sym.values, pred)
-            projection = torch.abs(assembled - pred)[sym.mask].mean() if sym.mask.any() else projection
+            projection = projection_magnitude(pred, assembled, sym.mask)
             pred = assembled
+        metrics = dict(getattr(wm_out, "metrics", {}) or {})
+        metrics["projection_magnitude"] = projection.detach()
+        metrics["symbolic_conflict_count"] = pred.new_tensor(float(len(self.symbolic_model.last_conflicts)))
         return NSMAWMOutput(
             prediction=pred,
             raw_prediction=raw_pred,
@@ -85,7 +89,7 @@ class NSMAWM(nn.Module):
             symbolic_mask=sym.mask,
             projection_magnitude=projection,
             state=getattr(wm_out, "state", None),
-            metrics=getattr(wm_out, "metrics", {}),
+            metrics=metrics,
         )
 
     def loss(
@@ -115,12 +119,19 @@ class NSMAWM(nn.Module):
             symbolic_loss = F.mse_loss(pred[out.symbolic_mask], out.symbolic_values[out.symbolic_mask])
         kl = (out.metrics or {}).get("kl", pred.new_tensor(0.0))
         total = obs_loss + reward_loss + done_loss + kl + self.lambda_symbolic * symbolic_loss
+        covered_error = masked_mse(out.prediction, next_obs, out.symbolic_mask)
+        uncovered_error = residual_error(out.prediction, next_obs, out.symbolic_mask)
         return total, {
             "obs_loss": obs_loss,
             "reward_loss": reward_loss,
             "done_loss": done_loss,
             "kl": kl,
             "symbolic_loss": symbolic_loss,
+            "symbolic_alignment_loss": symbolic_loss,
+            "covered_feature_mse": covered_error,
+            "uncovered_feature_mse": uncovered_error,
+            "projection_magnitude": out.projection_magnitude.detach(),
+            "symbolic_conflict_count": pred.new_tensor(float(len(self.symbolic_model.last_conflicts))),
         }
 
     def _assemble_residual_prediction(
