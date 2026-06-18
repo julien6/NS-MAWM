@@ -34,9 +34,37 @@ runs/
 outputs/
 multirun/
 experiments/runs/
+
+# Gridcraft World Models generated data
+gridcraft/record/
+gridcraft/series/
+gridcraft/tf_models/
+gridcraft/tf_vae/
+gridcraft/tf_rnn/
+gridcraft/tf_initial_z/
+gridcraft/log/
+gridcraft/trainlog/
+gridcraft/*.npz
+gridcraft/*.npy
+
+# World Models generated data
+carracing/record/
+carracing/series/
+carracing/tf_vae/
+carracing/tf_rnn/
+carracing/tf_initial_z/
+carracing/trainlog/
+doomrnn/record/
+doomrnn/series/
+doomrnn/tf_vae/
+doomrnn/tf_rnn/
+doomrnn/tf_initial_z/
+doomrnn/trainlog/
 logs/
 artifacts/
 checkpoints/
+*.h5
+*.keras
 *.ckpt
 *.pt
 *.pth
@@ -55,6 +83,8 @@ results/
 reports/
 figures/
 tables/
+*.npz.tmp
+*.npy.tmp
 *.csv.tmp
 *.jsonl
 
@@ -63,6 +93,7 @@ Gridcraft/
 overcooked_ai/
 smac/
 StarCraftII/
+vizdoom_scenarios/
 envs/GridCraft/
 envs/overcooked_ai/
 envs/smac/
@@ -101,3 +132,5 @@ tmp/
 temp/
 *.tmp
 *.bak
+*.orig
+*.rej
