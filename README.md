@@ -27,6 +27,10 @@ python3.10 -m venv .venv
 ./scripts/setup_gridcraft_env.sh
 ```
 
+Python 3.10 is the primary validated target. Python 3.12 can work on current
+Linux/aarch64 systems, but CarRacing needs `box2d-py` to be built locally, so
+`swig` must be installed.
+
 The World Models dependencies are pinned in:
 
 ```text

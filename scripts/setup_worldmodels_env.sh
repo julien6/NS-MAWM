@@ -22,6 +22,7 @@ done
 if ((${#missing[@]} > 0)); then
   echo "Some optional/native build tools are not on PATH: ${missing[*]}"
   echo "On Ubuntu/Debian install: sudo apt-get install -y build-essential swig openmpi-bin libopenmpi-dev xvfb"
+  echo "Note: swig is required to build box2d-py when no prebuilt Box2D wheel is available."
 fi
 
 "${PYTHON}" -m pip install --upgrade pip setuptools wheel
@@ -33,6 +34,7 @@ import importlib
 modules = [
     "tensorflow",
     "gymnasium",
+    "Box2D",
     "vizdoom",
     "cma",
     "mpi4py",
