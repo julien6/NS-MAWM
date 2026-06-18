@@ -43,8 +43,10 @@ requirements-worldmodels.txt
 pip install -e Gridcraft
 ```
 
-That external checkout is ignored by the root git repository. If you change
-Gridcraft itself, commit or inspect those changes from inside `Gridcraft/`.
+That external checkout is ignored by the root git repository. The
+`setup_gridcraft_env.sh` script clones `https://github.com/julien6/Gridcraft.git`
+automatically if `Gridcraft/` is missing. If you change Gridcraft itself, commit
+or inspect those changes from inside `Gridcraft/`.
 
 ## CarRacing
 
