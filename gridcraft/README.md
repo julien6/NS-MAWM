@@ -89,6 +89,13 @@ The same training-only workflow can be launched with one script:
 ./train_world_model.bash
 ```
 
+To remove generated artifacts and restart from a clean experiment state:
+
+```bash
+./clean_experiment.bash --yes
+./train_world_model.bash
+```
+
 Its parameters can be overridden with environment variables, for example:
 
 ```bash
