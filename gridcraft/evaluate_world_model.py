@@ -36,6 +36,8 @@ def evaluate_vae(args):
   vae.load_json(args.vae_json)
   rows = []
   for episode in range(args.episodes):
+    if args.progress_every and (episode == 0 or (episode + 1) % args.progress_every == 0):
+      print(f"vae_eval episode {episode + 1}/{args.episodes}", flush=True)
     rng = np.random.default_rng(args.seed + episode)
     env = make_env(seed=args.seed + episode, render_mode=False, max_steps=args.max_steps)
     obs = env.reset(seed=args.seed + episode)
@@ -59,6 +61,8 @@ def evaluate_rnn_one_step(args):
   rnn.load_json(args.rnn_json)
   rows = []
   for episode in range(args.episodes):
+    if args.progress_every and (episode == 0 or (episode + 1) % args.progress_every == 0):
+      print(f"rnn_eval episode {episode + 1}/{args.episodes}", flush=True)
     env = make_env(seed=args.seed + episode, render_mode=False, max_steps=args.max_steps)
     obs = env.reset(seed=args.seed + episode)
     state = rnn_init_state(rnn)
@@ -89,6 +93,7 @@ def main():
   parser.add_argument("--max-steps", type=int, default=100)
   parser.add_argument("--seed", type=int, default=1)
   parser.add_argument("--imagination-mode", choices=["mean", "mode", "sample"], default="mean")
+  parser.add_argument("--progress-every", type=int, default=10)
   parser.add_argument("--out", default=None)
   args = parser.parse_args()
 

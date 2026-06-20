@@ -45,6 +45,9 @@ def main():
       world = world_from_snapshot(message.get("world"))
       renderer.render(world, "human", tabular_observations=message["observation"])
       write_message(sys.stdout.buffer, {"ok": True})
+    elif cmd == "poll_action":
+      action, closed = poll_action(renderer, float(message.get("seconds", 0.1)))
+      write_message(sys.stdout.buffer, {"action": action, "closed": closed})
     elif cmd == "wait":
       deadline = time.time() + float(message.get("seconds", 0.0))
       while time.time() < deadline:
@@ -57,6 +60,38 @@ def main():
       frame = renderer.render(world, "rgb_array", tabular_observations=message["observation"])
       write_message(sys.stdout.buffer, frame)
   renderer.close()
+
+
+def poll_action(renderer, seconds):
+  pygame = renderer._pygame
+  if pygame is None:
+    return None, True
+
+  key_to_action = {
+    pygame.K_z: 1,
+    pygame.K_s: 2,
+    pygame.K_q: 3,
+    pygame.K_d: 4,
+  }
+  deadline = time.time() + max(0.0, seconds)
+  action = None
+  closed = False
+  while time.time() < deadline:
+    for event in pygame.event.get():
+      if event.type == pygame.QUIT:
+        renderer.close()
+        closed = True
+        break
+      if event.type == pygame.KEYDOWN and event.key in key_to_action:
+        action = key_to_action[event.key]
+    if closed:
+      break
+    keys = pygame.key.get_pressed()
+    for key, mapped_action in key_to_action.items():
+      if keys[key]:
+        action = mapped_action
+    time.sleep(0.01)
+  return action, closed
 
 
 def world_from_snapshot(snapshot):

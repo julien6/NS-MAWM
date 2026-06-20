@@ -9,14 +9,18 @@ from rnn.rnn import GridcraftRNN
 
 def load_series(path):
   data = np.load(path)
+  z_all = data["z"].astype(np.float32)
+  action_all = data["action"].astype(np.int64)
+  reward_all = data["reward"].astype(np.float32)
+  done_all = data["done"].astype(np.bool_)
   episodes = []
-  lengths = data["length"] if "length" in data.files else np.full((len(data["z"]),), data["z"].shape[1])
+  lengths = data["length"] if "length" in data.files else np.full((len(z_all),), z_all.shape[1])
   for i, length in enumerate(lengths):
     n = int(length)
-    episodes.append((data["z"][i, :n].astype(np.float32),
-                     data["action"][i, :n].astype(np.int64),
-                     data["reward"][i, :n].astype(np.float32),
-                     data["done"][i, :n].astype(np.bool_)))
+    episodes.append((z_all[i, :n],
+                     action_all[i, :n],
+                     reward_all[i, :n],
+                     done_all[i, :n]))
   return episodes
 
 
@@ -66,9 +70,9 @@ def main():
 
   for step in range(args.steps):
     batch = sample_batch(episodes, args.batch_size, args.seq_len, rng)
-    loss, z_loss, reward_loss, done_loss = model.train_batch(*batch)
+    loss, z_loss, mean_loss, reward_loss, done_loss = model.train_batch(*batch)
     if step == 0 or (step + 1) % 100 == 0:
-      print("step", step + 1, "loss", loss, "z", z_loss, "reward", reward_loss, "done", done_loss)
+      print("step", step + 1, "loss", loss, "z", z_loss, "mean_mse", mean_loss, "reward", reward_loss, "done", done_loss)
 
   model.save_json(os.path.join(args.out_dir, "rnn.json"))
   print("saved", os.path.join(args.out_dir, "rnn.json"))

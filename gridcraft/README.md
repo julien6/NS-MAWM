@@ -101,6 +101,10 @@ and `entity`, plus `self_mse`. Lower is better. The RNN diagnostic is one-step:
 it compares the real next observation with the next observation imagined by the
 MDN-RNN under a random policy.
 
+`rnn_train.py` also reports `mean_mse`. This is an auxiliary loss that directly
+trains the deterministic MDN-RNN mean used by `--imagination-mode mean`, so it
+is the most relevant training signal for visual real-vs-imagined comparison.
+
 Controller training is skipped by default. Enable it explicitly when needed:
 
 ```bash
@@ -146,9 +150,25 @@ panel on the far right:
 ../.venv/bin/python model.py gridcraftcompare norender --episodes 100 --max-steps 500 --imagination-mode mean
 ```
 
+Use a manual policy to inspect specific transitions. Hold `q`, `z`, `d`, or `s`
+to move left, up, right, or down; no key means `stay`:
+
+```bash
+../.venv/bin/python model.py gridcraftcompare render --policy manual --max-steps 500 --render-delay 0.2 --render-hold 20 --imagination-mode mean
+```
+
 `--imagination-mode mean` is deterministic and best for debugging fidelity.
 `--imagination-mode mode` uses the most likely mixture component. Use
 `--imagination-mode sample` only when you want to inspect stochastic rollouts.
+
+If the VAE metrics are already acceptable but the imagined next observation is
+still inconsistent, retrain only the latent dynamics:
+
+```bash
+../.venv/bin/python series.py
+../.venv/bin/python rnn_train.py
+../.venv/bin/python evaluate_world_model.py --rnn-one-step --episodes 100 --max-steps 500 --imagination-mode mean
+```
 
 Run the diagnostics directly:
 

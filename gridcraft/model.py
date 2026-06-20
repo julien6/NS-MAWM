@@ -31,6 +31,10 @@ class TabularRenderWorker:
     self._write({"cmd": "render_human" if self.display else "render", "observation": observation, "world": world})
     return self._read()
 
+  def poll_action(self, seconds):
+    self._write({"cmd": "poll_action", "seconds": seconds})
+    return self._read()
+
   def wait(self, seconds):
     if seconds <= 0:
       return
@@ -189,21 +193,37 @@ def predict_rnn_next_z(controller, z, action, rng=None, mode="mean"):
   return next_z
 
 
-def compare_world_model_random(controller, render_mode=False, episodes=1, seed=1, max_steps=500, render_delay=0.1, render_hold=0.0, imagination_mode="mean"):
+def compare_world_model_random(controller, render_mode=False, episodes=1, seed=1, max_steps=500, render_delay=0.1, render_hold=0.0, imagination_mode="mean", policy="random"):
+  if policy == "manual" and not render_mode:
+    raise ValueError("manual policy requires render mode")
   rng = np.random.default_rng(seed)
   rewards = []
   lengths = []
   renderer = TabularRenderWorker(display=render_mode) if render_mode else None
   mismatches = []
+  aborted = False
   for episode in range(episodes):
     env = make_env(seed=seed + episode, render_mode=False, max_steps=max_steps)
     obs = env.reset(seed=seed + episode)
     controller.reset()
     total_reward = 0.0
     episode_mismatches = []
+    imagined_obs = decode_tabular_observation(controller, controller.encode_obs(obs))["agent_0"]
     for t in range(max_steps):
       z = controller.encode_obs(obs)
-      action = int(rng.integers(0, ACTION_SIZE))
+      if render_mode:
+        renderer.render({"agent_0": imagined_obs}, world=world_snapshot(env))
+      if policy == "manual":
+        response = renderer.poll_action(render_delay)
+        if response.get("closed"):
+          aborted = True
+          break
+        action = response.get("action")
+        action = 0 if action is None else int(action)
+      else:
+        action = int(rng.integers(0, ACTION_SIZE))
+        if render_mode and render_delay > 0:
+          time.sleep(render_delay)
       imagined_z = predict_rnn_next_z(controller, z, action, rng=rng, mode=imagination_mode)
       next_obs, reward, done, info = env.step(action)
       imagined_obs = decode_tabular_observation(controller, imagined_z)["agent_0"]
@@ -213,10 +233,6 @@ def compare_world_model_random(controller, render_mode=False, episodes=1, seed=1
       episode_mismatches.append((grid_mismatch, self_mse))
       total_reward += reward
       obs = next_obs
-      if render_mode:
-        renderer.render({"agent_0": imagined_obs}, world=world_snapshot(env))
-        if render_delay > 0:
-          time.sleep(render_delay)
       if done:
         break
     env.close()
@@ -224,6 +240,8 @@ def compare_world_model_random(controller, render_mode=False, episodes=1, seed=1
     lengths.append(t + 1)
     if episode_mismatches:
       mismatches.append(np.mean(np.asarray(episode_mismatches), axis=0))
+    if aborted:
+      break
   if renderer is not None:
     renderer.wait(render_hold)
     renderer.close()
@@ -308,9 +326,9 @@ def simulate_dream(controller, render_mode=False, episodes=1, seed=1, max_steps=
   return rewards, lengths
 
 
-def simulate(controller, env_name="gridcraftreal", train_mode=False, render_mode=False, episodes=1, seed=1, max_steps=500, num_episode=None, max_len=-1, render_delay=0.1, render_hold=0.0, imagination_mode="mean"):
+def simulate(controller, env_name="gridcraftreal", train_mode=False, render_mode=False, episodes=1, seed=1, max_steps=500, num_episode=None, max_len=-1, render_delay=0.1, render_hold=0.0, imagination_mode="mean", policy="random"):
   if env_name == "gridcraftcompare":
-    return compare_world_model_random(controller, render_mode=render_mode, episodes=episodes, seed=seed, max_steps=max_steps, render_delay=render_delay, render_hold=render_hold, imagination_mode=imagination_mode)
+    return compare_world_model_random(controller, render_mode=render_mode, episodes=episodes, seed=seed, max_steps=max_steps, render_delay=render_delay, render_hold=render_hold, imagination_mode=imagination_mode, policy=policy)
   if env_name == "gridcraftrnn":
     return simulate_dream(controller, render_mode=render_mode, episodes=episodes, seed=seed, max_steps=max_steps, num_episode=num_episode, max_len=max_len, render_delay=render_delay, render_hold=render_hold)
   return simulate_real(controller, train_mode=train_mode, render_mode=render_mode, episodes=episodes, seed=seed, max_steps=max_steps, num_episode=num_episode, max_len=max_len, render_delay=render_delay, render_hold=render_hold)
@@ -327,6 +345,7 @@ def main():
   parser.add_argument("--render-delay", type=float, default=0.1)
   parser.add_argument("--render-hold", type=float, default=None)
   parser.add_argument("--imagination-mode", choices=["mean", "mode", "sample"], default="mean")
+  parser.add_argument("--policy", choices=["random", "manual"], default="random")
   args = parser.parse_args()
 
   controller = make_model(load_model=True)
@@ -349,6 +368,7 @@ def main():
     render_delay=args.render_delay,
     render_hold=render_hold,
     imagination_mode=args.imagination_mode,
+    policy=args.policy,
   )
   print("rewards", rewards)
   print("mean_reward", float(np.mean(rewards)), "std", float(np.std(rewards)), "mean_length", float(np.mean(lengths)))

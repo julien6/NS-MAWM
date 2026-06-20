@@ -12,6 +12,7 @@ from exp_config import ACTION_SIZE, NUM_MIXTURE, RNN_SIZE, Z_SIZE
 
 LOGSTD_MIN = -6.0
 LOGSTD_MAX = 2.0
+MEAN_MSE_WEIGHT = 10.0
 
 HyperParams = namedtuple('HyperParams', [
   'z_size',
@@ -120,6 +121,7 @@ class GridcraftRNN:
     with tf.GradientTape() as tape:
       state = self.zero_state(batch_size=batch_size)
       z_losses = []
+      mean_losses = []
       reward_losses = []
       done_losses = []
       for t in range(seq_len):
@@ -129,20 +131,25 @@ class GridcraftRNN:
         target = tf.expand_dims(target_z[:, t, :], axis=2)
         log_prob = logmix - 0.5 * tf.square((target - mean) / tf.exp(logstd)) - logstd
         z_loss = -tf.reduce_mean(tf.reduce_logsumexp(log_prob, axis=2))
+        mix = tf.exp(logmix)
+        expected_z = tf.reduce_sum(mix * mean, axis=2)
+        mean_loss = tf.reduce_mean(tf.square(target_z[:, t, :] - expected_z))
         reward_loss = tf.reduce_mean(tf.square(target_reward[:, t] - pred_reward))
         done_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
           labels=target_done[:, t], logits=done_logit))
-        z_losses.append(z_loss)
+        z_losses.append(z_loss + MEAN_MSE_WEIGHT * mean_loss)
+        mean_losses.append(mean_loss)
         reward_losses.append(reward_loss)
         done_losses.append(done_loss)
       z_loss = tf.add_n(z_losses) / float(seq_len)
+      mean_loss = tf.add_n(mean_losses) / float(seq_len)
       reward_loss = tf.add_n(reward_losses) / float(seq_len)
       done_loss = tf.add_n(done_losses) / float(seq_len)
       loss = z_loss + reward_loss + done_loss
     variables = self.cell.trainable_variables + self.out.trainable_variables
     grads = tape.gradient(loss, variables)
     self.optimizer.apply_gradients(zip(grads, variables))
-    return float(loss.numpy()), float(z_loss.numpy()), float(reward_loss.numpy()), float(done_loss.numpy())
+    return float(loss.numpy()), float(z_loss.numpy()), float(mean_loss.numpy()), float(reward_loss.numpy()), float(done_loss.numpy())
 
   def _weights(self):
     return self.cell.get_weights() + self.out.get_weights()
