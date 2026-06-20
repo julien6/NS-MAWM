@@ -12,6 +12,7 @@ def main():
   parser.add_argument("--model-dir", default="vae")
   parser.add_argument("--out-dir", default="series")
   parser.add_argument("--limit", type=int, default=None)
+  parser.add_argument("--sample-z", action="store_true")
   args = parser.parse_args()
 
   files = sorted([f for f in os.listdir(args.record_dir) if f.endswith(".npz")])
@@ -35,7 +36,10 @@ def main():
     data = np.load(os.path.join(args.record_dir, filename))
     obs = data["obs"].astype(np.float32)
     mu, logvar = vae.encode_mu_logvar(obs)
-    z = mu + np.exp(logvar / 2.0) * np.random.randn(*logvar.shape)
+    if args.sample_z:
+      z = mu + np.exp(logvar / 2.0) * np.random.randn(*logvar.shape)
+    else:
+      z = mu
     z_list.append(z.astype(np.float32))
     action_list.append(data["action"].astype(np.int16))
     reward_list.append(data["reward"].astype(np.float32))

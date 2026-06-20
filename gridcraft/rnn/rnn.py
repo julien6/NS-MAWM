@@ -10,6 +10,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from exp_config import ACTION_SIZE, NUM_MIXTURE, RNN_SIZE, Z_SIZE
 
+LOGSTD_MIN = -6.0
+LOGSTD_MAX = 2.0
+
 HyperParams = namedtuple('HyperParams', [
   'z_size',
   'action_size',
@@ -83,6 +86,7 @@ class GridcraftRNN:
     mdn = tf.reshape(mdn, (-1, self.z_size, self.num_mixture * 3))
     logmix, mean, logstd = tf.split(mdn, 3, axis=2)
     logmix = tf.nn.log_softmax(logmix, axis=2)
+    logstd = tf.clip_by_value(logstd, LOGSTD_MIN, LOGSTD_MAX)
     return logmix, mean, logstd, reward, done_logit
 
   def step(self, z, action, state):

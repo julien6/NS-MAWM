@@ -17,6 +17,8 @@ extract.py          random rollout collection
 series.py           rollout encoding into latent sequences
 vae_train.py        structured VAE training
 rnn_train.py        MDN-RNN training
+evaluate_world_model.py
+                    VAE reconstruction and RNN one-step diagnostics
 dream_env.py        learned Gridcraft world model environment
 dream_model.py      controller evaluation inside the dream environment
 render_env.py       real environment render wrapper
@@ -55,8 +57,10 @@ cd gridcraft
 ../.venv/bin/python env.py --steps 10
 ../.venv/bin/python extract.py --episodes 2 --max-steps 20
 ../.venv/bin/python vae_train.py --steps 5 --batch-size 8
+../.venv/bin/python evaluate_world_model.py --vae-only --episodes 2 --max-steps 20
 ../.venv/bin/python series.py --limit 2
 ../.venv/bin/python rnn_train.py --steps 5
+../.venv/bin/python evaluate_world_model.py --rnn-one-step --episodes 2 --max-steps 20
 ../.venv/bin/python train.py --generations 1 --max_len 5
 ../.venv/bin/python model.py gridcraftrnn render log/gridcraftrnn.cma.16.64.best.json --max-steps 5
 ../.venv/bin/python model.py gridcraftreal render log/gridcraftrnn.cma.16.64.best.json --max-steps 5
@@ -65,14 +69,13 @@ cd gridcraft
 
 ## Full Workflow
 
-The default commands are configured for a first serious run:
+The default commands for a first serious world-model run are:
 
 ```bash
 ../.venv/bin/python extract.py
 ../.venv/bin/python vae_train.py
 ../.venv/bin/python series.py
 ../.venv/bin/python rnn_train.py
-../.venv/bin/python train.py
 ```
 
 Those defaults currently mean:
@@ -81,13 +84,31 @@ Those defaults currently mean:
 - `vae_train.py`: 10000 VAE optimization steps, batch size 256.
 - `series.py`: encode all recorded episodes.
 - `rnn_train.py`: 10000 MDN-RNN steps, batch size 64, sequence length 32.
-- `train.py`: CMA-ES controller, 16 evaluation episodes per candidate, 64 candidates, 100 generations.
 
-The same training-only workflow can be launched with one script:
+The same world-model-only workflow can be launched with one script:
 
 ```bash
 ./train_world_model.bash
 ```
+
+This script runs world-model diagnostics:
+
+- after VAE training: `trainlog/vae_eval.json`
+- after MDN-RNN training: `trainlog/rnn_eval.json`
+
+Both files report `grid_mismatch`, per-plane mismatch for `terrain`, `block`,
+and `entity`, plus `self_mse`. Lower is better. The RNN diagnostic is one-step:
+it compares the real next observation with the next observation imagined by the
+MDN-RNN under a random policy.
+
+Controller training is skipped by default. Enable it explicitly when needed:
+
+```bash
+TRAIN_CONTROLLER=1 ./train_world_model.bash
+```
+
+That optional controller step runs `train.py`: CMA-ES controller, 16 evaluation
+episodes per candidate, 64 candidates, 100 generations by default.
 
 To remove generated artifacts and restart from a clean experiment state:
 
@@ -99,7 +120,7 @@ To remove generated artifacts and restart from a clean experiment state:
 Its parameters can be overridden with environment variables, for example:
 
 ```bash
-EXTRACT_EPISODES=1000 VAE_STEPS=2000 RNN_STEPS=2000 ES_GENERATIONS=20 ./train_world_model.bash
+EXTRACT_EPISODES=1000 VAE_STEPS=2000 RNN_STEPS=2000 ./train_world_model.bash
 ```
 
 Evaluate in the real environment:
@@ -115,6 +136,30 @@ Evaluate in the learned environment:
 ../.venv/bin/python model.py gridcraftrnn norender log/gridcraftrnn.cma.16.64.best.json
 ../.venv/bin/python model.py gridcraftrnn render log/gridcraftrnn.cma.16.64.best.json
 ```
+
+Compare real and imagined observations under a random policy. The render shows
+the real full grid, the real observation panel, then the imagined observation
+panel on the far right:
+
+```bash
+../.venv/bin/python model.py gridcraftcompare render --max-steps 500 --render-delay 0.1 --render-hold 20 --imagination-mode mean
+../.venv/bin/python model.py gridcraftcompare norender --episodes 100 --max-steps 500 --imagination-mode mean
+```
+
+`--imagination-mode mean` is deterministic and best for debugging fidelity.
+`--imagination-mode mode` uses the most likely mixture component. Use
+`--imagination-mode sample` only when you want to inspect stochastic rollouts.
+
+Run the diagnostics directly:
+
+```bash
+../.venv/bin/python evaluate_world_model.py --vae-only --episodes 100 --max-steps 500
+../.venv/bin/python evaluate_world_model.py --rnn-one-step --episodes 100 --max-steps 500 --imagination-mode mean
+```
+
+The current VAE latent size is `64`, so older `vae/vae.json`, `rnn/rnn.json`,
+and controller logs trained with `z_size=32` are no longer compatible. Re-run
+`series.py`, `rnn_train.py`, and `train.py` after retraining the VAE.
 
 ## Convenience Scripts
 

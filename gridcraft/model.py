@@ -11,7 +11,7 @@ import numpy as np
 
 from dream_env import make_env as make_dream_env
 from env import make_env
-from exp_config import ACTION_SIZE, BLOCK_CLASSES, CONTROLLER_INPUT_SIZE, ENTITY_CLASSES, GRID_CELLS, GRID_FEATURES, TERRAIN_CLASSES
+from exp_config import ACTION_SIZE, CONTROLLER_INPUT_SIZE
 from rnn.rnn import GridcraftRNN, rnn_init_state, rnn_next_state, rnn_output
 from vae.vae import GridcraftVAE
 
@@ -27,8 +27,8 @@ class TabularRenderWorker:
       stderr=subprocess.DEVNULL,
     )
 
-  def render(self, observation):
-    self._write({"cmd": "render_human" if self.display else "render", "observation": observation})
+  def render(self, observation, world=None):
+    self._write({"cmd": "render_human" if self.display else "render", "observation": observation, "world": world})
     return self._read()
 
   def wait(self, seconds):
@@ -116,50 +116,121 @@ class GridcraftController:
       json.dump([self.get_model_params().round(6).tolist()], f, indent=2)
 
 
-def _decode_grid_text(controller, z):
-  decoded = controller.vae.decode(z.reshape(1, -1))[0]
-  cursor = 0
-  terrain = decoded[cursor:cursor + GRID_CELLS * TERRAIN_CLASSES].reshape(GRID_CELLS, TERRAIN_CLASSES).argmax(axis=1)
-  cursor += GRID_CELLS * TERRAIN_CLASSES
-  blocks = decoded[cursor:cursor + GRID_CELLS * BLOCK_CLASSES].reshape(GRID_CELLS, BLOCK_CLASSES).argmax(axis=1)
-  cursor += GRID_CELLS * BLOCK_CLASSES
-  entities = decoded[cursor:cursor + GRID_CELLS * ENTITY_CLASSES].reshape(GRID_CELLS, ENTITY_CLASSES).argmax(axis=1)
-  chars = []
-  for t, b, e in zip(terrain, blocks, entities):
-    if e:
-      chars.append("A" if e == 1 else "E")
-    elif b:
-      chars.append("#")
-    elif t == 1:
-      chars.append(".")
-    elif t == 2:
-      chars.append("~")
-    else:
-      chars.append(" ")
-  return "\n".join("".join(chars[i:i + 7]) for i in range(0, GRID_CELLS, 7))
-
-
 def decode_tabular_observation(controller, z):
-  decoded = controller.vae.decode(z.reshape(1, -1))[0]
-  cursor = 0
-  terrain = decoded[cursor:cursor + GRID_CELLS * TERRAIN_CLASSES].reshape(GRID_CELLS, TERRAIN_CLASSES).argmax(axis=1)
-  cursor += GRID_CELLS * TERRAIN_CLASSES
-  blocks = decoded[cursor:cursor + GRID_CELLS * BLOCK_CLASSES].reshape(GRID_CELLS, BLOCK_CLASSES).argmax(axis=1)
-  cursor += GRID_CELLS * BLOCK_CLASSES
-  entities = decoded[cursor:cursor + GRID_CELLS * ENTITY_CLASSES].reshape(GRID_CELLS, ENTITY_CLASSES).argmax(axis=1)
-  self_vec = decoded[GRID_FEATURES:]
-  hp_hunger = np.clip(np.rint(self_vec[:2] * 20.0), 0, 20)
-  inventory = np.clip(np.rint(self_vec[2:] * 10.0), 0, 99)
-  return {
-    "agent_0": {
-      "grid": np.stack([
-        terrain.reshape(7, 7),
-        blocks.reshape(7, 7),
-        entities.reshape(7, 7),
-      ]).astype(np.int8),
-      "self": np.concatenate([hp_hunger, inventory]).astype(np.int16),
+  return {"agent_0": controller.vae.decode_tabular(z)}
+
+
+def world_snapshot(env):
+  world = env.env.world
+  agents = {}
+  observations = {}
+  for agent_id, agent in world.agents.items():
+    agents[agent_id] = {
+      "x": int(agent.x),
+      "y": int(agent.y),
+      "hp": int(agent.hp),
+      "hunger": int(agent.hunger),
+      "inventory": {str(int(item)): int(count) for item, count in agent.inventory.items()},
+      "inventory_order": [int(item) for item in agent.inventory_order],
+      "equipped": int(agent.equipped) if agent.equipped is not None else None,
+      "alive": bool(agent.alive),
     }
+  for agent_id, observation in world.observations().items():
+    observations[agent_id] = {
+      "grid": np.asarray(observation["grid"], dtype=np.int8),
+      "self": np.asarray(observation["self"], dtype=np.int16),
+    }
+  return {
+    "terrain": np.asarray(world.terrain, dtype=np.int8),
+    "blocks": np.asarray(world.blocks, dtype=np.int8),
+    "items": [
+      {
+        "item": int(item.item),
+        "count": int(item.count),
+        "x": int(item.x),
+        "y": int(item.y),
+      }
+      for item in world.items
+    ],
+    "mobs": [
+      {
+        "mob_id": int(mob.mob_id),
+        "x": int(mob.x),
+        "y": int(mob.y),
+        "hp": int(mob.hp),
+        "alive": bool(mob.alive),
+      }
+      for mob in world.mobs
+    ],
+    "agents": agents,
+    "observations": observations,
   }
+
+
+def predict_rnn_next_z(controller, z, action, rng=None, mode="mean"):
+  logmix, mean, logstd, reward, done_logit, next_state = controller.rnn.step(z, action, controller.rnn_state)
+  mix = np.exp(logmix - np.max(logmix, axis=1, keepdims=True))
+  mix = mix / np.sum(mix, axis=1, keepdims=True)
+  if mode == "mean":
+    next_z = np.sum(mix * mean, axis=1).astype(np.float32)
+  elif mode == "mode":
+    component = np.argmax(mix, axis=1)
+    next_z = mean[np.arange(controller.rnn.z_size), component].astype(np.float32)
+  elif mode == "sample":
+    if rng is None:
+      rng = np.random.default_rng()
+    next_z = np.zeros((controller.rnn.z_size,), dtype=np.float32)
+    for j in range(controller.rnn.z_size):
+      component = int(rng.choice(np.arange(controller.rnn.num_mixture), p=mix[j]))
+      next_z[j] = mean[j, component] + np.exp(logstd[j, component]) * rng.standard_normal()
+  else:
+    raise ValueError(f"unknown imagination mode: {mode}")
+  controller.rnn_state = next_state
+  return next_z
+
+
+def compare_world_model_random(controller, render_mode=False, episodes=1, seed=1, max_steps=500, render_delay=0.1, render_hold=0.0, imagination_mode="mean"):
+  rng = np.random.default_rng(seed)
+  rewards = []
+  lengths = []
+  renderer = TabularRenderWorker(display=render_mode) if render_mode else None
+  mismatches = []
+  for episode in range(episodes):
+    env = make_env(seed=seed + episode, render_mode=False, max_steps=max_steps)
+    obs = env.reset(seed=seed + episode)
+    controller.reset()
+    total_reward = 0.0
+    episode_mismatches = []
+    for t in range(max_steps):
+      z = controller.encode_obs(obs)
+      action = int(rng.integers(0, ACTION_SIZE))
+      imagined_z = predict_rnn_next_z(controller, z, action, rng=rng, mode=imagination_mode)
+      next_obs, reward, done, info = env.step(action)
+      imagined_obs = decode_tabular_observation(controller, imagined_z)["agent_0"]
+      real_obs = env.last_obs
+      grid_mismatch = float(np.mean(real_obs["grid"] != imagined_obs["grid"]))
+      self_mse = float(np.mean((np.asarray(real_obs["self"], dtype=np.float32) - np.asarray(imagined_obs["self"], dtype=np.float32)) ** 2))
+      episode_mismatches.append((grid_mismatch, self_mse))
+      total_reward += reward
+      obs = next_obs
+      if render_mode:
+        renderer.render({"agent_0": imagined_obs}, world=world_snapshot(env))
+        if render_delay > 0:
+          time.sleep(render_delay)
+      if done:
+        break
+    env.close()
+    rewards.append(total_reward)
+    lengths.append(t + 1)
+    if episode_mismatches:
+      mismatches.append(np.mean(np.asarray(episode_mismatches), axis=0))
+  if renderer is not None:
+    renderer.wait(render_hold)
+    renderer.close()
+  if mismatches:
+    mismatch_arr = np.asarray(mismatches)
+    print("mean_grid_mismatch", float(np.mean(mismatch_arr[:, 0])), "mean_self_mse", float(np.mean(mismatch_arr[:, 1])))
+  return rewards, lengths
 
 
 def _wait_real_viewer(env, seconds):
@@ -237,7 +308,9 @@ def simulate_dream(controller, render_mode=False, episodes=1, seed=1, max_steps=
   return rewards, lengths
 
 
-def simulate(controller, env_name="gridcraftreal", train_mode=False, render_mode=False, episodes=1, seed=1, max_steps=500, num_episode=None, max_len=-1, render_delay=0.1, render_hold=0.0):
+def simulate(controller, env_name="gridcraftreal", train_mode=False, render_mode=False, episodes=1, seed=1, max_steps=500, num_episode=None, max_len=-1, render_delay=0.1, render_hold=0.0, imagination_mode="mean"):
+  if env_name == "gridcraftcompare":
+    return compare_world_model_random(controller, render_mode=render_mode, episodes=episodes, seed=seed, max_steps=max_steps, render_delay=render_delay, render_hold=render_hold, imagination_mode=imagination_mode)
   if env_name == "gridcraftrnn":
     return simulate_dream(controller, render_mode=render_mode, episodes=episodes, seed=seed, max_steps=max_steps, num_episode=num_episode, max_len=max_len, render_delay=render_delay, render_hold=render_hold)
   return simulate_real(controller, train_mode=train_mode, render_mode=render_mode, episodes=episodes, seed=seed, max_steps=max_steps, num_episode=num_episode, max_len=max_len, render_delay=render_delay, render_hold=render_hold)
@@ -245,7 +318,7 @@ def simulate(controller, env_name="gridcraftreal", train_mode=False, render_mode
 
 def main():
   parser = argparse.ArgumentParser()
-  parser.add_argument("env_name", choices=["gridcraftreal", "gridcraftrnn"])
+  parser.add_argument("env_name", choices=["gridcraftreal", "gridcraftrnn", "gridcraftcompare"])
   parser.add_argument("mode", choices=["render", "norender"])
   parser.add_argument("model_json", nargs="?", default=None)
   parser.add_argument("--episodes", type=int, default=None)
@@ -253,6 +326,7 @@ def main():
   parser.add_argument("--seed", type=int, default=1)
   parser.add_argument("--render-delay", type=float, default=0.1)
   parser.add_argument("--render-hold", type=float, default=None)
+  parser.add_argument("--imagination-mode", choices=["mean", "mode", "sample"], default="mean")
   args = parser.parse_args()
 
   controller = make_model(load_model=True)
@@ -274,6 +348,7 @@ def main():
     max_steps=args.max_steps,
     render_delay=args.render_delay,
     render_hold=render_hold,
+    imagination_mode=args.imagination_mode,
   )
   print("rewards", rewards)
   print("mean_reward", float(np.mean(rewards)), "std", float(np.std(rewards)), "mean_length", float(np.mean(lengths)))

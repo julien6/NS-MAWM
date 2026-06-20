@@ -25,6 +25,7 @@ ES_GENERATIONS=${ES_GENERATIONS:-100}
 ES_MAX_LEN=${ES_MAX_LEN:-500}
 ES_OPTIMIZER=${ES_OPTIMIZER:-cma}
 ES_SEED=${ES_SEED:-1}
+TRAIN_CONTROLLER=${TRAIN_CONTROLLER:-0}
 
 mkdir -p "$LOG_DIR"
 
@@ -48,6 +49,13 @@ run_step 02_vae \
     --batch-size "$VAE_BATCH_SIZE" \
     --seed "$VAE_SEED"
 
+run_step 02b_vae_eval \
+  "$PYTHON" evaluate_world_model.py \
+    --vae-only \
+    --episodes 10 \
+    --max-steps 100 \
+    --out "${LOG_DIR}/vae_eval.json"
+
 run_step 03_series \
   "$PYTHON" series.py
 
@@ -58,14 +66,27 @@ run_step 04_rnn \
     --seq-len "$RNN_SEQ_LEN" \
     --seed "$RNN_SEED"
 
-run_step 05_controller \
-  "$PYTHON" train.py \
-    -n "$ES_EPISODES" \
-    -t "$ES_WORKERS" \
-    -o "$ES_OPTIMIZER" \
-    --generations "$ES_GENERATIONS" \
-    --max_len "$ES_MAX_LEN" \
-    --seed_start "$ES_SEED"
+run_step 04b_rnn_eval \
+  "$PYTHON" evaluate_world_model.py \
+    --rnn-one-step \
+    --episodes 10 \
+    --max-steps 100 \
+    --imagination-mode mean \
+    --out "${LOG_DIR}/rnn_eval.json"
 
-echo "training complete"
-echo "best controller: log/gridcraftrnn.${ES_OPTIMIZER}.${ES_EPISODES}.${ES_WORKERS}.best.json"
+if [[ "$TRAIN_CONTROLLER" == "1" ]]; then
+  run_step 05_controller \
+    "$PYTHON" train.py \
+      -n "$ES_EPISODES" \
+      -t "$ES_WORKERS" \
+      -o "$ES_OPTIMIZER" \
+      --generations "$ES_GENERATIONS" \
+      --max_len "$ES_MAX_LEN" \
+      --seed_start "$ES_SEED"
+
+  echo "training complete"
+  echo "best controller: log/gridcraftrnn.${ES_OPTIMIZER}.${ES_EPISODES}.${ES_WORKERS}.best.json"
+else
+  echo "world model training complete"
+  echo "controller training skipped; set TRAIN_CONTROLLER=1 to enable CMA-ES"
+fi

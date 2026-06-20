@@ -7,11 +7,20 @@ import tensorflow as tf
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from exp_config import GRID_FEATURES, OBS_SIZE, Z_SIZE
+from exp_config import (
+  BLOCK_CLASSES,
+  ENTITY_CLASSES,
+  GRID_CELLS,
+  GRID_FEATURES,
+  OBS_SIZE,
+  SELF_FEATURES,
+  TERRAIN_CLASSES,
+  Z_SIZE,
+)
 
 
 class GridcraftVAE:
-  def __init__(self, z_size=Z_SIZE, hidden_size=256, learning_rate=1e-3, kl_tolerance=0.5):
+  def __init__(self, z_size=Z_SIZE, hidden_size=512, learning_rate=1e-3, kl_tolerance=0.5):
     self.z_size = z_size
     self.hidden_size = hidden_size
     self.kl_tolerance = kl_tolerance
@@ -43,6 +52,13 @@ class GridcraftVAE:
   def decode(self, z):
     return self.decoder(np.asarray(z, dtype=np.float32), training=False).numpy()
 
+  def decode_tabular(self, z):
+    decoded = self.decode(np.asarray(z, dtype=np.float32).reshape(-1, self.z_size))
+    result = []
+    for row in decoded:
+      result.append(vector_to_tabular(row))
+    return result[0] if len(result) == 1 else result
+
   def train_batch(self, x):
     x = tf.convert_to_tensor(x, dtype=tf.float32)
     with tf.GradientTape() as tape:
@@ -50,8 +66,10 @@ class GridcraftVAE:
       eps = tf.random.normal(tf.shape(mu))
       z = mu + tf.exp(logvar / 2.0) * eps
       y = self.decoder(z, training=True)
-      grid_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
-        labels=x[:, :GRID_FEATURES], logits=y[:, :GRID_FEATURES]))
+      terrain_loss = categorical_plane_loss(x, y, 0, TERRAIN_CLASSES)
+      block_loss = categorical_plane_loss(x, y, GRID_CELLS * TERRAIN_CLASSES, BLOCK_CLASSES)
+      entity_loss = categorical_plane_loss(x, y, GRID_CELLS * (TERRAIN_CLASSES + BLOCK_CLASSES), ENTITY_CLASSES)
+      grid_loss = terrain_loss + block_loss + entity_loss
       self_loss = tf.reduce_mean(tf.square(x[:, GRID_FEATURES:] - y[:, GRID_FEATURES:]))
       kl = -0.5 * tf.reduce_sum(1 + logvar - tf.square(mu) - tf.exp(logvar), axis=1)
       kl = tf.reduce_mean(tf.maximum(kl, self.kl_tolerance * self.z_size))
@@ -108,3 +126,30 @@ class GridcraftVAE:
 
 
 ConvVAE = GridcraftVAE
+
+
+def categorical_plane_loss(labels, logits, offset, depth):
+  label_plane = tf.reshape(labels[:, offset:offset + GRID_CELLS * depth], (-1, GRID_CELLS, depth))
+  logit_plane = tf.reshape(logits[:, offset:offset + GRID_CELLS * depth], (-1, GRID_CELLS, depth))
+  return tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=label_plane, logits=logit_plane))
+
+
+def vector_to_tabular(vector):
+  vector = np.asarray(vector, dtype=np.float32)
+  cursor = 0
+  terrain = vector[cursor:cursor + GRID_CELLS * TERRAIN_CLASSES].reshape(GRID_CELLS, TERRAIN_CLASSES).argmax(axis=1)
+  cursor += GRID_CELLS * TERRAIN_CLASSES
+  blocks = vector[cursor:cursor + GRID_CELLS * BLOCK_CLASSES].reshape(GRID_CELLS, BLOCK_CLASSES).argmax(axis=1)
+  cursor += GRID_CELLS * BLOCK_CLASSES
+  entities = vector[cursor:cursor + GRID_CELLS * ENTITY_CLASSES].reshape(GRID_CELLS, ENTITY_CLASSES).argmax(axis=1)
+  self_vec = vector[GRID_FEATURES:GRID_FEATURES + SELF_FEATURES]
+  hp_hunger = np.clip(np.rint(self_vec[:2] * 20.0), 0, 20)
+  inventory = np.clip(np.rint(self_vec[2:] * 10.0), 0, 99)
+  return {
+    "grid": np.stack([
+      terrain.reshape(int(np.sqrt(GRID_CELLS)), int(np.sqrt(GRID_CELLS))),
+      blocks.reshape(int(np.sqrt(GRID_CELLS)), int(np.sqrt(GRID_CELLS))),
+      entities.reshape(int(np.sqrt(GRID_CELLS)), int(np.sqrt(GRID_CELLS))),
+    ]).astype(np.int8),
+    "self": np.concatenate([hp_hunger, inventory]).astype(np.int16),
+  }
