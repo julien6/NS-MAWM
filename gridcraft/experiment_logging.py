@@ -65,8 +65,15 @@ class ExperimentLogger:
     if frames.ndim != 4 or frames.shape[-1] != 3:
       raise ValueError("video frames must be shaped (T, H, W, 3)")
     video = np.transpose(frames, (0, 3, 1, 2))
-    routed = route_metrics({name: self._wandb.Video(video, fps=fps, format="mp4")}, namespace=namespace)
-    self._wandb.log(routed, step=step)
+    try:
+      routed = route_metrics({name: self._wandb.Video(video, fps=fps, format="mp4")}, namespace=namespace)
+      self._wandb.log(routed, step=step)
+    except Exception as exc:
+      message = str(exc)
+      if "moviepy" in message or "wandb[media]" in message:
+        print("Skipping W&B video logging because media dependencies are missing. Install with: ../.venv/bin/python -m pip install 'wandb[media]'", flush=True)
+        return
+      raise
 
   def log_info_panels(self):
     if self.run is not None:
