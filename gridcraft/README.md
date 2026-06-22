@@ -285,6 +285,20 @@ WANDB=1 ./run_policy_baselines.bash
 WANDB=1 ./run_repro_gridcraft.bash
 ```
 
+Requested NS-MAWM protocol with serious default budgets:
+
+```bash
+WANDB=1 ./run_requested_baselines_serious.bash
+```
+
+This runs `B00` as the model-free real-environment MARL baseline, then
+`B24/B25/B26` for regularization/projection/residual at symbolic coverage `0.3`
+and `B27/B28/B29` for the same strategies at symbolic coverage `0.6`. Defaults
+use `SEEDS="1 2 3"`, `EXTRACT_EPISODES=20000`, `VAE_STEPS=50000`,
+`RNN_STEPS=100000`, world-model evaluation every `5000` RNN steps,
+`EVAL_EPISODES=200`, `POLICY_UPDATES=2000`, and `POLICY_EVAL_EPISODES=50`.
+Override these variables from the shell to scale the run up or down.
+
 W&B sweeps are available under `sweeps/`. Start with the smoke sweep:
 
 ```bash

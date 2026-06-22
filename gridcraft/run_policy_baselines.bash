@@ -12,7 +12,12 @@ POLICY_EVAL_EPISODES=${POLICY_EVAL_EPISODES:-10}
 MAX_STEPS=${MAX_STEPS:-500}
 PLANNING_HORIZON=${PLANNING_HORIZON:-15}
 CEM_SAMPLES=${CEM_SAMPLES:-64}
+VIDEO_EPISODES=${VIDEO_EPISODES:-1}
+VIDEO_MAX_STEPS=${VIDEO_MAX_STEPS:-100}
+VIDEO_FPS=${VIDEO_FPS:-10}
+NO_WANDB_VIDEOS=${NO_WANDB_VIDEOS:-0}
 WANDB_ARGS=()
+EXTRA_COMMON_ARGS=()
 
 if [[ "${WANDB:-0}" == "1" ]]; then
   WANDB_ARGS+=(--wandb --wandb-project "${WANDB_PROJECT:-ns-mawm-gridcraft}")
@@ -22,6 +27,10 @@ if [[ "${WANDB:-0}" == "1" ]]; then
   if [[ -n "${WANDB_MODE:-}" ]]; then
     WANDB_ARGS+=(--wandb-mode "$WANDB_MODE")
   fi
+fi
+
+if [[ "$NO_WANDB_VIDEOS" == "1" ]]; then
+  EXTRA_COMMON_ARGS+=(--no-wandb-videos)
 fi
 
 for seed in $SEEDS; do
@@ -35,7 +44,11 @@ for seed in $SEEDS; do
     --policy-eval-every "$POLICY_EVAL_EVERY" \
     --policy-eval-episodes "$POLICY_EVAL_EPISODES" \
     --max-steps "$MAX_STEPS" \
+    --video-episodes "$VIDEO_EPISODES" \
+    --video-max-steps "$VIDEO_MAX_STEPS" \
+    --video-fps "$VIDEO_FPS" \
     --seed "$seed" \
+    "${EXTRA_COMMON_ARGS[@]}" \
     "${WANDB_ARGS[@]}"
 
   for baseline in ${MODEL_BASELINES:-"B24 B25 B26 B27 B28 B29"}; do
@@ -52,7 +65,11 @@ for seed in $SEEDS; do
         --max-steps "$MAX_STEPS" \
         --planning-horizon "$PLANNING_HORIZON" \
         --cem-samples "$CEM_SAMPLES" \
+        --video-episodes "$VIDEO_EPISODES" \
+        --video-max-steps "$VIDEO_MAX_STEPS" \
+        --video-fps "$VIDEO_FPS" \
         --seed "$seed" \
+        "${EXTRA_COMMON_ARGS[@]}" \
         "${WANDB_ARGS[@]}"
     done
   done
