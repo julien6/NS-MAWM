@@ -8,11 +8,16 @@ import tensorflow as tf
 
 from dream_env import GridcraftDreamEnv
 from env import ACTION_SIZE, make_env
-from experiment_logging import add_wandb_args, logger_from_args
+from experiment_logging import add_wandb_args, logger_from_args, should_log_wandb_videos
 from exp_config import OBS_SIZE, Z_SIZE
 from ns_symbolic import NS_VARIANTS, apply_symbolic_projection, tabular_to_vector
 from rnn.rnn import GridcraftRNN, rnn_init_state
 from vae.vae import GridcraftVAE
+from video_logging import (
+  record_actor_policy_evaluation_video,
+  record_mpc_cem_evaluation_video,
+)
+from wandb_schema import GENERAL, MARL_EVALUATION, MARL_TRAINING
 
 
 class ActorCritic(tf.keras.Model):
@@ -121,6 +126,8 @@ def train_actor_critic(args):
     default_group=args.baseline_id,
     default_name=args.run_name or f"{args.baseline_id}_{args.policy_baseline}_seed{args.seed}",
     tags=["gridcraft", "policy", args.policy_baseline, args.train_env],
+    info_sections=[GENERAL, MARL_TRAINING, MARL_EVALUATION],
+    out_dir=args.out_dir,
   )
 
   os.makedirs(args.out_dir, exist_ok=True)
@@ -164,10 +171,29 @@ def train_actor_critic(args):
       "step_time_ms": float((time.time() - start) * 1000.0),
     })
     training_rewards.append(metrics[f"training_{args.train_env}_reward"])
-    logger.log(metrics, step=update + 1)
+    logger.log(metrics, step=update + 1, namespace="marl_training")
     if update == 0 or (update + 1) % args.eval_every == 0:
       eval_metrics = evaluate_policy(model, args, update + 1)
-      logger.log(eval_metrics, step=update + 1)
+      logger.log(eval_metrics, step=update + 1, namespace="marl_evaluation")
+      if should_log_wandb_videos(args):
+        frames = record_actor_policy_evaluation_video(
+          model,
+          policy_baseline=args.policy_baseline,
+          vae_json=args.vae_json,
+          rnn_json=args.rnn_json,
+          ns_variant=args.ns_variant,
+          symbolic_coverage=args.symbolic_coverage,
+          seed=args.seed + 70000 + update,
+          episodes=args.video_episodes,
+          max_steps=args.video_max_steps,
+        )
+        logger.log_video(
+          "video_policy_rollout",
+          frames,
+          fps=args.video_fps,
+          step=update + 1,
+          namespace="marl_evaluation",
+        )
       save_json(os.path.join(args.out_dir, f"policy_eval_step_{update + 1}.json"), eval_metrics)
       print("update", update + 1, metrics, eval_metrics, flush=True)
 
@@ -177,7 +203,7 @@ def train_actor_critic(args):
     "training_reward_final": float(training_rewards[-1]) if training_rewards else 0.0,
   }
   save_json(os.path.join(args.out_dir, "policy_summary.json"), summary)
-  logger.log_summary(summary)
+  logger.log_summary(summary, namespace="marl_training")
   logger.save_json(os.path.join(args.out_dir, "policy_summary.json"), summary)
   logger.finish()
   return summary
@@ -260,6 +286,8 @@ def run_mpc_cem(args):
     default_group=args.baseline_id,
     default_name=args.run_name or f"{args.baseline_id}_mpc_cem_seed{args.seed}",
     tags=["gridcraft", "policy", "mpc-cem", args.ns_variant],
+    info_sections=[GENERAL, MARL_EVALUATION],
+    out_dir=args.out_dir,
   )
   vae = GridcraftVAE()
   vae.load_json(args.vae_json)
@@ -297,7 +325,7 @@ def run_mpc_cem(args):
       "planning_action_entropy": float(np.mean(entropies)) if entropies else 0.0,
       "episode_length": float(t + 1),
     }
-    logger.log(metrics, step=episode + 1)
+    logger.log(metrics, step=episode + 1, namespace="marl_evaluation")
   summary = {
     "eval_real_reward": float(np.mean(rewards)),
     "eval_real_reward_std": float(np.std(rewards)),
@@ -308,7 +336,27 @@ def run_mpc_cem(args):
   }
   os.makedirs(args.out_dir, exist_ok=True)
   logger.save_json(os.path.join(args.out_dir, "mpc_cem_summary.json"), summary)
-  logger.log_summary(summary)
+  if should_log_wandb_videos(args):
+    frames = record_mpc_cem_evaluation_video(
+      vae_json=args.vae_json,
+      rnn_json=args.rnn_json,
+      ns_variant=args.ns_variant,
+      symbolic_coverage=args.symbolic_coverage,
+      seed=args.seed + 70000,
+      episodes=args.video_episodes,
+      max_steps=args.video_max_steps,
+      planning_horizon=args.planning_horizon,
+      cem_samples=args.cem_samples,
+      cem_elite_frac=args.cem_elite_frac,
+      gamma=args.gamma,
+    )
+    logger.log_video(
+      "video_policy_rollout",
+      frames,
+      fps=args.video_fps,
+      namespace="marl_evaluation",
+    )
+  logger.log_summary(summary, namespace="marl_evaluation")
   logger.finish()
   print(json.dumps(summary, indent=2))
   return summary

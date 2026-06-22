@@ -1,0 +1,51 @@
+program: sweep_agent.py
+project: ns-mawm-gridcraft
+name: gridcraft-smoke-sweep
+description: Tiny sweep for validating the Gridcraft W&B sweep runner.
+
+method: grid
+
+metric:
+  name: World Model evaluation/grid_mismatch
+  goal: minimize
+
+parameters:
+  baseline_id:
+    values: [B10, B25]
+  phase:
+    value: world_model
+  seed:
+    values: [1]
+  run_dir:
+    value: runs/sweeps/smoke
+  extract_episodes:
+    value: 5
+  extract_max_steps:
+    value: 20
+  series_limit:
+    value: 5
+  steps:
+    value: 5
+  batch_size:
+    value: 4
+  seq_len:
+    value: 5
+  eval_every:
+    value: 1
+  episodes:
+    value: 2
+  max_steps:
+    value: 20
+  video_max_steps:
+    value: 5
+  video_fps:
+    value: 10
+  horizons:
+    value: "1 3"
+  skip_vae:
+    value: true
+
+command:
+  - ${env}
+  - ../.venv/bin/python
+  - ${program}

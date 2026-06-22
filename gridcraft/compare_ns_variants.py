@@ -6,6 +6,7 @@ from evaluate_world_model import evaluate_rnn_one_step, evaluate_rnn_horizon
 from experiment_logging import add_wandb_args, logger_from_args
 from experiment_metrics import flatten_variant_summary
 from ns_symbolic import NS_VARIANTS
+from wandb_schema import GENERAL, WORLD_MODEL_EVALUATION
 
 
 def main():
@@ -29,6 +30,8 @@ def main():
     default_group="ns_mawm_comparison",
     default_name=f"gridcraft-ns-compare-seed{args.seed}",
     tags=["gridcraft", "ns-mawm", "comparison"],
+    info_sections=[GENERAL, WORLD_MODEL_EVALUATION],
+    out_dir=os.path.dirname(args.out) or "trainlog",
   )
 
   summary = {}
@@ -56,7 +59,7 @@ def main():
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w") as f:
       json.dump(metrics, f, indent=2)
-    logger.log({variant: metrics})
+    logger.log({variant: metrics}, namespace="wm_evaluation")
     print(variant, json.dumps(metrics, indent=2))
 
   out_dir = os.path.dirname(args.out)
@@ -64,7 +67,7 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
   with open(args.out, "w") as f:
     json.dump(summary, f, indent=2)
-  logger.log(flatten_variant_summary(summary))
+  logger.log(flatten_variant_summary(summary), namespace="wm_evaluation")
   logger.save_json(args.out, summary)
   logger.finish()
   print("saved", args.out)

@@ -38,7 +38,7 @@ for seed in $SEEDS; do
     --seed "$seed" \
     "${WANDB_ARGS[@]}"
 
-  for baseline in ${MODEL_BASELINES:-"B10 B25 B26"}; do
+  for baseline in ${MODEL_BASELINES:-"B24 B25 B26 B27 B28 B29"}; do
     for policy in ${MODEL_POLICIES:-"imagined_mappo mpc_cem"}; do
       "$PYTHON" run_baseline.py \
         --baseline-id "$baseline" \

@@ -1,0 +1,62 @@
+program: sweep_agent.py
+project: ns-mawm-gridcraft
+name: gridcraft-policy-baselines
+description: Grid sweep over model-free, imagined-only, and MPC-CEM Gridcraft policy baselines.
+
+method: grid
+
+metric:
+  name: MARL evaluation/eval_real_reward
+  goal: maximize
+
+parameters:
+  baseline_policy:
+    values:
+      - B00:real_mappo
+      - B24:imagined_mappo
+      - B24:mpc_cem
+      - B25:imagined_mappo
+      - B25:mpc_cem
+      - B26:imagined_mappo
+      - B26:mpc_cem
+      - B27:imagined_mappo
+      - B27:mpc_cem
+      - B28:imagined_mappo
+      - B28:mpc_cem
+      - B29:imagined_mappo
+      - B29:mpc_cem
+  phase:
+    value: policy
+  seed:
+    values: [1, 2, 3]
+  run_dir:
+    value: runs/sweeps/policy
+  max_steps:
+    value: 500
+  policy_updates:
+    value: 100
+  episodes_per_update:
+    value: 8
+  policy_eval_every:
+    value: 10
+  policy_eval_episodes:
+    value: 10
+  video_max_steps:
+    value: 100
+  video_fps:
+    value: 10
+  planning_horizon:
+    value: 15
+  cem_samples:
+    value: 64
+  learning_rate:
+    value: 0.0003
+  skip_extract:
+    value: true
+  skip_vae:
+    value: true
+
+command:
+  - ${env}
+  - ../.venv/bin/python
+  - ${program}

@@ -5,7 +5,7 @@ import os
 import numpy as np
 
 from env import ACTION_SIZE, make_env
-from experiment_logging import add_wandb_args, logger_from_args
+from experiment_logging import add_wandb_args, logger_from_args, should_log_wandb_videos
 from experiment_metrics import summarize_compounding_error
 from model import predict_rnn_next_z
 from ns_symbolic import (
@@ -18,6 +18,8 @@ from ns_symbolic import (
 )
 from rnn.rnn import GridcraftRNN, rnn_init_state
 from vae.vae import GridcraftVAE
+from video_logging import record_world_model_comparison_video
+from wandb_schema import GENERAL, WORLD_MODEL_EVALUATION
 
 
 def compare_tabular(real_obs, imagined_obs, current_obs=None, action=None, symbolic_coverage=1.0):
@@ -182,6 +184,8 @@ def main():
     default_group=f"eval_{args.ns_variant}",
     default_name=f"gridcraft-eval-{args.ns_variant}-seed{args.seed}",
     tags=["gridcraft", "evaluation", args.ns_variant],
+    info_sections=[GENERAL, WORLD_MODEL_EVALUATION],
+    out_dir=(os.path.dirname(args.out) or "trainlog") if args.out else "trainlog",
   )
 
   if args.vae_only:
@@ -201,8 +205,25 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
   with open(out_path, "w") as f:
     json.dump(metrics, f, indent=2)
-  logger.log(metrics)
-  logger.log(summarize_compounding_error(metrics))
+  logger.log(metrics, namespace="wm_evaluation")
+  logger.log(summarize_compounding_error(metrics), namespace="wm_evaluation")
+  if args.rnn_one_step and should_log_wandb_videos(args):
+    frames = record_world_model_comparison_video(
+      vae_json=args.vae_json,
+      rnn_json=resolve_rnn_json(args),
+      ns_variant=args.ns_variant,
+      symbolic_coverage=args.symbolic_coverage,
+      seed=args.seed,
+      episodes=args.video_episodes,
+      max_steps=args.video_max_steps,
+      imagination_mode=args.imagination_mode,
+    )
+    logger.log_video(
+      "video_real_vs_imagined",
+      frames,
+      fps=args.video_fps,
+      namespace="wm_evaluation",
+    )
   logger.save_json(out_path, metrics)
   logger.finish()
   print(json.dumps(metrics, indent=2))

@@ -1,0 +1,51 @@
+program: sweep_agent.py
+project: ns-mawm-gridcraft
+name: gridcraft-world-model-baselines
+description: Grid sweep over Gridcraft VAE+MDN-RNN and NS-MAWM world-model baselines.
+
+method: grid
+
+metric:
+  name: World Model evaluation/grid_mismatch
+  goal: minimize
+
+parameters:
+  baseline_id:
+    values: [B10, B24, B25, B26, B27, B28, B29]
+  phase:
+    value: world_model
+  seed:
+    values: [1, 2, 3]
+  run_dir:
+    value: runs/sweeps/world_model
+  steps:
+    value: 10000
+  batch_size:
+    value: 64
+  seq_len:
+    value: 32
+  eval_every:
+    value: 1000
+  episodes:
+    value: 100
+  max_steps:
+    value: 500
+  horizon_steps:
+    value: 50
+  video_max_steps:
+    value: 100
+  video_fps:
+    value: 10
+  horizons:
+    value: "1 5 10 25 50"
+  extract_episodes:
+    value: 5000
+  extract_max_steps:
+    value: 500
+  skip_vae:
+    value: true
+
+command:
+  - ${env}
+  - ../.venv/bin/python
+  - ${program}

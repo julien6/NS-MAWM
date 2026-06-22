@@ -10,6 +10,7 @@ from experiment_logging import add_wandb_args, logger_from_args
 from ns_symbolic import symbolic_batch_targets
 from rnn.rnn import GridcraftRNN
 from vae.vae import GridcraftVAE
+from wandb_schema import GENERAL, WORLD_MODEL_EVALUATION, WORLD_MODEL_TRAINING
 
 
 def load_series(path):
@@ -87,6 +88,8 @@ def main():
     default_group=f"rnn_{args.ns_variant}",
     default_name=f"gridcraft-rnn-{args.ns_variant}-seed{args.seed}",
     tags=["gridcraft", "rnn", args.ns_variant],
+    info_sections=[GENERAL, WORLD_MODEL_TRAINING, WORLD_MODEL_EVALUATION],
+    out_dir=args.out_dir,
   )
   rng = np.random.default_rng(args.seed)
   episodes, has_obs = load_series(args.series)
@@ -124,10 +127,10 @@ def main():
         "training_residual_loss": residual_loss,
         "training_reward_loss": reward_loss,
         "training_done_loss": done_loss,
-      }, step=step + 1)
+      }, step=step + 1, namespace="wm_training")
     if args.eval_every > 0 and (step + 1) % args.eval_every == 0:
       eval_metrics = checkpoint_and_evaluate(model, args, step + 1)
-      logger.log(eval_metrics, step=step + 1)
+      logger.log(eval_metrics, step=step + 1, namespace="wm_evaluation")
 
   out_name = "rnn.json" if args.ns_variant == "neural" else f"rnn.{args.ns_variant}.json"
   if args.ns_variant == "neural":
