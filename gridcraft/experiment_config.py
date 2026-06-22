@@ -20,6 +20,7 @@ class BaselineConfig:
 
 
 GRIDCRAFT_BASELINES = [
+  BaselineConfig("B00", "model_free_control", "none", "real", "Gridcraft", 0.0, "none", "SV", "SV", "neural"),
   BaselineConfig("B10", "neural_wm", "vae_mdn_rnn", "random", "Gridcraft", 0.0, "none", "SV", "SV", "neural"),
   BaselineConfig("B19", "ns_mawm_coverage", "vae_mdn_rnn", "random", "Gridcraft", 0.1, "regularization", "UV", "MV", "regularization"),
   BaselineConfig("B20", "ns_mawm_coverage", "vae_mdn_rnn", "random", "Gridcraft", 0.3, "regularization", "UV", "MV", "regularization"),

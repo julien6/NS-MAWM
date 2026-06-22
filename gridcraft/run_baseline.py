@@ -12,11 +12,14 @@ def main():
   parser = argparse.ArgumentParser()
   parser.add_argument("--baseline-id", default=None)
   parser.add_argument("--list", action="store_true")
+  parser.add_argument("--phase", choices=["world_model", "policy", "all"], default="world_model")
+  parser.add_argument("--policy-baseline", choices=["real_mappo", "imagined_mappo", "mpc_cem"], default=None)
   parser.add_argument("--run-dir", default="runs")
   parser.add_argument("--python", default="../.venv/bin/python")
   parser.add_argument("--steps", type=int, default=10000)
   parser.add_argument("--batch-size", type=int, default=64)
   parser.add_argument("--seq-len", type=int, default=32)
+  parser.add_argument("--eval-every", type=int, default=0)
   parser.add_argument("--lambda-sym", type=float, default=1.0)
   parser.add_argument("--episodes", type=int, default=100)
   parser.add_argument("--max-steps", type=int, default=500)
@@ -27,6 +30,15 @@ def main():
   parser.add_argument("--skip-series", action="store_true")
   parser.add_argument("--skip-train", action="store_true")
   parser.add_argument("--series-limit", type=int, default=None)
+  parser.add_argument("--policy-updates", type=int, default=100)
+  parser.add_argument("--episodes-per-update", type=int, default=8)
+  parser.add_argument("--policy-eval-every", type=int, default=10)
+  parser.add_argument("--policy-eval-episodes", type=int, default=10)
+  parser.add_argument("--planning-horizon", type=int, default=15)
+  parser.add_argument("--cem-samples", type=int, default=64)
+  parser.add_argument("--learning-rate", type=float, default=3e-4)
+  parser.add_argument("--rnn-json", default=None)
+  parser.add_argument("--initial-z-json", default=None)
   add_wandb_args(parser)
   args = parser.parse_args()
 
@@ -43,6 +55,8 @@ def main():
   run_dir = os.path.join(args.run_dir, run_name)
   series_dir = os.path.join(run_dir, "series")
   rnn_dir = os.path.join(run_dir, "rnn")
+  eval_dir = os.path.join(run_dir, "eval")
+  policy_dir = os.path.join(run_dir, "policy")
   os.makedirs(run_dir, exist_ok=True)
 
   config = baseline.to_dict()
@@ -54,7 +68,7 @@ def main():
     config=config,
     default_group=baseline.baseline_id,
     default_name=run_name,
-    tags=["gridcraft", "baseline", baseline.baseline_id, baseline.ns_variant],
+    tags=["gridcraft", "baseline", baseline.baseline_id, baseline.ns_variant, args.phase],
   )
   logger.save_json(os.path.join(run_dir, "baseline_config.json"), config)
 
@@ -63,12 +77,12 @@ def main():
   rnn_json = os.path.join(rnn_dir, rnn_file)
 
   commands = []
-  if not args.skip_series:
+  if args.phase in ("world_model", "all") and not args.skip_series:
     commands.append([
       args.python, "series.py",
       "--out-dir", series_dir,
     ] + (["--limit", str(args.series_limit)] if args.series_limit is not None else []))
-  if not args.skip_train:
+  if args.phase in ("world_model", "all") and not args.skip_train:
     cmd = [
       args.python, "rnn_train.py",
       "--series", os.path.join(series_dir, "series.npz"),
@@ -82,28 +96,68 @@ def main():
       "--batch-size", str(args.batch_size),
       "--seq-len", str(args.seq_len),
       "--seed", str(seed),
+      "--python", args.python,
     ]
+    if args.eval_every > 0:
+      cmd.extend([
+        "--eval-every", str(args.eval_every),
+        "--eval-out-dir", eval_dir,
+        "--eval-episodes", str(args.episodes),
+        "--eval-max-steps", str(args.max_steps),
+      ])
+      if args.horizons:
+        cmd.append("--eval-horizons")
+        cmd.extend(str(horizon) for horizon in args.horizons)
     cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_train", tags=[baseline.ns_variant, "train"]))
     commands.append(cmd)
 
   eval_out = os.path.join(run_dir, "eval.json")
-  eval_cmd = [
-    args.python, "evaluate_world_model.py",
-    "--rnn-one-step",
-    "--ns-variant", baseline.ns_variant,
-    "--symbolic-coverage", str(baseline.coverage),
-    "--rnn-json", rnn_json,
-    "--episodes", str(args.episodes),
-    "--max-steps", str(args.max_steps),
-    "--horizon-steps", str(args.horizon_steps),
-    "--seed", str(seed),
-    "--out", eval_out,
-  ]
-  if args.horizons:
-    eval_cmd.append("--horizons")
-    eval_cmd.extend(str(horizon) for horizon in args.horizons)
-  eval_cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_eval", tags=[baseline.ns_variant, "eval"]))
-  commands.append(eval_cmd)
+  if args.phase in ("world_model", "all"):
+    eval_cmd = [
+      args.python, "evaluate_world_model.py",
+      "--rnn-one-step",
+      "--ns-variant", baseline.ns_variant,
+      "--symbolic-coverage", str(baseline.coverage),
+      "--rnn-json", rnn_json,
+      "--episodes", str(args.episodes),
+      "--max-steps", str(args.max_steps),
+      "--horizon-steps", str(args.horizon_steps),
+      "--seed", str(seed),
+      "--out", eval_out,
+    ]
+    if args.horizons:
+      eval_cmd.append("--horizons")
+      eval_cmd.extend(str(horizon) for horizon in args.horizons)
+    eval_cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_eval", tags=[baseline.ns_variant, "eval"]))
+    commands.append(eval_cmd)
+
+  if args.phase in ("policy", "all"):
+    policy_baseline = resolve_policy_baseline(args, baseline)
+    policy_rnn_json = resolve_rnn_path(args, baseline, rnn_json, train_variant)
+    policy_initial_z_json = resolve_initial_z_path(args, run_dir)
+    policy_cmd = [
+      args.python, "policy_baselines.py",
+      "--policy-baseline", policy_baseline,
+      "--baseline-id", baseline.baseline_id,
+      "--run-name", f"{run_name}_{policy_baseline}",
+      "--out-dir", policy_dir,
+      "--seed", str(seed),
+      "--max-steps", str(args.max_steps),
+      "--updates", str(args.policy_updates),
+      "--episodes-per-update", str(args.episodes_per_update),
+      "--eval-every", str(args.policy_eval_every),
+      "--eval-episodes", str(args.policy_eval_episodes),
+      "--learning-rate", str(args.learning_rate),
+      "--vae-json", "vae/vae.json",
+      "--rnn-json", policy_rnn_json,
+      "--initial-z-json", policy_initial_z_json,
+      "--ns-variant", baseline.ns_variant,
+      "--symbolic-coverage", str(baseline.coverage),
+      "--planning-horizon", str(args.planning_horizon),
+      "--cem-samples", str(args.cem_samples),
+    ]
+    policy_cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_{policy_baseline}", tags=[baseline.ns_variant, "policy", policy_baseline]))
+    commands.append(policy_cmd)
 
   for cmd in commands:
     print(" ".join(cmd), flush=True)
@@ -116,6 +170,36 @@ def main():
     logger.log(metrics)
     logger.log_summary(metrics)
   logger.finish()
+
+
+def resolve_policy_baseline(args, baseline):
+  if args.policy_baseline:
+    return args.policy_baseline
+  if baseline.baseline_id == "B00":
+    return "real_mappo"
+  return "mpc_cem"
+
+
+def resolve_rnn_path(args, baseline, run_rnn_json, train_variant):
+  if args.rnn_json:
+    return args.rnn_json
+  if baseline.baseline_id == "B00":
+    return "rnn/rnn.json"
+  if os.path.exists(run_rnn_json):
+    return run_rnn_json
+  candidates = {
+    "neural": "rnn/rnn.neural.json",
+    "regularization": "rnn/rnn.regularization.json",
+    "residual": "rnn/rnn.residual.json",
+  }
+  return candidates.get(train_variant, "rnn/rnn.json")
+
+
+def resolve_initial_z_path(args, run_dir):
+  if args.initial_z_json:
+    return args.initial_z_json
+  run_path = os.path.join(run_dir, "initial_z.json")
+  return run_path if os.path.exists(run_path) else "initial_z/initial_z.json"
 
 
 def wandb_cli_args(args, group, name, tags):

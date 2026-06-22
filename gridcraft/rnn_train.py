@@ -1,6 +1,8 @@
 import argparse
 import json
 import os
+import subprocess
+import sys
 
 import numpy as np
 
@@ -69,6 +71,12 @@ def main():
   parser.add_argument("--lambda-sym", type=float, default=1.0)
   parser.add_argument("--symbolic-coverage", type=float, default=1.0)
   parser.add_argument("--vae-json", default="vae/vae.json")
+  parser.add_argument("--eval-every", type=int, default=0)
+  parser.add_argument("--eval-out-dir", default=None)
+  parser.add_argument("--eval-episodes", type=int, default=10)
+  parser.add_argument("--eval-max-steps", type=int, default=100)
+  parser.add_argument("--eval-horizons", nargs="+", type=int, default=None)
+  parser.add_argument("--python", default=sys.executable)
   add_wandb_args(parser)
   args = parser.parse_args()
 
@@ -117,6 +125,9 @@ def main():
         "training_reward_loss": reward_loss,
         "training_done_loss": done_loss,
       }, step=step + 1)
+    if args.eval_every > 0 and (step + 1) % args.eval_every == 0:
+      eval_metrics = checkpoint_and_evaluate(model, args, step + 1)
+      logger.log(eval_metrics, step=step + 1)
 
   out_name = "rnn.json" if args.ns_variant == "neural" else f"rnn.{args.ns_variant}.json"
   if args.ns_variant == "neural":
@@ -124,6 +135,40 @@ def main():
   model.save_json(os.path.join(args.out_dir, out_name))
   print("saved", os.path.join(args.out_dir, out_name))
   logger.finish()
+
+
+def checkpoint_and_evaluate(model, args, step):
+  eval_out_dir = args.eval_out_dir or os.path.join(args.out_dir, "eval")
+  checkpoint_dir = os.path.join(args.out_dir, "checkpoints")
+  os.makedirs(eval_out_dir, exist_ok=True)
+  os.makedirs(checkpoint_dir, exist_ok=True)
+  checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_{step}.json")
+  eval_path = os.path.join(eval_out_dir, f"world_model_step_{step}.json")
+  model.save_json(checkpoint_path)
+  eval_variant = "neural" if args.ns_variant == "neural" else args.ns_variant
+  cmd = [
+    args.python,
+    "evaluate_world_model.py",
+    "--rnn-one-step",
+    "--vae-json", args.vae_json,
+    "--rnn-json", checkpoint_path,
+    "--ns-variant", eval_variant,
+    "--symbolic-coverage", str(args.symbolic_coverage),
+    "--episodes", str(args.eval_episodes),
+    "--max-steps", str(args.eval_max_steps),
+    "--out", eval_path,
+    "--progress-every", "0",
+  ]
+  if args.eval_horizons:
+    cmd.append("--horizons")
+    cmd.extend(str(horizon) for horizon in args.eval_horizons)
+  print(" ".join(cmd), flush=True)
+  subprocess.run(cmd, check=True)
+  with open(eval_path) as f:
+    metrics = json.load(f)
+  prefixed = {f"eval/{key}": value for key, value in metrics.items()}
+  prefixed["eval/checkpoint_step"] = step
+  return prefixed
 
 
 if __name__ == "__main__":

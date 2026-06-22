@@ -224,6 +224,86 @@ trainlog/ns_eval_residual.json
 trainlog/ns_mawm_summary.json
 ```
 
+## Reproducible Baselines And W&B
+
+The reproducibility runner is `run_baseline.py`. It supports three operational
+families on Gridcraft:
+
+- `B10`: classic VAE + MDN-RNN world model.
+- `B25` / `B26`: VAE + MDN-RNN with NS-MAWM projection or residual behavior.
+- `B00`: model-free policy trained directly in the real Gridcraft environment.
+
+World-model baselines periodically checkpoint and evaluate one-step and
+multi-horizon compounding metrics:
+
+```bash
+../.venv/bin/python run_baseline.py --baseline-id B10 --phase world_model --eval-every 1000 --horizons 1 5 10 25 50 --wandb
+../.venv/bin/python run_baseline.py --baseline-id B25 --phase world_model --eval-every 1000 --horizons 1 5 10 25 50 --wandb
+```
+
+Outputs are written under:
+
+```text
+runs/<baseline>_<variant>_k<coverage>_seed<seed>/
+  baseline_config.json
+  series/
+  rnn/checkpoints/checkpoint_<step>.json
+  eval/world_model_step_<step>.json
+  eval.json
+```
+
+Policy baselines are launched through the same runner:
+
+```bash
+# model-free policy in real Gridcraft
+../.venv/bin/python run_baseline.py --baseline-id B00 --phase policy --policy-baseline real_mappo --wandb
+
+# policy trained only in the imagined environment, then evaluated in real Gridcraft
+../.venv/bin/python run_baseline.py --baseline-id B25 --phase policy --policy-baseline imagined_mappo --wandb
+
+# MPC-CEM planning in real Gridcraft using the trained world model
+../.venv/bin/python run_baseline.py --baseline-id B25 --phase policy --policy-baseline mpc_cem --wandb
+```
+
+The policy implementation is currently a local mono-agent actor-critic runner
+with MAPPO-compatible logging keys. It is intentionally small so the protocol is
+operational with the current `.venv`; a strict BenchMARL/TorchRL MAPPO runner can
+replace `policy_baselines.py` once those dependencies are installed.
+
+Convenience scripts:
+
+```bash
+# B10/B24/B25/B26 world-model baselines
+WANDB=1 ./run_world_model_baselines.bash
+
+# B00 real policy plus imagined-only and MPC-CEM model-based policies
+WANDB=1 ./run_policy_baselines.bash
+
+# Complete Gridcraft protocol
+WANDB=1 ./run_repro_gridcraft.bash
+```
+
+For smoke tests:
+
+```bash
+RNN_STEPS=5 EVAL_EVERY=1 EVAL_EPISODES=1 EVAL_MAX_STEPS=5 EVAL_HORIZONS="1 3" BASELINES="B10 B25" ./run_world_model_baselines.bash
+POLICY_UPDATES=1 EPISODES_PER_UPDATE=1 POLICY_EVAL_EVERY=1 POLICY_EVAL_EPISODES=1 MAX_STEPS=5 MODEL_BASELINES="B25" MODEL_POLICIES="imagined_mappo mpc_cem" ./run_policy_baselines.bash
+```
+
+W&B defaults:
+
+```text
+project: ns-mawm-gridcraft
+group: baseline id, for example B10 or B25
+name: <baseline_id>_<variant>_k<coverage>_seed<seed>[_policy]
+```
+
+Logged world-model metrics include training losses, `grid_mismatch`,
+`terrain_mismatch`, `block_mismatch`, `entity_mismatch`, `self_mse`, RVR,
+determinable/undeterminable mismatch, and horizon-prefixed compounding metrics.
+Policy metrics include real and imagined rewards, real-imagined reward gap,
+episode length, planning imagined return, and planning action entropy.
+
 ## Baseline Experiments And W&B
 
 The NeurIPS-style baseline runner stores each baseline in an independent
