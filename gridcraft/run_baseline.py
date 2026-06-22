@@ -118,6 +118,7 @@ def main():
       "--out-dir", series_dir,
     ] + (["--limit", str(args.series_limit)] if args.series_limit is not None else []))
   if args.phase in ("world_model", "all") and not args.skip_train:
+    train_seq_len = effective_seq_len(args.seq_len, args.max_steps)
     cmd = [
       args.python, "rnn_train.py",
       "--series", os.path.join(series_dir, "series.npz"),
@@ -130,7 +131,7 @@ def main():
       "--vae-json", vae_json,
       "--steps", str(args.steps),
       "--batch-size", str(args.batch_size),
-      "--seq-len", str(args.seq_len),
+      "--seq-len", str(train_seq_len),
       "--seed", str(seed),
       "--python", args.python,
     ]
@@ -233,6 +234,12 @@ def resolve_policy_baseline(args, baseline):
   if baseline.baseline_id == "B00":
     return "real_mappo"
   return "mpc_cem"
+
+
+def effective_seq_len(seq_len, max_steps):
+  if max_steps is None:
+    return seq_len
+  return max(1, min(int(seq_len), int(max_steps) - 1))
 
 
 def load_policy_metrics(policy_dir):

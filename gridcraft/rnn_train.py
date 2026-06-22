@@ -93,6 +93,7 @@ def main():
   )
   rng = np.random.default_rng(args.seed)
   episodes, has_obs = load_series(args.series)
+  args.seq_len = resolve_seq_len(args.seq_len, episodes)
   if args.ns_variant != "neural" and not has_obs:
     raise RuntimeError("series file has no obs array; rerun series.py before NS-MAWM training")
   model = GridcraftRNN()
@@ -172,6 +173,17 @@ def checkpoint_and_evaluate(model, args, step):
   prefixed = {f"eval/{key}": value for key, value in metrics.items()}
   prefixed["eval/checkpoint_step"] = step
   return prefixed
+
+
+def resolve_seq_len(seq_len, episodes):
+  max_length = max((len(ep[0]) for ep in episodes), default=0)
+  if max_length <= 1:
+    raise RuntimeError("no episodes long enough for RNN training")
+  if seq_len >= max_length:
+    adjusted = max_length - 1
+    print(f"adjusted seq_len from {seq_len} to {adjusted} for max episode length {max_length}", flush=True)
+    return adjusted
+  return seq_len
 
 
 if __name__ == "__main__":
