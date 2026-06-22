@@ -30,6 +30,15 @@ def main():
   parser.add_argument("--skip-series", action="store_true")
   parser.add_argument("--skip-train", action="store_true")
   parser.add_argument("--series-limit", type=int, default=None)
+  parser.add_argument("--record-dir", default="record")
+  parser.add_argument("--skip-extract", action="store_true")
+  parser.add_argument("--extract-episodes", type=int, default=5000)
+  parser.add_argument("--extract-max-steps", type=int, default=None)
+  parser.add_argument("--skip-vae", action="store_true")
+  parser.add_argument("--train-vae", action="store_true")
+  parser.add_argument("--vae-json", default=None)
+  parser.add_argument("--vae-steps", type=int, default=10000)
+  parser.add_argument("--vae-batch-size", type=int, default=256)
   parser.add_argument("--policy-updates", type=int, default=100)
   parser.add_argument("--episodes-per-update", type=int, default=8)
   parser.add_argument("--policy-eval-every", type=int, default=10)
@@ -54,6 +63,7 @@ def main():
   run_name = f"{baseline.baseline_id}_{baseline.ns_variant}_k{baseline.coverage}_seed{seed}"
   run_dir = os.path.join(args.run_dir, run_name)
   series_dir = os.path.join(run_dir, "series")
+  vae_dir = os.path.join(run_dir, "vae")
   rnn_dir = os.path.join(run_dir, "rnn")
   eval_dir = os.path.join(run_dir, "eval")
   policy_dir = os.path.join(run_dir, "policy")
@@ -75,11 +85,32 @@ def main():
   train_variant = "neural" if baseline.ns_variant == "projection" else baseline.ns_variant
   rnn_file = "rnn.neural.json" if train_variant == "neural" else f"rnn.{train_variant}.json"
   rnn_json = os.path.join(rnn_dir, rnn_file)
+  vae_json = resolve_vae_path(args, vae_dir)
 
   commands = []
+  if args.phase in ("world_model", "all") and should_extract(args):
+    commands.append([
+      args.python, "extract.py",
+      "--episodes", str(args.extract_episodes),
+      "--max-steps", str(args.extract_max_steps or args.max_steps),
+      "--seed", str(seed),
+      "--out-dir", args.record_dir,
+    ])
+  if args.phase in ("world_model", "all") and should_train_vae(args, vae_json):
+    vae_json = os.path.join(vae_dir, "vae.json")
+    commands.append([
+      args.python, "vae_train.py",
+      "--record-dir", args.record_dir,
+      "--out-dir", vae_dir,
+      "--steps", str(args.vae_steps),
+      "--batch-size", str(args.vae_batch_size),
+      "--seed", str(seed),
+    ])
   if args.phase in ("world_model", "all") and not args.skip_series:
     commands.append([
       args.python, "series.py",
+      "--record-dir", args.record_dir,
+      "--model-dir", os.path.dirname(vae_json),
       "--out-dir", series_dir,
     ] + (["--limit", str(args.series_limit)] if args.series_limit is not None else []))
   if args.phase in ("world_model", "all") and not args.skip_train:
@@ -92,6 +123,7 @@ def main():
       "--ns-variant", train_variant,
       "--symbolic-coverage", str(baseline.coverage),
       "--lambda-sym", str(args.lambda_sym),
+      "--vae-json", vae_json,
       "--steps", str(args.steps),
       "--batch-size", str(args.batch_size),
       "--seq-len", str(args.seq_len),
@@ -119,6 +151,7 @@ def main():
       "--ns-variant", baseline.ns_variant,
       "--symbolic-coverage", str(baseline.coverage),
       "--rnn-json", rnn_json,
+      "--vae-json", vae_json,
       "--episodes", str(args.episodes),
       "--max-steps", str(args.max_steps),
       "--horizon-steps", str(args.horizon_steps),
@@ -148,7 +181,7 @@ def main():
       "--eval-every", str(args.policy_eval_every),
       "--eval-episodes", str(args.policy_eval_episodes),
       "--learning-rate", str(args.learning_rate),
-      "--vae-json", "vae/vae.json",
+      "--vae-json", vae_json,
       "--rnn-json", policy_rnn_json,
       "--initial-z-json", policy_initial_z_json,
       "--ns-variant", baseline.ns_variant,
@@ -178,6 +211,31 @@ def resolve_policy_baseline(args, baseline):
   if baseline.baseline_id == "B00":
     return "real_mappo"
   return "mpc_cem"
+
+
+def resolve_vae_path(args, run_vae_dir):
+  if args.vae_json:
+    return args.vae_json
+  run_path = os.path.join(run_vae_dir, "vae.json")
+  if os.path.exists(run_path):
+    return run_path
+  return "vae/vae.json"
+
+
+def should_extract(args):
+  if args.skip_extract:
+    return False
+  if not os.path.isdir(args.record_dir):
+    return True
+  return not any(name.endswith(".npz") for name in os.listdir(args.record_dir))
+
+
+def should_train_vae(args, vae_json):
+  if args.skip_vae:
+    return False
+  if args.train_vae:
+    return True
+  return not os.path.exists(vae_json)
 
 
 def resolve_rnn_path(args, baseline, run_rnn_json, train_variant):
