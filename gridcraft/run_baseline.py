@@ -5,7 +5,7 @@ import subprocess
 import sys
 
 from experiment_config import get_baseline, list_baselines
-from experiment_logging import add_wandb_args, logger_from_args, should_log_wandb_videos
+from experiment_logging import add_wandb_args, logger_from_args, normalize_wandb_tags, should_log_wandb_videos
 from wandb_schema import GENERAL, MARL_EVALUATION, MARL_TRAINING, WORLD_MODEL_EVALUATION, WORLD_MODEL_TRAINING
 
 
@@ -80,7 +80,7 @@ def main():
     config=config,
     default_group=baseline.baseline_id,
     default_name=run_name,
-    tags=["gridcraft", "baseline", baseline.baseline_id, baseline.baseline_slug, baseline.ns_variant, args.phase],
+    tags=["gridcraft", "baseline", baseline.baseline_id, baseline.ns_variant, args.phase],
     info_sections=info_sections_for_phase(args.phase),
     out_dir=run_dir,
   )
@@ -171,8 +171,14 @@ def main():
 
   if args.phase in ("policy", "all"):
     policy_baseline = resolve_policy_baseline(args, baseline)
-    policy_rnn_json = resolve_rnn_path(args, baseline, rnn_json, train_variant)
-    policy_initial_z_json = resolve_initial_z_path(args, run_dir)
+    if args.phase == "all" and not args.skip_train and args.rnn_json is None:
+      policy_rnn_json = rnn_json
+    else:
+      policy_rnn_json = resolve_rnn_path(args, baseline, rnn_json, train_variant)
+    if args.phase == "all" and not args.skip_train and args.initial_z_json is None:
+      policy_initial_z_json = os.path.join(run_dir, "initial_z.json")
+    else:
+      policy_initial_z_json = resolve_initial_z_path(args, run_dir)
     policy_cmd = [
       args.python, "policy_baselines.py",
       "--policy-baseline", policy_baseline,
@@ -202,6 +208,9 @@ def main():
     print(" ".join(cmd), flush=True)
     if not args.dry_run:
       subprocess.run(cmd, check=True)
+  if args.dry_run:
+    logger.finish()
+    return
 
   if os.path.exists(eval_out):
     with open(eval_out) as f:
@@ -374,6 +383,7 @@ def wandb_cli_args(args, group, name, tags, include=True):
   if not getattr(args, "wandb_info_panels", True):
     cli.append("--no-wandb-info-panels")
   all_tags = list(tags) + list(args.wandb_tags or [])
+  all_tags = normalize_wandb_tags(all_tags)
   if all_tags:
     cli.append("--wandb-tags")
     cli.extend(all_tags)

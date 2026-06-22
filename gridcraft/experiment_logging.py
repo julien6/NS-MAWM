@@ -29,7 +29,7 @@ class ExperimentLogger:
       "entity": entity,
       "group": group,
       "name": name,
-      "tags": tags or [],
+      "tags": normalize_wandb_tags(tags or []),
       "config": config or {},
     }
     if mode:
@@ -128,6 +128,21 @@ def logger_from_args(args, config=None, default_group=None, default_name=None, t
     info_panels=bool(getattr(args, "wandb_info_panels", True)),
     info_sections=info_sections,
   )
+
+
+def normalize_wandb_tags(tags, max_len=64):
+  normalized = []
+  seen = set()
+  for tag in tags or []:
+    text = str(tag).strip()
+    if not text:
+      continue
+    if len(text) > max_len:
+      text = text[:max_len]
+    if text not in seen:
+      normalized.append(text)
+      seen.add(text)
+  return normalized
 
 
 def flatten_metrics(metrics, prefix=""):
