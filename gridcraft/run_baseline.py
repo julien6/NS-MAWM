@@ -49,7 +49,16 @@ def main():
   parser.add_argument("--learning-rate", type=float, default=3e-4)
   parser.add_argument("--rnn-json", default=None)
   parser.add_argument("--initial-z-json", default=None)
-  parser.add_argument("--no-subprocess-wandb", action="store_true")
+  parser.add_argument(
+    "--subprocess-wandb",
+    action="store_true",
+    help="Also create separate W&B runs for training/evaluation subprocesses.",
+  )
+  parser.add_argument(
+    "--no-subprocess-wandb",
+    action="store_true",
+    help=argparse.SUPPRESS,
+  )
   add_wandb_args(parser)
   args = parser.parse_args()
 
@@ -145,7 +154,7 @@ def main():
       if args.horizons:
         cmd.append("--eval-horizons")
         cmd.extend(str(horizon) for horizon in args.horizons)
-    cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_train", tags=[baseline.ns_variant, "train"], include=not args.no_subprocess_wandb))
+    cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_train", tags=[baseline.ns_variant, "train"], include=args.subprocess_wandb and not args.no_subprocess_wandb))
     commands.append(cmd)
 
   eval_out = os.path.join(run_dir, "eval.json")
@@ -167,7 +176,7 @@ def main():
       eval_cmd.append("--horizons")
       eval_cmd.extend(str(horizon) for horizon in args.horizons)
     eval_cmd.extend(video_cli_args(args))
-    eval_cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_eval", tags=[baseline.ns_variant, "eval"], include=not args.no_subprocess_wandb))
+    eval_cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_eval", tags=[baseline.ns_variant, "eval"], include=args.subprocess_wandb and not args.no_subprocess_wandb))
     commands.append(eval_cmd)
 
   if args.phase in ("policy", "all"):
@@ -202,7 +211,7 @@ def main():
       "--cem-samples", str(args.cem_samples),
     ]
     policy_cmd.extend(video_cli_args(args))
-    policy_cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_{policy_baseline}", tags=[baseline.ns_variant, "policy", policy_baseline], include=not args.no_subprocess_wandb))
+    policy_cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_{policy_baseline}", tags=[baseline.ns_variant, "policy", policy_baseline], include=args.subprocess_wandb and not args.no_subprocess_wandb))
     commands.append(policy_cmd)
 
   for cmd in commands:
