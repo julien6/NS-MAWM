@@ -19,6 +19,8 @@ vae_train.py        structured VAE training
 rnn_train.py        MDN-RNN training
 evaluate_world_model.py
                     VAE reconstruction and RNN one-step diagnostics
+compare_ns_variants.py
+                    NS-MAWM batch comparison across variants
 dream_env.py        learned Gridcraft world model environment
 dream_model.py      controller evaluation inside the dream environment
 render_env.py       real environment render wrapper
@@ -176,6 +178,102 @@ Run the diagnostics directly:
 ../.venv/bin/python evaluate_world_model.py --vae-only --episodes 100 --max-steps 500
 ../.venv/bin/python evaluate_world_model.py --rnn-one-step --episodes 100 --max-steps 500 --imagination-mode mean
 ```
+
+## NS-MAWM
+
+NS-MAWM is implemented as an architecture-agnostic symbolic layer around the
+existing VAE + MDN-RNN world model. The default `neural` variant is the original
+pipeline. The symbolic variants operate in decoded tabular observation space:
+
+- `regularization`: adds symbolic consistency loss during RNN training.
+- `projection`: applies symbolic projection at inference on top of `neural`.
+- `residual`: trains the RNN with an auxiliary loss focused on non-symbolic
+  components, then assembles symbolic and neural observations at inference.
+
+Train and compare the NS-MAWM variants:
+
+```bash
+./train_ns_world_model.bash
+```
+
+For a short test run:
+
+```bash
+RNN_STEPS=5 RNN_BATCH_SIZE=4 RNN_SEQ_LEN=5 EVAL_EPISODES=2 EVAL_MAX_STEPS=20 EVAL_HORIZON=5 ./train_ns_world_model.bash
+```
+
+Evaluate one variant:
+
+```bash
+../.venv/bin/python evaluate_world_model.py --rnn-one-step --ns-variant projection --episodes 100 --max-steps 500 --horizon-steps 50
+```
+
+Render one variant:
+
+```bash
+../.venv/bin/python model.py gridcraftcompare render --ns-variant projection --policy manual --max-steps 500 --render-delay 0.2 --render-hold 20 --imagination-mode mean
+```
+
+Batch comparison outputs:
+
+```text
+trainlog/ns_eval_neural.json
+trainlog/ns_eval_regularization.json
+trainlog/ns_eval_projection.json
+trainlog/ns_eval_residual.json
+trainlog/ns_mawm_summary.json
+```
+
+## Baseline Experiments And W&B
+
+The NeurIPS-style baseline runner stores each baseline in an independent
+directory under `runs/` and can optionally log to Weights & Biases.
+
+List available Gridcraft baselines:
+
+```bash
+../.venv/bin/python run_baseline.py --list
+```
+
+Run one baseline locally without W&B:
+
+```bash
+../.venv/bin/python run_baseline.py --baseline-id B25 --steps 10000 --episodes 100 --horizons 1 5 10 25 50
+```
+
+Run a short smoke baseline:
+
+```bash
+../.venv/bin/python run_baseline.py --baseline-id B25 --steps 5 --batch-size 4 --seq-len 5 --episodes 2 --max-steps 20 --horizons 1 5 --series-limit 2
+```
+
+Run the targeted Gridcraft baseline suite:
+
+```bash
+./run_baselines.bash
+```
+
+Enable W&B:
+
+```bash
+WANDB=1 WANDB_PROJECT=ns-mawm-gridcraft ./run_baselines.bash
+```
+
+For offline cluster runs:
+
+```bash
+WANDB=1 WANDB_MODE=offline WANDB_PROJECT=ns-mawm-gridcraft ./run_baselines.bash
+```
+
+Useful overrides:
+
+```bash
+BASELINES="B10 B24 B25 B26" SEEDS="1 2 3" RNN_STEPS=20000 EVAL_EPISODES=200 EVAL_HORIZONS="1 5 10 25 50" ./run_baselines.bash
+```
+
+Logged quantities include WM losses, one-step prediction fidelity,
+long-horizon/compounding metrics, RVR, determinable and residual mismatch, and
+run metadata matching the sampled baseline IDs from the paper.
 
 The current VAE latent size is `64`, so older `vae/vae.json`, `rnn/rnn.json`,
 and controller logs trained with `z_size=32` are no longer compatible. Re-run

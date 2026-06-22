@@ -8,7 +8,18 @@ import tensorflow as tf
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from exp_config import ACTION_SIZE, NUM_MIXTURE, RNN_SIZE, Z_SIZE
+from exp_config import (
+  ACTION_SIZE,
+  BLOCK_CLASSES,
+  ENTITY_CLASSES,
+  GRID_CELLS,
+  GRID_FEATURES,
+  NUM_MIXTURE,
+  RNN_SIZE,
+  SELF_FEATURES,
+  TERRAIN_CLASSES,
+  Z_SIZE,
+)
 
 LOGSTD_MIN = -6.0
 LOGSTD_MAX = 2.0
@@ -106,11 +117,17 @@ class GridcraftRNN:
       next_state,
     )
 
-  def train_batch(self, z, action, reward, done):
+  def train_batch(self, z, action, reward, done, symbolic_target=None, symbolic_mask=None, target_obs=None, target_obs_mask=None, vae_decoder=None, lambda_sym=1.0):
     z = tf.convert_to_tensor(z, dtype=tf.float32)
     action_oh = tf.convert_to_tensor(one_hot_action(action), dtype=tf.float32)
     reward = tf.convert_to_tensor(reward, dtype=tf.float32)
     done = tf.convert_to_tensor(done.astype(np.float32), dtype=tf.float32)
+    if symbolic_target is not None:
+      symbolic_target = tf.convert_to_tensor(symbolic_target, dtype=tf.float32)
+      symbolic_mask = tf.convert_to_tensor(symbolic_mask, dtype=tf.float32)
+    if target_obs is not None:
+      target_obs = tf.convert_to_tensor(target_obs, dtype=tf.float32)
+      target_obs_mask = tf.convert_to_tensor(target_obs_mask, dtype=tf.float32)
     batch_size = tf.shape(z)[0]
     seq_len = z.shape[1] - 1
     inputs = tf.concat([z[:, :-1, :], action_oh[:, :-1, :]], axis=2)
@@ -122,6 +139,8 @@ class GridcraftRNN:
       state = self.zero_state(batch_size=batch_size)
       z_losses = []
       mean_losses = []
+      symbolic_losses = []
+      residual_losses = []
       reward_losses = []
       done_losses = []
       for t in range(seq_len):
@@ -134,6 +153,12 @@ class GridcraftRNN:
         mix = tf.exp(logmix)
         expected_z = tf.reduce_sum(mix * mean, axis=2)
         mean_loss = tf.reduce_mean(tf.square(target_z[:, t, :] - expected_z))
+        if vae_decoder is not None and symbolic_target is not None:
+          decoded = vae_decoder(expected_z, training=False)
+          symbolic_losses.append(masked_observation_loss(decoded, symbolic_target[:, t, :], symbolic_mask[:, t, :]))
+        if vae_decoder is not None and target_obs is not None:
+          decoded = vae_decoder(expected_z, training=False)
+          residual_losses.append(masked_observation_loss(decoded, target_obs[:, t, :], target_obs_mask[:, t, :]))
         reward_loss = tf.reduce_mean(tf.square(target_reward[:, t] - pred_reward))
         done_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
           labels=target_done[:, t], logits=done_logit))
@@ -143,13 +168,15 @@ class GridcraftRNN:
         done_losses.append(done_loss)
       z_loss = tf.add_n(z_losses) / float(seq_len)
       mean_loss = tf.add_n(mean_losses) / float(seq_len)
+      symbolic_loss = tf.add_n(symbolic_losses) / float(seq_len) if symbolic_losses else tf.constant(0.0, dtype=tf.float32)
+      residual_loss = tf.add_n(residual_losses) / float(seq_len) if residual_losses else tf.constant(0.0, dtype=tf.float32)
       reward_loss = tf.add_n(reward_losses) / float(seq_len)
       done_loss = tf.add_n(done_losses) / float(seq_len)
-      loss = z_loss + reward_loss + done_loss
+      loss = z_loss + reward_loss + done_loss + lambda_sym * (symbolic_loss + residual_loss)
     variables = self.cell.trainable_variables + self.out.trainable_variables
     grads = tape.gradient(loss, variables)
     self.optimizer.apply_gradients(zip(grads, variables))
-    return float(loss.numpy()), float(z_loss.numpy()), float(mean_loss.numpy()), float(reward_loss.numpy()), float(done_loss.numpy())
+    return float(loss.numpy()), float(z_loss.numpy()), float(mean_loss.numpy()), float(symbolic_loss.numpy()), float(residual_loss.numpy()), float(reward_loss.numpy()), float(done_loss.numpy())
 
   def _weights(self):
     return self.cell.get_weights() + self.out.get_weights()
@@ -182,3 +209,33 @@ def rnn_output(state, z):
 
 def rnn_output_size():
   return Z_SIZE + RNN_SIZE
+
+
+def masked_observation_loss(decoded, target, mask):
+  terrain = masked_categorical_loss(decoded, target, mask, 0, TERRAIN_CLASSES)
+  block_offset = GRID_CELLS * TERRAIN_CLASSES
+  blocks = masked_categorical_loss(decoded, target, mask, block_offset, BLOCK_CLASSES)
+  entity_offset = GRID_CELLS * (TERRAIN_CLASSES + BLOCK_CLASSES)
+  entities = masked_categorical_loss(decoded, target, mask, entity_offset, ENTITY_CLASSES)
+  self_mask = mask[:, GRID_FEATURES:GRID_FEATURES + SELF_FEATURES]
+  self_count = tf.reduce_sum(self_mask)
+  self_loss = tf.cond(
+    self_count > 0,
+    lambda: tf.reduce_sum(tf.square(decoded[:, GRID_FEATURES:] - target[:, GRID_FEATURES:]) * self_mask) / self_count,
+    lambda: tf.constant(0.0, dtype=tf.float32),
+  )
+  return terrain + blocks + entities + self_loss
+
+
+def masked_categorical_loss(decoded, target, mask, offset, depth):
+  logits = tf.reshape(decoded[:, offset:offset + GRID_CELLS * depth], (-1, GRID_CELLS, depth))
+  labels = tf.reshape(target[:, offset:offset + GRID_CELLS * depth], (-1, GRID_CELLS, depth))
+  plane_mask = tf.reshape(mask[:, offset:offset + GRID_CELLS * depth], (-1, GRID_CELLS, depth))
+  cell_mask = tf.reduce_max(plane_mask, axis=2)
+  count = tf.reduce_sum(cell_mask)
+  losses = tf.nn.softmax_cross_entropy_with_logits(labels=labels, logits=logits)
+  return tf.cond(
+    count > 0,
+    lambda: tf.reduce_sum(losses * cell_mask) / count,
+    lambda: tf.constant(0.0, dtype=tf.float32),
+  )

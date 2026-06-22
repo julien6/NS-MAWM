@@ -12,6 +12,7 @@ import numpy as np
 from dream_env import make_env as make_dream_env
 from env import make_env
 from exp_config import ACTION_SIZE, CONTROLLER_INPUT_SIZE
+from ns_symbolic import NS_VARIANTS, apply_symbolic_projection, compare_with_symbolic
 from rnn.rnn import GridcraftRNN, rnn_init_state, rnn_next_state, rnn_output
 from vae.vae import GridcraftVAE
 
@@ -68,8 +69,19 @@ class TabularRenderWorker:
     return pickle.loads(payload)
 
 
-def make_model(load_model=True):
-  return GridcraftController(load_world_model=load_model)
+def rnn_path_for_variant(ns_variant):
+  candidates = {
+    "neural": "rnn/rnn.neural.json",
+    "regularization": "rnn/rnn.regularization.json",
+    "projection": "rnn/rnn.neural.json",
+    "residual": "rnn/rnn.residual.json",
+  }
+  path = candidates.get(ns_variant, "rnn/rnn.json")
+  return path if os.path.exists(path) else "rnn/rnn.json"
+
+
+def make_model(load_model=True, vae_path="vae/vae.json", rnn_path="rnn/rnn.json"):
+  return GridcraftController(vae_path=vae_path, rnn_path=rnn_path, load_world_model=load_model)
 
 
 class GridcraftController:
@@ -193,7 +205,7 @@ def predict_rnn_next_z(controller, z, action, rng=None, mode="mean"):
   return next_z
 
 
-def compare_world_model_random(controller, render_mode=False, episodes=1, seed=1, max_steps=500, render_delay=0.1, render_hold=0.0, imagination_mode="mean", policy="random"):
+def compare_world_model_random(controller, render_mode=False, episodes=1, seed=1, max_steps=500, render_delay=0.1, render_hold=0.0, imagination_mode="mean", policy="random", ns_variant="neural", symbolic_coverage=1.0):
   if policy == "manual" and not render_mode:
     raise ValueError("manual policy requires render mode")
   rng = np.random.default_rng(seed)
@@ -224,13 +236,16 @@ def compare_world_model_random(controller, render_mode=False, episodes=1, seed=1
         action = int(rng.integers(0, ACTION_SIZE))
         if render_mode and render_delay > 0:
           time.sleep(render_delay)
+      current_obs = env.last_obs
       imagined_z = predict_rnn_next_z(controller, z, action, rng=rng, mode=imagination_mode)
       next_obs, reward, done, info = env.step(action)
       imagined_obs = decode_tabular_observation(controller, imagined_z)["agent_0"]
+      imagined_obs, _ = apply_symbolic_projection(imagined_obs, current_obs, action, ns_variant, coverage=symbolic_coverage)
       real_obs = env.last_obs
       grid_mismatch = float(np.mean(real_obs["grid"] != imagined_obs["grid"]))
       self_mse = float(np.mean((np.asarray(real_obs["self"], dtype=np.float32) - np.asarray(imagined_obs["self"], dtype=np.float32)) ** 2))
-      episode_mismatches.append((grid_mismatch, self_mse))
+      symbolic_metrics = compare_with_symbolic(imagined_obs, current_obs, action, coverage=symbolic_coverage)
+      episode_mismatches.append((grid_mismatch, self_mse, symbolic_metrics["rvr"]))
       total_reward += reward
       obs = next_obs
       if done:
@@ -247,7 +262,7 @@ def compare_world_model_random(controller, render_mode=False, episodes=1, seed=1
     renderer.close()
   if mismatches:
     mismatch_arr = np.asarray(mismatches)
-    print("mean_grid_mismatch", float(np.mean(mismatch_arr[:, 0])), "mean_self_mse", float(np.mean(mismatch_arr[:, 1])))
+    print("mean_grid_mismatch", float(np.mean(mismatch_arr[:, 0])), "mean_self_mse", float(np.mean(mismatch_arr[:, 1])), "mean_rvr", float(np.mean(mismatch_arr[:, 2])))
   return rewards, lengths
 
 
@@ -326,9 +341,9 @@ def simulate_dream(controller, render_mode=False, episodes=1, seed=1, max_steps=
   return rewards, lengths
 
 
-def simulate(controller, env_name="gridcraftreal", train_mode=False, render_mode=False, episodes=1, seed=1, max_steps=500, num_episode=None, max_len=-1, render_delay=0.1, render_hold=0.0, imagination_mode="mean", policy="random"):
+def simulate(controller, env_name="gridcraftreal", train_mode=False, render_mode=False, episodes=1, seed=1, max_steps=500, num_episode=None, max_len=-1, render_delay=0.1, render_hold=0.0, imagination_mode="mean", policy="random", ns_variant="neural", symbolic_coverage=1.0):
   if env_name == "gridcraftcompare":
-    return compare_world_model_random(controller, render_mode=render_mode, episodes=episodes, seed=seed, max_steps=max_steps, render_delay=render_delay, render_hold=render_hold, imagination_mode=imagination_mode, policy=policy)
+    return compare_world_model_random(controller, render_mode=render_mode, episodes=episodes, seed=seed, max_steps=max_steps, render_delay=render_delay, render_hold=render_hold, imagination_mode=imagination_mode, policy=policy, ns_variant=ns_variant, symbolic_coverage=symbolic_coverage)
   if env_name == "gridcraftrnn":
     return simulate_dream(controller, render_mode=render_mode, episodes=episodes, seed=seed, max_steps=max_steps, num_episode=num_episode, max_len=max_len, render_delay=render_delay, render_hold=render_hold)
   return simulate_real(controller, train_mode=train_mode, render_mode=render_mode, episodes=episodes, seed=seed, max_steps=max_steps, num_episode=num_episode, max_len=max_len, render_delay=render_delay, render_hold=render_hold)
@@ -346,9 +361,14 @@ def main():
   parser.add_argument("--render-hold", type=float, default=None)
   parser.add_argument("--imagination-mode", choices=["mean", "mode", "sample"], default="mean")
   parser.add_argument("--policy", choices=["random", "manual"], default="random")
+  parser.add_argument("--ns-variant", choices=NS_VARIANTS, default="neural")
+  parser.add_argument("--symbolic-coverage", type=float, default=1.0)
+  parser.add_argument("--vae-json", default="vae/vae.json")
+  parser.add_argument("--rnn-json", default=None)
   args = parser.parse_args()
 
-  controller = make_model(load_model=True)
+  rnn_path = args.rnn_json or rnn_path_for_variant(args.ns_variant)
+  controller = make_model(load_model=True, vae_path=args.vae_json, rnn_path=rnn_path)
   if args.model_json:
     controller.load_model(args.model_json)
   else:
@@ -369,6 +389,8 @@ def main():
     render_hold=render_hold,
     imagination_mode=args.imagination_mode,
     policy=args.policy,
+    ns_variant=args.ns_variant,
+    symbolic_coverage=args.symbolic_coverage,
   )
   print("rewards", rewards)
   print("mean_reward", float(np.mean(rewards)), "std", float(np.std(rewards)), "mean_length", float(np.mean(lengths)))

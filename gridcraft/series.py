@@ -26,6 +26,7 @@ def main():
   os.makedirs(args.out_dir, exist_ok=True)
 
   z_list = []
+  obs_list = []
   action_list = []
   reward_list = []
   done_list = []
@@ -41,6 +42,7 @@ def main():
     else:
       z = mu
     z_list.append(z.astype(np.float32))
+    obs_list.append(obs.astype(np.float32))
     action_list.append(data["action"].astype(np.int16))
     reward_list.append(data["reward"].astype(np.float32))
     done_list.append(data["done"].astype(np.bool_))
@@ -51,13 +53,15 @@ def main():
 
   max_len = max(length_list)
   z_array = np.zeros((len(z_list), max_len, z_list[0].shape[1]), dtype=np.float32)
+  obs_array = np.zeros((len(obs_list), max_len, obs_list[0].shape[1]), dtype=np.float32)
   action_array = np.zeros((len(z_list), max_len), dtype=np.int16)
   reward_array = np.zeros((len(z_list), max_len), dtype=np.float32)
   done_array = np.ones((len(z_list), max_len), dtype=np.bool_)
   mask_array = np.zeros((len(z_list), max_len), dtype=np.bool_)
-  for i, (z, action, reward, done) in enumerate(zip(z_list, action_list, reward_list, done_list)):
+  for i, (z, obs, action, reward, done) in enumerate(zip(z_list, obs_list, action_list, reward_list, done_list)):
     n = len(z)
     z_array[i, :n] = z
+    obs_array[i, :n] = obs
     action_array[i, :n] = action
     reward_array[i, :n] = reward
     done_array[i, :n] = done
@@ -66,6 +70,7 @@ def main():
   np.savez_compressed(
     os.path.join(args.out_dir, "series.npz"),
     z=z_array,
+    obs=obs_array,
     action=action_array,
     reward=reward_array,
     done=done_array,

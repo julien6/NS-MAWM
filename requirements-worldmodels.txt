@@ -8,3 +8,4 @@ cma==4.4.4
 mpi4py==4.1.2
 matplotlib
 pygame
+wandb
