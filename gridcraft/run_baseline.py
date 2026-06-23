@@ -263,14 +263,14 @@ def main():
         "pipeline_stage_index": command_index,
         "pipeline_stage_started": 1,
         f"pipeline_stage_{stage_name}_started": 1,
-      }, step=command_index * 2 - 1, namespace=stage_namespace)
+      }, namespace=stage_namespace)
       run_and_relay_progress(cmd, progress_path_for_command(cmd), logger, metric_prefix=progress_metric_prefix_for_command(cmd))
       logger.log({
         "pipeline_stage_index": command_index,
         "pipeline_stage_finished": 1,
         f"pipeline_stage_{stage_name}_finished": 1,
         "pipeline_stage_duration_sec": float(time.time() - stage_start),
-      }, step=command_index * 2, namespace=stage_namespace)
+      }, namespace=stage_namespace)
   if args.dry_run:
     logger.finish()
     return
@@ -341,9 +341,11 @@ def run_and_relay_progress(cmd, progress_path, logger, metric_prefix=None):
 def relay_progress(progress_path, offset, logger, metric_prefix=None):
   offset, events = read_progress(progress_path, offset)
   for event in events:
+    metrics = dict(event.get("metrics", {}))
+    if event.get("step") is not None:
+      metrics["local_step"] = event.get("step")
     logger.log(
-      prefix_metrics(metric_prefix, event.get("metrics", {})),
-      step=event.get("step"),
+      prefix_metrics(metric_prefix, metrics),
       namespace=event.get("namespace"),
     )
   return offset
