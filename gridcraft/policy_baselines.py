@@ -11,6 +11,7 @@ from env import ACTION_SIZE, make_env
 from experiment_logging import add_wandb_args, logger_from_args, should_log_wandb_videos
 from exp_config import OBS_SIZE, Z_SIZE
 from ns_symbolic import NS_VARIANTS, apply_symbolic_projection, tabular_to_vector
+from progress_logging import append_progress
 from rnn.rnn import GridcraftRNN, rnn_init_state
 from vae.vae import GridcraftVAE
 from video_logging import (
@@ -172,9 +173,11 @@ def train_actor_critic(args):
     })
     training_rewards.append(metrics[f"training_{args.train_env}_reward"])
     logger.log(metrics, step=update + 1, namespace="marl_training")
+    append_progress(args.progress_log, metrics, step=update + 1, namespace="marl_training")
     if update == 0 or (update + 1) % args.eval_every == 0:
       eval_metrics = evaluate_policy(model, args, update + 1)
       logger.log(eval_metrics, step=update + 1, namespace="marl_evaluation")
+      append_progress(args.progress_log, eval_metrics, step=update + 1, namespace="marl_evaluation")
       if should_log_wandb_videos(args):
         frames = record_actor_policy_evaluation_video(
           model,
@@ -337,6 +340,7 @@ def run_mpc_cem(args):
       "episode_length": float(t + 1),
     }
     logger.log(metrics, step=episode + 1, namespace="marl_evaluation")
+    append_progress(args.progress_log, metrics, step=episode + 1, namespace="marl_evaluation")
   summary = {
     "eval_real_reward": float(np.mean(rewards)),
     "eval_real_reward_std": float(np.std(rewards)),
@@ -351,6 +355,7 @@ def run_mpc_cem(args):
   }
   os.makedirs(args.out_dir, exist_ok=True)
   logger.save_json(os.path.join(args.out_dir, "mpc_cem_summary.json"), summary)
+  append_progress(args.progress_log, summary, namespace="marl_evaluation")
   if should_log_wandb_videos(args):
     frames = record_mpc_cem_evaluation_video(
       vae_json=args.vae_json,
@@ -556,6 +561,7 @@ def main():
   batch_z_group.add_argument("--batched-cem-deterministic-z", dest="batched_cem_deterministic_z", action="store_true", default=True)
   batch_z_group.add_argument("--batched-cem-sample-z", dest="batched_cem_deterministic_z", action="store_false")
   parser.add_argument("--batched-cem-symbolic-mode", choices=["cpu_projection"], default="cpu_projection")
+  parser.add_argument("--progress-log", default=None)
   add_wandb_args(parser)
   args = parser.parse_args()
   if args.policy_baseline == "mpc_cem":

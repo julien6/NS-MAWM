@@ -8,6 +8,7 @@ import numpy as np
 
 from experiment_logging import add_wandb_args, logger_from_args
 from ns_symbolic import symbolic_batch_targets
+from progress_logging import append_progress
 from rnn.rnn import GridcraftRNN
 from vae.vae import GridcraftVAE
 from wandb_schema import GENERAL, WORLD_MODEL_EVALUATION, WORLD_MODEL_TRAINING
@@ -78,6 +79,7 @@ def main():
   parser.add_argument("--eval-max-steps", type=int, default=100)
   parser.add_argument("--eval-horizons", nargs="+", type=int, default=None)
   parser.add_argument("--python", default=sys.executable)
+  parser.add_argument("--progress-log", default=None)
   add_wandb_args(parser)
   args = parser.parse_args()
 
@@ -120,7 +122,7 @@ def main():
     loss, z_loss, mean_loss, symbolic_loss, residual_loss, reward_loss, done_loss = model.train_batch(z, action, reward, done, **kwargs)
     if step == 0 or (step + 1) % 100 == 0:
       print("step", step + 1, "loss", loss, "z", z_loss, "mean_mse", mean_loss, "symbolic", symbolic_loss, "residual", residual_loss, "reward", reward_loss, "done", done_loss)
-      logger.log({
+      metrics = {
         "training_wm_total_loss": loss,
         "training_obs_loss": z_loss,
         "training_mean_mse": mean_loss,
@@ -128,10 +130,13 @@ def main():
         "training_residual_loss": residual_loss,
         "training_reward_loss": reward_loss,
         "training_done_loss": done_loss,
-      }, step=step + 1, namespace="wm_training")
+      }
+      logger.log(metrics, step=step + 1, namespace="wm_training")
+      append_progress(args.progress_log, metrics, step=step + 1, namespace="wm_training")
     if args.eval_every > 0 and (step + 1) % args.eval_every == 0:
       eval_metrics = checkpoint_and_evaluate(model, args, step + 1)
       logger.log(eval_metrics, step=step + 1, namespace="wm_evaluation")
+      append_progress(args.progress_log, eval_metrics, step=step + 1, namespace="wm_evaluation")
 
   out_name = "rnn.json" if args.ns_variant == "neural" else f"rnn.{args.ns_variant}.json"
   if args.ns_variant == "neural":

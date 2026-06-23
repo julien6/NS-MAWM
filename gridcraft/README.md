@@ -267,6 +267,27 @@ Policy baselines are launched through the same runner:
 ../.venv/bin/python run_baseline.py --baseline-id B25 --phase policy --policy-baseline mpc_cem --wandb
 ```
 
+For a complete one-run-per-baseline execution, use `--phase all` with
+`--policy-baseline all`. This creates exactly one W&B run for the baseline and
+seed, containing world-model extraction/training/evaluation plus the downstream
+policy evaluations:
+
+```bash
+../.venv/bin/python run_baseline.py \
+  --baseline-id B25 \
+  --phase all \
+  --policy-baseline all \
+  --eval-every 1000 \
+  --horizons 1 5 10 25 50 \
+  --wandb
+```
+
+For model-based baselines, `--policy-baseline all` runs both `imagined_mappo`
+and `mpc_cem` inside the same parent run. Their W&B metrics are prefixed under
+the MARL sections, for example `MARL evaluation/mpc_cem/eval_real_reward` and
+`MARL evaluation/imagined_mappo/eval_real_reward`. For `B00`, `all` resolves to
+the real-environment model-free policy only.
+
 The policy implementation is currently a local mono-agent actor-critic runner
 with MAPPO-compatible logging keys. It is intentionally small so the protocol is
 operational with the current `.venv`; a strict BenchMARL/TorchRL MAPPO runner can
@@ -290,6 +311,10 @@ Requested NS-MAWM protocol with serious default budgets:
 ```bash
 WANDB=1 ./run_requested_baselines_serious.bash
 ```
+
+`run_requested_baselines_serious.bash` is the recommended script when you want
+`1 run = 1 baseline`. It runs `B00` once per seed, then each requested
+model-based baseline once per seed with `--phase all --policy-baseline all`.
 
 This runs `B00` as the model-free real-environment MARL baseline, then
 `B24/B25/B26` for regularization/projection/residual at symbolic coverage `0.3`
@@ -342,10 +367,10 @@ group: baseline id, for example B10 or B25
 name: <baseline_slug>_seed<seed>[_policy]
 ```
 
-World-model scripts enable `SUBPROCESS_WANDB=1` by default. The parent baseline
-run logs pipeline progress and final summaries; detailed real-time curves are in
-the stage runs suffixed with `_extract`, `_vae`, `_series`, `_train`, and
-`_eval`. Set `SUBPROCESS_WANDB=0` to keep only the parent run.
+By default, subprocesses do not create W&B runs. They stream progress through
+local JSONL files that the parent process relays into the single baseline run.
+Only set `--subprocess-wandb` or `SUBPROCESS_WANDB=1` when you explicitly want
+extra diagnostic stage runs in addition to the canonical baseline run.
 
 `run_baseline.py --list` prints the deterministic `baseline_slug` for every
 baseline. The slug keeps the `BXX` prefix and appends the main keywords that

@@ -7,6 +7,7 @@ import time
 
 from experiment_config import get_baseline, list_baselines
 from experiment_logging import add_wandb_args, logger_from_args, normalize_wandb_tags, should_log_wandb_videos
+from progress_logging import read_progress
 from wandb_schema import GENERAL, MARL_EVALUATION, MARL_TRAINING, WORLD_MODEL_EVALUATION, WORLD_MODEL_TRAINING
 
 
@@ -15,7 +16,7 @@ def main():
   parser.add_argument("--baseline-id", default=None)
   parser.add_argument("--list", action="store_true")
   parser.add_argument("--phase", choices=["world_model", "policy", "all"], default="world_model")
-  parser.add_argument("--policy-baseline", choices=["real_mappo", "imagined_mappo", "mpc_cem"], default=None)
+  parser.add_argument("--policy-baseline", choices=["all", "real_mappo", "imagined_mappo", "mpc_cem"], default=None)
   parser.add_argument("--run-dir", default="runs")
   parser.add_argument("--python", default="../.venv/bin/python")
   parser.add_argument("--steps", type=int, default=10000)
@@ -84,7 +85,10 @@ def main():
   rnn_dir = os.path.join(run_dir, "rnn")
   eval_dir = os.path.join(run_dir, "eval")
   policy_dir = os.path.join(run_dir, "policy")
+  progress_dir = os.path.join(run_dir, "progress")
   os.makedirs(run_dir, exist_ok=True)
+  os.makedirs(progress_dir, exist_ok=True)
+  world_model_enabled = baseline.baseline_id != "B00"
 
   config = baseline.to_dict()
   config.update(vars(args))
@@ -107,17 +111,18 @@ def main():
   vae_json = resolve_vae_path(args, vae_dir)
 
   commands = []
-  if args.phase in ("world_model", "all") and should_extract(args):
+  if world_model_enabled and args.phase in ("world_model", "all") and should_extract(args):
     cmd = [
       args.python, "extract.py",
       "--episodes", str(args.extract_episodes),
       "--max-steps", str(args.extract_max_steps or args.max_steps),
       "--seed", str(seed),
       "--out-dir", args.record_dir,
+      "--progress-log", os.path.join(progress_dir, "extract.jsonl"),
     ]
     cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_extract", tags=[baseline.ns_variant, "extract"], include=args.subprocess_wandb and not args.no_subprocess_wandb))
     commands.append(cmd)
-  if args.phase in ("world_model", "all") and should_train_vae(args, vae_json):
+  if world_model_enabled and args.phase in ("world_model", "all") and should_train_vae(args, vae_json):
     vae_json = os.path.join(vae_dir, "vae.json")
     cmd = [
       args.python, "vae_train.py",
@@ -126,19 +131,21 @@ def main():
       "--steps", str(args.vae_steps),
       "--batch-size", str(args.vae_batch_size),
       "--seed", str(seed),
+      "--progress-log", os.path.join(progress_dir, "vae.jsonl"),
     ]
     cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_vae", tags=[baseline.ns_variant, "vae"], include=args.subprocess_wandb and not args.no_subprocess_wandb))
     commands.append(cmd)
-  if args.phase in ("world_model", "all") and not args.skip_series:
+  if world_model_enabled and args.phase in ("world_model", "all") and not args.skip_series:
     cmd = [
       args.python, "series.py",
       "--record-dir", args.record_dir,
       "--model-dir", os.path.dirname(vae_json),
       "--out-dir", series_dir,
+      "--progress-log", os.path.join(progress_dir, "series.jsonl"),
     ] + (["--limit", str(args.series_limit)] if args.series_limit is not None else [])
     cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_series", tags=[baseline.ns_variant, "series"], include=args.subprocess_wandb and not args.no_subprocess_wandb))
     commands.append(cmd)
-  if args.phase in ("world_model", "all") and not args.skip_train:
+  if world_model_enabled and args.phase in ("world_model", "all") and not args.skip_train:
     train_seq_len = effective_seq_len(args.seq_len, args.max_steps)
     cmd = [
       args.python, "rnn_train.py",
@@ -155,6 +162,7 @@ def main():
       "--seq-len", str(train_seq_len),
       "--seed", str(seed),
       "--python", args.python,
+      "--progress-log", os.path.join(progress_dir, "rnn.jsonl"),
     ]
     if args.eval_every > 0:
       cmd.extend([
@@ -170,7 +178,7 @@ def main():
     commands.append(cmd)
 
   eval_out = os.path.join(run_dir, "eval.json")
-  if args.phase in ("world_model", "all"):
+  if world_model_enabled and args.phase in ("world_model", "all"):
     eval_cmd = [
       args.python, "evaluate_world_model.py",
       "--rnn-one-step",
@@ -183,6 +191,7 @@ def main():
       "--horizon-steps", str(args.horizon_steps),
       "--seed", str(seed),
       "--out", eval_out,
+      "--progress-log", os.path.join(progress_dir, "eval.jsonl"),
     ]
     if args.horizons:
       eval_cmd.append("--horizons")
@@ -192,7 +201,7 @@ def main():
     commands.append(eval_cmd)
 
   if args.phase in ("policy", "all"):
-    policy_baseline = resolve_policy_baseline(args, baseline)
+    policy_baselines = resolve_policy_baselines(args, baseline)
     if args.phase == "all" and not args.skip_train and args.rnn_json is None:
       policy_rnn_json = rnn_json
     else:
@@ -201,35 +210,48 @@ def main():
       policy_initial_z_json = os.path.join(run_dir, "initial_z.json")
     else:
       policy_initial_z_json = resolve_initial_z_path(args, run_dir)
-    policy_cmd = [
-      args.python, "policy_baselines.py",
-      "--policy-baseline", policy_baseline,
-      "--baseline-id", baseline.baseline_id,
-      "--run-name", f"{run_name}_{policy_baseline}",
-      "--out-dir", policy_dir,
-      "--seed", str(seed),
-      "--max-steps", str(args.max_steps),
-      "--updates", str(args.policy_updates),
-      "--episodes-per-update", str(args.episodes_per_update),
-      "--eval-every", str(args.policy_eval_every),
-      "--eval-episodes", str(args.policy_eval_episodes),
-      "--learning-rate", str(args.learning_rate),
-      "--vae-json", vae_json,
-      "--rnn-json", policy_rnn_json,
-      "--initial-z-json", policy_initial_z_json,
-      "--ns-variant", baseline.ns_variant,
-      "--symbolic-coverage", str(baseline.coverage),
-      "--planning-horizon", str(args.planning_horizon),
-      "--cem-samples", str(args.cem_samples),
-    ]
-    if args.batched_cem:
-      policy_cmd.append("--batched-cem")
-    if not args.batched_cem_deterministic_z:
-      policy_cmd.append("--batched-cem-sample-z")
-    policy_cmd.extend(["--batched-cem-symbolic-mode", args.batched_cem_symbolic_mode])
-    policy_cmd.extend(video_cli_args(args))
-    policy_cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_{policy_baseline}", tags=[baseline.ns_variant, "policy", policy_baseline], include=args.subprocess_wandb and not args.no_subprocess_wandb))
-    commands.append(policy_cmd)
+    policy_specs = []
+    for policy_baseline in policy_baselines:
+      policy_out_dir = os.path.join(policy_dir, policy_baseline)
+      policy_progress_log = os.path.join(progress_dir, f"policy_{policy_baseline}.jsonl")
+      policy_cmd = [
+        args.python, "policy_baselines.py",
+        "--policy-baseline", policy_baseline,
+        "--baseline-id", baseline.baseline_id,
+        "--run-name", f"{run_name}_{policy_baseline}",
+        "--out-dir", policy_out_dir,
+        "--seed", str(seed),
+        "--max-steps", str(args.max_steps),
+        "--updates", str(args.policy_updates),
+        "--episodes-per-update", str(args.episodes_per_update),
+        "--eval-every", str(args.policy_eval_every),
+        "--eval-episodes", str(args.policy_eval_episodes),
+        "--learning-rate", str(args.learning_rate),
+        "--vae-json", vae_json,
+        "--rnn-json", policy_rnn_json,
+        "--initial-z-json", policy_initial_z_json,
+        "--ns-variant", baseline.ns_variant,
+        "--symbolic-coverage", str(baseline.coverage),
+        "--planning-horizon", str(args.planning_horizon),
+        "--cem-samples", str(args.cem_samples),
+        "--progress-log", policy_progress_log,
+      ]
+      if args.batched_cem:
+        policy_cmd.append("--batched-cem")
+      if not args.batched_cem_deterministic_z:
+        policy_cmd.append("--batched-cem-sample-z")
+      policy_cmd.extend(["--batched-cem-symbolic-mode", args.batched_cem_symbolic_mode])
+      policy_cmd.extend(video_cli_args(args))
+      policy_cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_{policy_baseline}", tags=[baseline.ns_variant, "policy", policy_baseline], include=args.subprocess_wandb and not args.no_subprocess_wandb))
+      commands.append(policy_cmd)
+      policy_specs.append({
+        "policy_baseline": policy_baseline,
+        "policy_dir": policy_out_dir,
+        "rnn_json": policy_rnn_json,
+        "initial_z_json": policy_initial_z_json,
+      })
+  else:
+    policy_specs = []
 
   for command_index, cmd in enumerate(commands, start=1):
     print(" ".join(cmd), flush=True)
@@ -242,7 +264,7 @@ def main():
         "pipeline_stage_started": 1,
         f"pipeline_stage_{stage_name}_started": 1,
       }, step=command_index * 2 - 1, namespace=stage_namespace)
-      subprocess.run(cmd, check=True)
+      run_and_relay_progress(cmd, progress_path_for_command(cmd), logger, metric_prefix=progress_metric_prefix_for_command(cmd))
       logger.log({
         "pipeline_stage_index": command_index,
         "pipeline_stage_finished": 1,
@@ -253,27 +275,40 @@ def main():
     logger.finish()
     return
 
-  if os.path.exists(eval_out):
+  if world_model_enabled and args.phase in ("world_model", "all") and os.path.exists(eval_out):
     with open(eval_out) as f:
       metrics = json.load(f)
     logger.log(metrics, namespace="wm_evaluation")
     logger.log_summary(metrics, namespace="wm_evaluation")
     log_parent_world_model_video(logger, args, baseline, vae_json, rnn_json)
   if args.phase in ("policy", "all"):
-    policy_metrics = load_policy_metrics(policy_dir)
-    if policy_metrics:
-      logger.log(policy_metrics, namespace="marl_evaluation")
-      logger.log_summary(policy_metrics, namespace="marl_evaluation")
-    log_parent_policy_video(logger, args, baseline, policy_dir, vae_json, policy_rnn_json, policy_initial_z_json, policy_baseline)
+    for spec in policy_specs:
+      policy_metrics = load_policy_metrics(spec["policy_dir"])
+      if policy_metrics:
+        prefixed_metrics = prefix_metrics(spec["policy_baseline"], policy_metrics)
+        logger.log(prefixed_metrics, namespace="marl_evaluation")
+        logger.log_summary(prefixed_metrics, namespace="marl_evaluation")
+      log_parent_policy_video(
+        logger,
+        args,
+        baseline,
+        spec["policy_dir"],
+        vae_json,
+        spec["rnn_json"],
+        spec["initial_z_json"],
+        spec["policy_baseline"],
+      )
   logger.finish()
 
 
-def resolve_policy_baseline(args, baseline):
-  if args.policy_baseline:
-    return args.policy_baseline
+def resolve_policy_baselines(args, baseline):
+  if args.policy_baseline and args.policy_baseline != "all":
+    return [args.policy_baseline]
   if baseline.baseline_id == "B00":
-    return "real_mappo"
-  return "mpc_cem"
+    return ["real_mappo"]
+  if args.policy_baseline == "all" or args.phase == "all":
+    return ["imagined_mappo", "mpc_cem"]
+  return ["mpc_cem"]
 
 
 def command_stage_name(cmd):
@@ -281,6 +316,52 @@ def command_stage_name(cmd):
     return "unknown"
   name = os.path.basename(cmd[1])
   return os.path.splitext(name)[0].replace("-", "_")
+
+
+def progress_path_for_command(cmd):
+  for index, arg in enumerate(cmd):
+    if arg == "--progress-log" and index + 1 < len(cmd):
+      return cmd[index + 1]
+  return None
+
+
+def run_and_relay_progress(cmd, progress_path, logger, metric_prefix=None):
+  if progress_path and os.path.exists(progress_path):
+    os.remove(progress_path)
+  process = subprocess.Popen(cmd)
+  offset = 0
+  while process.poll() is None:
+    offset = relay_progress(progress_path, offset, logger, metric_prefix=metric_prefix)
+    time.sleep(1.0)
+  offset = relay_progress(progress_path, offset, logger, metric_prefix=metric_prefix)
+  if process.returncode != 0:
+    raise subprocess.CalledProcessError(process.returncode, cmd)
+
+
+def relay_progress(progress_path, offset, logger, metric_prefix=None):
+  offset, events = read_progress(progress_path, offset)
+  for event in events:
+    logger.log(
+      prefix_metrics(metric_prefix, event.get("metrics", {})),
+      step=event.get("step"),
+      namespace=event.get("namespace"),
+    )
+  return offset
+
+
+def progress_metric_prefix_for_command(cmd):
+  if command_stage_name(cmd) != "policy_baselines":
+    return None
+  for index, arg in enumerate(cmd):
+    if arg == "--policy-baseline" and index + 1 < len(cmd):
+      return cmd[index + 1]
+  return None
+
+
+def prefix_metrics(prefix, metrics):
+  if not prefix:
+    return metrics
+  return {f"{prefix}/{key}": value for key, value in metrics.items()}
 
 
 def stage_namespace_for(stage_name):
@@ -371,7 +452,7 @@ def log_parent_policy_video(logger, args, baseline, policy_dir, vae_json, rnn_js
       episodes=args.video_episodes,
       max_steps=args.video_max_steps,
     )
-  logger.log_video("video_policy_rollout", frames, fps=args.video_fps, namespace="marl_evaluation")
+  logger.log_video(f"{policy_baseline}/video_policy_rollout", frames, fps=args.video_fps, namespace="marl_evaluation")
 
 
 def info_sections_for_phase(phase):

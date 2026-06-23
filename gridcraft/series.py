@@ -5,6 +5,7 @@ import time
 import numpy as np
 
 from experiment_logging import add_wandb_args, logger_from_args
+from progress_logging import append_progress
 from vae.vae import GridcraftVAE
 from wandb_schema import GENERAL, WORLD_MODEL_TRAINING
 
@@ -17,6 +18,7 @@ def main():
   parser.add_argument("--limit", type=int, default=None)
   parser.add_argument("--sample-z", action="store_true")
   parser.add_argument("--log-every", type=int, default=100)
+  parser.add_argument("--progress-log", default=None)
   add_wandb_args(parser)
   args = parser.parse_args()
 
@@ -67,12 +69,14 @@ def main():
     print("encoded", filename, "steps", len(z))
     if index == 0 or (index + 1) % args.log_every == 0 or index + 1 == len(files):
       elapsed = max(1e-6, time.time() - start_time)
-      logger.log({
+      metrics = {
         "series_files_encoded": index + 1,
         "series_steps_encoded": int(np.sum(length_list)),
         "series_episode_length_mean": float(np.mean(length_list)),
         "series_files_per_second": float((index + 1) / elapsed),
-      }, step=index + 1, namespace="wm_training")
+      }
+      logger.log(metrics, step=index + 1, namespace="wm_training")
+      append_progress(args.progress_log, metrics, step=index + 1, namespace="wm_training")
 
   max_len = max(length_list)
   z_array = np.zeros((len(z_list), max_len, z_list[0].shape[1]), dtype=np.float32)

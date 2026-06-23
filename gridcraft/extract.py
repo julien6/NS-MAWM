@@ -6,10 +6,11 @@ import numpy as np
 
 from env import ACTION_SIZE, make_env
 from experiment_logging import add_wandb_args, logger_from_args
+from progress_logging import append_progress
 from wandb_schema import GENERAL, WORLD_MODEL_TRAINING
 
 
-def extract(episodes, max_steps, seed, out_dir, logger=None, log_every=50):
+def extract(episodes, max_steps, seed, out_dir, logger=None, log_every=50, progress_path=None):
   os.makedirs(out_dir, exist_ok=True)
   rng = np.random.default_rng(seed)
   rewards = []
@@ -49,14 +50,16 @@ def extract(episodes, max_steps, seed, out_dir, logger=None, log_every=50):
     print("saved", path, "steps", episode_length, "reward", episode_reward)
     if logger is not None and (episode == 0 or (episode + 1) % log_every == 0 or episode + 1 == episodes):
       elapsed = max(1e-6, time.time() - start_time)
-      logger.log({
+      metrics = {
         "extraction_episodes": episode + 1,
         "extraction_reward_mean": float(np.mean(rewards[-log_every:])),
         "extraction_reward_global_mean": float(np.mean(rewards)),
         "extraction_episode_length_mean": float(np.mean(lengths[-log_every:])),
         "extraction_steps_total": int(np.sum(lengths)),
         "extraction_episodes_per_second": float((episode + 1) / elapsed),
-      }, step=episode + 1, namespace="wm_training")
+      }
+      logger.log(metrics, step=episode + 1, namespace="wm_training")
+      append_progress(progress_path, metrics, step=episode + 1, namespace="wm_training")
 
 
 def main():
@@ -66,6 +69,7 @@ def main():
   parser.add_argument("--seed", type=int, default=1)
   parser.add_argument("--out-dir", default="record")
   parser.add_argument("--log-every", type=int, default=50)
+  parser.add_argument("--progress-log", default=None)
   add_wandb_args(parser)
   args = parser.parse_args()
   logger = logger_from_args(
@@ -77,7 +81,7 @@ def main():
     info_sections=[GENERAL, WORLD_MODEL_TRAINING],
     out_dir=args.out_dir,
   )
-  extract(args.episodes, args.max_steps, args.seed, args.out_dir, logger=logger, log_every=args.log_every)
+  extract(args.episodes, args.max_steps, args.seed, args.out_dir, logger=logger, log_every=args.log_every, progress_path=args.progress_log)
   logger.finish()
 
 

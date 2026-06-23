@@ -4,6 +4,7 @@ import os
 import numpy as np
 
 from experiment_logging import add_wandb_args, logger_from_args
+from progress_logging import append_progress
 from vae.vae import GridcraftVAE
 from wandb_schema import GENERAL, WORLD_MODEL_TRAINING
 
@@ -29,6 +30,7 @@ def main():
   parser.add_argument("--batch-size", type=int, default=256)
   parser.add_argument("--limit", type=int, default=None)
   parser.add_argument("--seed", type=int, default=1)
+  parser.add_argument("--progress-log", default=None)
   add_wandb_args(parser)
   args = parser.parse_args()
 
@@ -45,19 +47,23 @@ def main():
     info_sections=[GENERAL, WORLD_MODEL_TRAINING],
     out_dir=args.out_dir,
   )
-  logger.log({"vae_dataset_size": int(len(dataset))}, step=0, namespace="wm_training")
+  metrics = {"vae_dataset_size": int(len(dataset))}
+  logger.log(metrics, step=0, namespace="wm_training")
+  append_progress(args.progress_log, metrics, step=0, namespace="wm_training")
 
   for step in range(args.steps):
     indices = rng.integers(0, len(dataset), size=args.batch_size)
     loss, grid_loss, self_loss, kl = model.train_batch(dataset[indices])
     if step == 0 or (step + 1) % 100 == 0:
       print("step", step + 1, "loss", loss, "grid", grid_loss, "self", self_loss, "kl", kl)
-      logger.log({
+      metrics = {
         "vae_loss": loss,
         "vae_grid_loss": grid_loss,
         "vae_self_loss": self_loss,
         "vae_kl_loss": kl,
-      }, step=step + 1, namespace="wm_training")
+      }
+      logger.log(metrics, step=step + 1, namespace="wm_training")
+      append_progress(args.progress_log, metrics, step=step + 1, namespace="wm_training")
 
   model.save_json(os.path.join(args.out_dir, "vae.json"))
   print("saved", os.path.join(args.out_dir, "vae.json"))

@@ -20,6 +20,7 @@ from rnn.rnn import GridcraftRNN, rnn_init_state
 from vae.vae import GridcraftVAE
 from video_logging import record_world_model_comparison_video
 from wandb_schema import GENERAL, WORLD_MODEL_EVALUATION
+from progress_logging import append_progress
 
 
 def compare_tabular(real_obs, imagined_obs, current_obs=None, action=None, symbolic_coverage=1.0):
@@ -175,6 +176,7 @@ def main():
   parser.add_argument("--horizon-steps", type=int, default=0)
   parser.add_argument("--horizons", nargs="+", type=int, default=None)
   parser.add_argument("--out", default=None)
+  parser.add_argument("--progress-log", default=None)
   add_wandb_args(parser)
   args = parser.parse_args()
 
@@ -206,7 +208,10 @@ def main():
   with open(out_path, "w") as f:
     json.dump(metrics, f, indent=2)
   logger.log(metrics, namespace="wm_evaluation")
-  logger.log(summarize_compounding_error(metrics), namespace="wm_evaluation")
+  compounding_metrics = summarize_compounding_error(metrics)
+  logger.log(compounding_metrics, namespace="wm_evaluation")
+  append_progress(args.progress_log, metrics, namespace="wm_evaluation")
+  append_progress(args.progress_log, compounding_metrics, namespace="wm_evaluation")
   if args.rnn_one_step and should_log_wandb_videos(args):
     frames = record_world_model_comparison_video(
       vae_json=args.vae_json,
