@@ -59,7 +59,6 @@ def build_run_baseline_argv(python, config, sweep_run_name):
     "--run-dir", str(config.get("run_dir", "runs/sweeps")),
     "--wandb",
     "--wandb-name", str(sweep_run_name),
-    "--no-subprocess-wandb",
   ]
   if policy_baseline:
     cmd.extend(["--policy-baseline", str(policy_baseline)])

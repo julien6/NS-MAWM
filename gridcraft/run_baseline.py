@@ -6,7 +6,7 @@ import sys
 import time
 
 from experiment_config import get_baseline, list_baselines
-from experiment_logging import add_wandb_args, logger_from_args, normalize_wandb_tags, should_log_wandb_videos
+from experiment_logging import add_wandb_args, logger_from_args, should_log_wandb_videos
 from progress_logging import read_progress
 from wandb_schema import GENERAL, MARL_EVALUATION, MARL_TRAINING, WORLD_MODEL_EVALUATION, WORLD_MODEL_TRAINING
 
@@ -56,16 +56,6 @@ def main():
   parser.add_argument("--learning-rate", type=float, default=3e-4)
   parser.add_argument("--rnn-json", default=None)
   parser.add_argument("--initial-z-json", default=None)
-  parser.add_argument(
-    "--subprocess-wandb",
-    action="store_true",
-    help="Also create separate W&B runs for training/evaluation subprocesses.",
-  )
-  parser.add_argument(
-    "--no-subprocess-wandb",
-    action="store_true",
-    help=argparse.SUPPRESS,
-  )
   add_wandb_args(parser)
   args = parser.parse_args()
 
@@ -120,7 +110,6 @@ def main():
       "--out-dir", args.record_dir,
       "--progress-log", os.path.join(progress_dir, "extract.jsonl"),
     ]
-    cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_extract", tags=[baseline.ns_variant, "extract"], include=args.subprocess_wandb and not args.no_subprocess_wandb))
     commands.append(cmd)
   if world_model_enabled and args.phase in ("world_model", "all") and should_train_vae(args, vae_json):
     vae_json = os.path.join(vae_dir, "vae.json")
@@ -133,7 +122,6 @@ def main():
       "--seed", str(seed),
       "--progress-log", os.path.join(progress_dir, "vae.jsonl"),
     ]
-    cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_vae", tags=[baseline.ns_variant, "vae"], include=args.subprocess_wandb and not args.no_subprocess_wandb))
     commands.append(cmd)
   if world_model_enabled and args.phase in ("world_model", "all") and not args.skip_series:
     cmd = [
@@ -143,7 +131,6 @@ def main():
       "--out-dir", series_dir,
       "--progress-log", os.path.join(progress_dir, "series.jsonl"),
     ] + (["--limit", str(args.series_limit)] if args.series_limit is not None else [])
-    cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_series", tags=[baseline.ns_variant, "series"], include=args.subprocess_wandb and not args.no_subprocess_wandb))
     commands.append(cmd)
   if world_model_enabled and args.phase in ("world_model", "all") and not args.skip_train:
     train_seq_len = effective_seq_len(args.seq_len, args.max_steps)
@@ -174,7 +161,6 @@ def main():
       if args.horizons:
         cmd.append("--eval-horizons")
         cmd.extend(str(horizon) for horizon in args.horizons)
-    cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_train", tags=[baseline.ns_variant, "train"], include=args.subprocess_wandb and not args.no_subprocess_wandb))
     commands.append(cmd)
 
   eval_out = os.path.join(run_dir, "eval.json")
@@ -197,7 +183,6 @@ def main():
       eval_cmd.append("--horizons")
       eval_cmd.extend(str(horizon) for horizon in args.horizons)
     eval_cmd.extend(video_cli_args(args))
-    eval_cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_eval", tags=[baseline.ns_variant, "eval"], include=args.subprocess_wandb and not args.no_subprocess_wandb))
     commands.append(eval_cmd)
 
   if args.phase in ("policy", "all"):
@@ -242,7 +227,6 @@ def main():
         policy_cmd.append("--batched-cem-sample-z")
       policy_cmd.extend(["--batched-cem-symbolic-mode", args.batched_cem_symbolic_mode])
       policy_cmd.extend(video_cli_args(args))
-      policy_cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_{policy_baseline}", tags=[baseline.ns_variant, "policy", policy_baseline], include=args.subprocess_wandb and not args.no_subprocess_wandb))
       commands.append(policy_cmd)
       policy_specs.append({
         "policy_baseline": policy_baseline,
@@ -259,12 +243,19 @@ def main():
       stage_name = command_stage_name(cmd)
       stage_namespace = stage_namespace_for(stage_name)
       stage_start = time.time()
+      progress_hook = make_progress_hook(cmd, args, baseline, vae_json)
       logger.log({
         "pipeline_stage_index": command_index,
         "pipeline_stage_started": 1,
         f"pipeline_stage_{stage_name}_started": 1,
       }, namespace=stage_namespace)
-      run_and_relay_progress(cmd, progress_path_for_command(cmd), logger, metric_prefix=progress_metric_prefix_for_command(cmd))
+      run_and_relay_progress(
+        cmd,
+        progress_path_for_command(cmd),
+        logger,
+        metric_prefix=progress_metric_prefix_for_command(cmd),
+        progress_hook=progress_hook,
+      )
       logger.log({
         "pipeline_stage_index": command_index,
         "pipeline_stage_finished": 1,
@@ -325,20 +316,20 @@ def progress_path_for_command(cmd):
   return None
 
 
-def run_and_relay_progress(cmd, progress_path, logger, metric_prefix=None):
+def run_and_relay_progress(cmd, progress_path, logger, metric_prefix=None, progress_hook=None):
   if progress_path and os.path.exists(progress_path):
     os.remove(progress_path)
   process = subprocess.Popen(cmd)
   offset = 0
   while process.poll() is None:
-    offset = relay_progress(progress_path, offset, logger, metric_prefix=metric_prefix)
+    offset = relay_progress(progress_path, offset, logger, metric_prefix=metric_prefix, progress_hook=progress_hook)
     time.sleep(1.0)
-  offset = relay_progress(progress_path, offset, logger, metric_prefix=metric_prefix)
+  offset = relay_progress(progress_path, offset, logger, metric_prefix=metric_prefix, progress_hook=progress_hook)
   if process.returncode != 0:
     raise subprocess.CalledProcessError(process.returncode, cmd)
 
 
-def relay_progress(progress_path, offset, logger, metric_prefix=None):
+def relay_progress(progress_path, offset, logger, metric_prefix=None, progress_hook=None):
   offset, events = read_progress(progress_path, offset)
   for event in events:
     metrics = dict(event.get("metrics", {}))
@@ -348,7 +339,104 @@ def relay_progress(progress_path, offset, logger, metric_prefix=None):
       prefix_metrics(metric_prefix, metrics),
       namespace=event.get("namespace"),
     )
+    if progress_hook is not None:
+      progress_hook(event, metrics, logger)
   return offset
+
+
+def make_progress_hook(cmd, args, baseline, vae_json):
+  stage_name = command_stage_name(cmd)
+  if stage_name not in ("rnn_train", "policy_baselines"):
+    return None
+
+  out_dir = cli_value(cmd, "--out-dir")
+  if not out_dir:
+    return None
+  if stage_name == "policy_baselines":
+    return make_policy_progress_hook(cmd, args, baseline, vae_json, out_dir)
+  return make_rnn_progress_hook(args, baseline, vae_json, out_dir)
+
+
+def make_rnn_progress_hook(args, baseline, vae_json, out_dir):
+  logged_steps = set()
+
+  def hook(event, metrics, logger):
+    namespace = event.get("namespace")
+    if namespace not in ("wm_evaluation", "world_model_evaluation"):
+      return
+    step_value = metrics.get("eval/checkpoint_step", metrics.get("checkpoint_step"))
+    if step_value is None:
+      return
+    try:
+      checkpoint_step = int(step_value)
+    except (TypeError, ValueError):
+      return
+    if checkpoint_step in logged_steps:
+      return
+    logged_steps.add(checkpoint_step)
+    checkpoint_path = os.path.join(out_dir, "checkpoints", f"checkpoint_{checkpoint_step}.json")
+    logger.log({
+      "eval_video_checkpoint_step": checkpoint_step,
+    }, namespace="wm_evaluation")
+    log_parent_world_model_video(
+      logger,
+      args,
+      baseline,
+      vae_json,
+      checkpoint_path,
+      status_prefix="eval_video_real_vs_imagined",
+    )
+
+  return hook
+
+
+def make_policy_progress_hook(cmd, args, baseline, vae_json, policy_dir):
+  policy_baseline = cli_value(cmd, "--policy-baseline")
+  if policy_baseline not in ("real_mappo", "imagined_mappo"):
+    return None
+  rnn_json = cli_value(cmd, "--rnn-json") or "rnn/rnn.json"
+  initial_z_json = cli_value(cmd, "--initial-z-json") or "initial_z/initial_z.json"
+  logged_steps = set()
+
+  def hook(event, metrics, logger):
+    namespace = event.get("namespace")
+    if namespace not in ("marl_evaluation", "policy_evaluation"):
+      return
+    step_value = metrics.get("policy_checkpoint_step")
+    if step_value is None:
+      return
+    try:
+      checkpoint_step = int(step_value)
+    except (TypeError, ValueError):
+      return
+    if checkpoint_step in logged_steps:
+      return
+    logged_steps.add(checkpoint_step)
+    weights_path = os.path.join(policy_dir, f"policy_step_{checkpoint_step}.weights.h5")
+    logger.log({
+      f"{policy_baseline}/eval_video_checkpoint_step": checkpoint_step,
+    }, namespace="marl_evaluation")
+    log_parent_policy_video(
+      logger,
+      args,
+      baseline,
+      policy_dir,
+      vae_json,
+      rnn_json,
+      initial_z_json,
+      policy_baseline,
+      weights_path=weights_path,
+      status_prefix=f"{policy_baseline}/eval_video_policy_rollout",
+    )
+
+  return hook
+
+
+def cli_value(cmd, key):
+  for index, value in enumerate(cmd):
+    if value == key and index + 1 < len(cmd):
+      return cmd[index + 1]
+  return None
 
 
 def progress_metric_prefix_for_command(cmd):
@@ -398,63 +486,108 @@ def load_policy_metrics(policy_dir):
   return merged
 
 
-def log_parent_world_model_video(logger, args, baseline, vae_json, rnn_json):
-  if not should_log_wandb_videos(args) or not os.path.exists(rnn_json):
+def log_parent_world_model_video(logger, args, baseline, vae_json, rnn_json, step=None, status_prefix="video_real_vs_imagined"):
+  if not should_log_wandb_videos(args):
+    logger.log({
+      f"{status_prefix}_logged": 0,
+      f"{status_prefix}_skipped_disabled": 1,
+    }, step=step, namespace="wm_evaluation")
+    return
+  if not os.path.exists(rnn_json):
+    logger.log({
+      f"{status_prefix}_logged": 0,
+      f"{status_prefix}_skipped_missing_checkpoint": 1,
+    }, step=step, namespace="wm_evaluation")
     return
   from video_logging import record_world_model_comparison_video
-  frames = record_world_model_comparison_video(
-    vae_json=vae_json,
-    rnn_json=rnn_json,
-    ns_variant=baseline.ns_variant,
-    symbolic_coverage=baseline.coverage,
-    seed=args.seed or baseline.seed,
-    episodes=args.video_episodes,
-    max_steps=args.video_max_steps,
-  )
-  logger.log_video("video_real_vs_imagined", frames, fps=args.video_fps, namespace="wm_evaluation")
+  try:
+    frames = record_world_model_comparison_video(
+      vae_json=vae_json,
+      rnn_json=rnn_json,
+      ns_variant=baseline.ns_variant,
+      symbolic_coverage=baseline.coverage,
+      seed=args.seed or baseline.seed,
+      episodes=args.video_episodes,
+      max_steps=args.video_max_steps,
+    )
+    logged = logger.log_video("video_real_vs_imagined", frames, fps=args.video_fps, step=step, namespace="wm_evaluation")
+    logger.log({
+      f"{status_prefix}_logged": int(bool(logged)),
+      f"{status_prefix}_skipped_media_dependency": int(not bool(logged)),
+    }, step=step, namespace="wm_evaluation")
+  except Exception as exc:
+    print(f"Skipping W&B world-model video after generation failure: {exc}", flush=True)
+    logger.log({
+      f"{status_prefix}_logged": 0,
+      f"{status_prefix}_generation_failed": 1,
+    }, step=step, namespace="wm_evaluation")
 
 
-def log_parent_policy_video(logger, args, baseline, policy_dir, vae_json, rnn_json, initial_z_json, policy_baseline):
+def log_parent_policy_video(logger, args, baseline, policy_dir, vae_json, rnn_json, initial_z_json, policy_baseline, weights_path=None, status_prefix=None):
+  status_prefix = status_prefix or f"{policy_baseline}/video_policy_rollout"
   if not should_log_wandb_videos(args):
+    logger.log({
+      f"{status_prefix}_logged": 0,
+      f"{status_prefix}_skipped_disabled": 1,
+    }, namespace="marl_evaluation")
     return
   from video_logging import record_actor_policy_evaluation_video, record_mpc_cem_evaluation_video
-  if policy_baseline == "mpc_cem":
-    if not os.path.exists(rnn_json):
-      return
-    frames = record_mpc_cem_evaluation_video(
-      vae_json=vae_json,
-      rnn_json=rnn_json,
-      ns_variant=baseline.ns_variant,
-      symbolic_coverage=baseline.coverage,
-      seed=args.seed or baseline.seed,
-      episodes=args.video_episodes,
-      max_steps=args.video_max_steps,
-      planning_horizon=args.planning_horizon,
-      cem_samples=args.cem_samples,
-    )
-  else:
-    weights = os.path.join(policy_dir, "policy.weights.h5")
-    if not os.path.exists(weights):
-      return
-    from exp_config import OBS_SIZE, Z_SIZE
-    from policy_baselines import ActorCritic
-    import numpy as np
-    obs_size = OBS_SIZE if policy_baseline == "real_mappo" else Z_SIZE
-    actor = ActorCritic(obs_size=obs_size)
-    actor(np.zeros((1, obs_size), dtype=np.float32))
-    actor.load_weights(weights)
-    frames = record_actor_policy_evaluation_video(
-      actor,
-      policy_baseline=policy_baseline,
-      vae_json=vae_json,
-      rnn_json=rnn_json,
-      ns_variant=baseline.ns_variant,
-      symbolic_coverage=baseline.coverage,
-      seed=args.seed or baseline.seed,
-      episodes=args.video_episodes,
-      max_steps=args.video_max_steps,
-    )
-  logger.log_video(f"{policy_baseline}/video_policy_rollout", frames, fps=args.video_fps, namespace="marl_evaluation")
+  try:
+    if policy_baseline == "mpc_cem":
+      if not os.path.exists(rnn_json):
+        logger.log({
+          f"{status_prefix}_logged": 0,
+          f"{status_prefix}_skipped_missing_checkpoint": 1,
+        }, namespace="marl_evaluation")
+        return
+      frames = record_mpc_cem_evaluation_video(
+        vae_json=vae_json,
+        rnn_json=rnn_json,
+        ns_variant=baseline.ns_variant,
+        symbolic_coverage=baseline.coverage,
+        seed=args.seed or baseline.seed,
+        episodes=args.video_episodes,
+        max_steps=args.video_max_steps,
+        planning_horizon=args.planning_horizon,
+        cem_samples=args.cem_samples,
+      )
+    else:
+      weights = weights_path or os.path.join(policy_dir, "policy.weights.h5")
+      if not os.path.exists(weights):
+        logger.log({
+          f"{status_prefix}_logged": 0,
+          f"{status_prefix}_skipped_missing_policy": 1,
+        }, namespace="marl_evaluation")
+        return
+      from exp_config import OBS_SIZE, Z_SIZE
+      from policy_baselines import ActorCritic
+      import numpy as np
+      obs_size = OBS_SIZE if policy_baseline == "real_mappo" else Z_SIZE
+      actor = ActorCritic(obs_size=obs_size)
+      actor(np.zeros((1, obs_size), dtype=np.float32))
+      actor.load_weights(weights)
+      frames = record_actor_policy_evaluation_video(
+        actor,
+        policy_baseline=policy_baseline,
+        vae_json=vae_json,
+        rnn_json=rnn_json,
+        ns_variant=baseline.ns_variant,
+        symbolic_coverage=baseline.coverage,
+        seed=args.seed or baseline.seed,
+        episodes=args.video_episodes,
+        max_steps=args.video_max_steps,
+      )
+    logged = logger.log_video(f"{policy_baseline}/video_policy_rollout", frames, fps=args.video_fps, namespace="marl_evaluation")
+    logger.log({
+      f"{status_prefix}_logged": int(bool(logged)),
+      f"{status_prefix}_skipped_media_dependency": int(not bool(logged)),
+    }, namespace="marl_evaluation")
+  except Exception as exc:
+    print(f"Skipping W&B policy video after generation failure: {exc}", flush=True)
+    logger.log({
+      f"{status_prefix}_logged": 0,
+      f"{status_prefix}_generation_failed": 1,
+    }, namespace="marl_evaluation")
 
 
 def info_sections_for_phase(phase):
@@ -538,29 +671,6 @@ def dedupe(items):
       result.append(item)
       seen.add(item)
   return result
-
-
-def wandb_cli_args(args, group, name, tags, include=True):
-  if not args.wandb or not include:
-    return []
-  cli = [
-    "--wandb",
-    "--wandb-project", args.wandb_project,
-    "--wandb-group", group,
-    "--wandb-name", name,
-  ]
-  if args.wandb_entity:
-    cli.extend(["--wandb-entity", args.wandb_entity])
-  if args.wandb_mode:
-    cli.extend(["--wandb-mode", args.wandb_mode])
-  if not getattr(args, "wandb_info_panels", True):
-    cli.append("--no-wandb-info-panels")
-  all_tags = list(tags) + list(args.wandb_tags or [])
-  all_tags = normalize_wandb_tags(all_tags)
-  if all_tags:
-    cli.append("--wandb-tags")
-    cli.extend(all_tags)
-  return cli
 
 
 def video_cli_args(args):

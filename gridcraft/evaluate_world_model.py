@@ -213,22 +213,38 @@ def main():
   append_progress(args.progress_log, metrics, namespace="wm_evaluation")
   append_progress(args.progress_log, compounding_metrics, namespace="wm_evaluation")
   if args.rnn_one_step and should_log_wandb_videos(args):
-    frames = record_world_model_comparison_video(
-      vae_json=args.vae_json,
-      rnn_json=resolve_rnn_json(args),
-      ns_variant=args.ns_variant,
-      symbolic_coverage=args.symbolic_coverage,
-      seed=args.seed,
-      episodes=args.video_episodes,
-      max_steps=args.video_max_steps,
-      imagination_mode=args.imagination_mode,
-    )
-    logger.log_video(
-      "video_real_vs_imagined",
-      frames,
-      fps=args.video_fps,
-      namespace="wm_evaluation",
-    )
+    try:
+      frames = record_world_model_comparison_video(
+        vae_json=args.vae_json,
+        rnn_json=resolve_rnn_json(args),
+        ns_variant=args.ns_variant,
+        symbolic_coverage=args.symbolic_coverage,
+        seed=args.seed,
+        episodes=args.video_episodes,
+        max_steps=args.video_max_steps,
+        imagination_mode=args.imagination_mode,
+      )
+      logged = logger.log_video(
+        "video_real_vs_imagined",
+        frames,
+        fps=args.video_fps,
+        namespace="wm_evaluation",
+      )
+      logger.log({
+        "video_real_vs_imagined_logged": int(bool(logged)),
+        "video_real_vs_imagined_skipped_media_dependency": int(not bool(logged)),
+      }, namespace="wm_evaluation")
+    except Exception as exc:
+      print(f"Skipping W&B world-model video after generation failure: {exc}", flush=True)
+      logger.log({
+        "video_real_vs_imagined_logged": 0,
+        "video_real_vs_imagined_generation_failed": 1,
+      }, namespace="wm_evaluation")
+  elif args.rnn_one_step:
+    logger.log({
+      "video_real_vs_imagined_logged": 0,
+      "video_real_vs_imagined_skipped_disabled": 1,
+    }, namespace="wm_evaluation")
   logger.save_json(out_path, metrics)
   logger.finish()
   print(json.dumps(metrics, indent=2))

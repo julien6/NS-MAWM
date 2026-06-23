@@ -1,7 +1,7 @@
 program: sweep_agent.py
 project: ns-mawm-gridcraft
 name: gridcraft-policy-baselines
-description: Grid sweep over model-free, imagined-only, and MPC-CEM Gridcraft policy baselines.
+description: Grid sweep over Gridcraft policy baselines, one W&B run per baseline.
 
 method: grid
 
@@ -10,23 +10,12 @@ metric:
   goal: maximize
 
 parameters:
-  baseline_policy:
-    values:
-      - B00:real_mappo
-      - B24:imagined_mappo
-      - B24:mpc_cem
-      - B25:imagined_mappo
-      - B25:mpc_cem
-      - B26:imagined_mappo
-      - B26:mpc_cem
-      - B27:imagined_mappo
-      - B27:mpc_cem
-      - B28:imagined_mappo
-      - B28:mpc_cem
-      - B29:imagined_mappo
-      - B29:mpc_cem
+  baseline_id:
+    values: [B00, B24, B25, B26, B27, B28, B29]
   phase:
     value: policy
+  policy_baseline:
+    value: all
   seed:
     values: [1, 2, 3]
   run_dir:

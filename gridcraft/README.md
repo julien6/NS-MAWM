@@ -330,7 +330,6 @@ the real Gridcraft environment scalar. This is opt-in:
 ```bash
 WANDB=1 \
 BATCHED_CEM=1 \
-MODEL_POLICIES="mpc_cem" \
 CEM_SAMPLES=256 \
 PLANNING_HORIZON=25 \
 ./run_policy_baselines.bash
@@ -356,7 +355,7 @@ For smoke tests:
 
 ```bash
 RNN_STEPS=5 EVAL_EVERY=1 EVAL_EPISODES=1 EVAL_MAX_STEPS=5 EVAL_HORIZONS="1 3" BASELINES="B10 B25" ./run_world_model_baselines.bash
-POLICY_UPDATES=1 EPISODES_PER_UPDATE=1 POLICY_EVAL_EVERY=1 POLICY_EVAL_EPISODES=1 MAX_STEPS=5 MODEL_BASELINES="B25" MODEL_POLICIES="imagined_mappo mpc_cem" ./run_policy_baselines.bash
+POLICY_UPDATES=1 EPISODES_PER_UPDATE=1 POLICY_EVAL_EVERY=1 POLICY_EVAL_EPISODES=1 MAX_STEPS=5 MODEL_BASELINES="B25" ./run_policy_baselines.bash
 ```
 
 W&B defaults:
@@ -364,13 +363,13 @@ W&B defaults:
 ```text
 project: ns-mawm-gridcraft
 group: baseline id, for example B10 or B25
-name: <baseline_slug>_seed<seed>[_policy]
+name: <baseline_slug>_seed<seed>
 ```
 
-By default, subprocesses do not create W&B runs. They stream progress through
-local JSONL files that the parent process relays into the single baseline run.
-Only set `--subprocess-wandb` or `SUBPROCESS_WANDB=1` when you explicitly want
-extra diagnostic stage runs in addition to the canonical baseline run.
+Each `run_baseline.py` invocation creates at most one W&B run. Stage scripts
+stream progress through local JSONL files, and `run_baseline.py` relays those
+metrics, evaluations, and videos into the single baseline run. Running 6
+baselines therefore creates 6 W&B runs.
 
 `run_baseline.py --list` prints the deterministic `baseline_slug` for every
 baseline. The slug keeps the `BXX` prefix and appends the main keywords that

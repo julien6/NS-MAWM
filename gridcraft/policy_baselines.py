@@ -175,28 +175,48 @@ def train_actor_critic(args):
     logger.log(metrics, step=update + 1, namespace="marl_training")
     append_progress(args.progress_log, metrics, step=update + 1, namespace="marl_training")
     if update == 0 or (update + 1) % args.eval_every == 0:
+      checkpoint_path = os.path.join(args.out_dir, f"policy_step_{update + 1}.weights.h5")
+      os.makedirs(args.out_dir, exist_ok=True)
+      model.save_weights(checkpoint_path)
       eval_metrics = evaluate_policy(model, args, update + 1)
+      eval_metrics["policy_checkpoint_step"] = update + 1
       logger.log(eval_metrics, step=update + 1, namespace="marl_evaluation")
       append_progress(args.progress_log, eval_metrics, step=update + 1, namespace="marl_evaluation")
       if should_log_wandb_videos(args):
-        frames = record_actor_policy_evaluation_video(
-          model,
-          policy_baseline=args.policy_baseline,
-          vae_json=args.vae_json,
-          rnn_json=args.rnn_json,
-          ns_variant=args.ns_variant,
-          symbolic_coverage=args.symbolic_coverage,
-          seed=args.seed + 70000 + update,
-          episodes=args.video_episodes,
-          max_steps=args.video_max_steps,
-        )
-        logger.log_video(
-          "video_policy_rollout",
-          frames,
-          fps=args.video_fps,
-          step=update + 1,
-          namespace="marl_evaluation",
-        )
+        try:
+          frames = record_actor_policy_evaluation_video(
+            model,
+            policy_baseline=args.policy_baseline,
+            vae_json=args.vae_json,
+            rnn_json=args.rnn_json,
+            ns_variant=args.ns_variant,
+            symbolic_coverage=args.symbolic_coverage,
+            seed=args.seed + 70000 + update,
+            episodes=args.video_episodes,
+            max_steps=args.video_max_steps,
+          )
+          logged = logger.log_video(
+            "video_policy_rollout",
+            frames,
+            fps=args.video_fps,
+            step=update + 1,
+            namespace="marl_evaluation",
+          )
+          logger.log({
+            "video_policy_rollout_logged": int(bool(logged)),
+            "video_policy_rollout_skipped_media_dependency": int(not bool(logged)),
+          }, step=update + 1, namespace="marl_evaluation")
+        except Exception as exc:
+          print(f"Skipping W&B policy video after generation failure: {exc}", flush=True)
+          logger.log({
+            "video_policy_rollout_logged": 0,
+            "video_policy_rollout_generation_failed": 1,
+          }, step=update + 1, namespace="marl_evaluation")
+      else:
+        logger.log({
+          "video_policy_rollout_logged": 0,
+          "video_policy_rollout_skipped_disabled": 1,
+        }, step=update + 1, namespace="marl_evaluation")
       save_json(os.path.join(args.out_dir, f"policy_eval_step_{update + 1}.json"), eval_metrics)
       print("update", update + 1, metrics, eval_metrics, flush=True)
 
@@ -357,25 +377,41 @@ def run_mpc_cem(args):
   logger.save_json(os.path.join(args.out_dir, "mpc_cem_summary.json"), summary)
   append_progress(args.progress_log, summary, namespace="marl_evaluation")
   if should_log_wandb_videos(args):
-    frames = record_mpc_cem_evaluation_video(
-      vae_json=args.vae_json,
-      rnn_json=args.rnn_json,
-      ns_variant=args.ns_variant,
-      symbolic_coverage=args.symbolic_coverage,
-      seed=args.seed + 70000,
-      episodes=args.video_episodes,
-      max_steps=args.video_max_steps,
-      planning_horizon=args.planning_horizon,
-      cem_samples=args.cem_samples,
-      cem_elite_frac=args.cem_elite_frac,
-      gamma=args.gamma,
-    )
-    logger.log_video(
-      "video_policy_rollout",
-      frames,
-      fps=args.video_fps,
-      namespace="marl_evaluation",
-    )
+    try:
+      frames = record_mpc_cem_evaluation_video(
+        vae_json=args.vae_json,
+        rnn_json=args.rnn_json,
+        ns_variant=args.ns_variant,
+        symbolic_coverage=args.symbolic_coverage,
+        seed=args.seed + 70000,
+        episodes=args.video_episodes,
+        max_steps=args.video_max_steps,
+        planning_horizon=args.planning_horizon,
+        cem_samples=args.cem_samples,
+        cem_elite_frac=args.cem_elite_frac,
+        gamma=args.gamma,
+      )
+      logged = logger.log_video(
+        "video_policy_rollout",
+        frames,
+        fps=args.video_fps,
+        namespace="marl_evaluation",
+      )
+      logger.log({
+        "video_policy_rollout_logged": int(bool(logged)),
+        "video_policy_rollout_skipped_media_dependency": int(not bool(logged)),
+      }, namespace="marl_evaluation")
+    except Exception as exc:
+      print(f"Skipping W&B policy video after generation failure: {exc}", flush=True)
+      logger.log({
+        "video_policy_rollout_logged": 0,
+        "video_policy_rollout_generation_failed": 1,
+      }, namespace="marl_evaluation")
+  else:
+    logger.log({
+      "video_policy_rollout_logged": 0,
+      "video_policy_rollout_skipped_disabled": 1,
+    }, namespace="marl_evaluation")
   logger.log_summary(summary, namespace="marl_evaluation")
   logger.finish()
   print(json.dumps(summary, indent=2))

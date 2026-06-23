@@ -55,22 +55,16 @@ Lower is better.
 wandb agent ENTITY/ns-mawm-gridcraft/SWEEP_ID
 ```
 
-This grid compares valid downstream-control combinations:
+This grid compares downstream-control baselines with one W&B run per baseline:
 
 ```text
-B00:real_mappo
-B24:imagined_mappo
-B24:mpc_cem
-B25:imagined_mappo
-B25:mpc_cem
-B26:imagined_mappo
-B26:mpc_cem
-B27:imagined_mappo
-B27:mpc_cem
-B28:imagined_mappo
-B28:mpc_cem
-B29:imagined_mappo
-B29:mpc_cem
+B00 real_mappo
+B24 imagined_mappo + mpc_cem
+B25 imagined_mappo + mpc_cem
+B26 imagined_mappo + mpc_cem
+B27 imagined_mappo + mpc_cem
+B28 imagined_mappo + mpc_cem
+B29 imagined_mappo + mpc_cem
 ```
 
 The objective is:
@@ -83,8 +77,8 @@ Higher is better.
 
 ## Notes
 
-- `sweep_agent.py` reuses the active W&B sweep run; it does not create a nested
-  run.
+- `sweep_agent.py` reuses the active W&B sweep run; one sampled baseline creates
+  one W&B run and no nested stage runs.
 - Videos are enabled in the smoke sweep and log to
   `World Model evaluation/video_real_vs_imagined` or
   `MARL evaluation/video_policy_rollout`. Set `no_wandb_videos: true` in a

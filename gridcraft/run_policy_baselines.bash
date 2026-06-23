@@ -6,7 +6,6 @@ cd "$(dirname "$0")"
 PYTHON=${PYTHON:-../.venv/bin/python}
 SEEDS=${SEEDS:-"1"}
 MODEL_BASELINES=${MODEL_BASELINES:-"B24 B25 B26 B27 B28 B29"}
-MODEL_POLICIES=${MODEL_POLICIES:-"imagined_mappo mpc_cem"}
 RUN_B00=${RUN_B00:-1}
 VALIDATE_MODEL_BASELINES=${VALIDATE_MODEL_BASELINES:-1}
 POLICY_UPDATES=${POLICY_UPDATES:-100}
@@ -86,26 +85,24 @@ for seed in $SEEDS; do
   fi
 
   for baseline in $MODEL_BASELINES; do
-    for policy in $MODEL_POLICIES; do
-      "$PYTHON" run_baseline.py \
-        --baseline-id "$baseline" \
-        --phase policy \
-        --policy-baseline "$policy" \
-        --python "$PYTHON" \
-        --policy-updates "$POLICY_UPDATES" \
-        --episodes-per-update "$EPISODES_PER_UPDATE" \
-        --policy-eval-every "$POLICY_EVAL_EVERY" \
-        --policy-eval-episodes "$POLICY_EVAL_EPISODES" \
-        --max-steps "$MAX_STEPS" \
-        --planning-horizon "$PLANNING_HORIZON" \
-        --cem-samples "$CEM_SAMPLES" \
-        --video-episodes "$VIDEO_EPISODES" \
-        --video-max-steps "$VIDEO_MAX_STEPS" \
-        --video-fps "$VIDEO_FPS" \
-        --seed "$seed" \
-        "${EXTRA_COMMON_ARGS[@]}" \
-        "${MODEL_EXTRA_ARGS[@]}" \
-        "${WANDB_ARGS[@]}"
-    done
+    "$PYTHON" run_baseline.py \
+      --baseline-id "$baseline" \
+      --phase policy \
+      --policy-baseline all \
+      --python "$PYTHON" \
+      --policy-updates "$POLICY_UPDATES" \
+      --episodes-per-update "$EPISODES_PER_UPDATE" \
+      --policy-eval-every "$POLICY_EVAL_EVERY" \
+      --policy-eval-episodes "$POLICY_EVAL_EPISODES" \
+      --max-steps "$MAX_STEPS" \
+      --planning-horizon "$PLANNING_HORIZON" \
+      --cem-samples "$CEM_SAMPLES" \
+      --video-episodes "$VIDEO_EPISODES" \
+      --video-max-steps "$VIDEO_MAX_STEPS" \
+      --video-fps "$VIDEO_FPS" \
+      --seed "$seed" \
+      "${EXTRA_COMMON_ARGS[@]}" \
+      "${MODEL_EXTRA_ARGS[@]}" \
+      "${WANDB_ARGS[@]}"
   done
 done
