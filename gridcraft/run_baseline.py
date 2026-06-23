@@ -376,15 +376,32 @@ def resolve_rnn_path(args, baseline, run_rnn_json, train_variant):
     return args.rnn_json
   if baseline.baseline_id == "B00":
     return "rnn/rnn.json"
-  if os.path.exists(run_rnn_json):
-    return run_rnn_json
+  run_rnn_dir = os.path.dirname(run_rnn_json)
+  run_candidates = [
+    run_rnn_json,
+    os.path.join(run_rnn_dir, "rnn.json"),
+    os.path.join(run_rnn_dir, "rnn.neural.json"),
+    os.path.join(run_rnn_dir, f"rnn.{train_variant}.json"),
+  ]
+  for candidate in dedupe(run_candidates):
+    if os.path.exists(candidate):
+      return candidate
   candidates = {
     "neural": "rnn/rnn.neural.json",
     "regularization": "rnn/rnn.regularization.json",
     "residual": "rnn/rnn.residual.json",
   }
-  candidate = candidates.get(train_variant, "rnn/rnn.json")
-  return candidate if os.path.exists(candidate) else "rnn/rnn.json"
+  global_candidates = [candidates.get(train_variant, "rnn/rnn.json"), "rnn/rnn.json"]
+  for candidate in dedupe(global_candidates):
+    if os.path.exists(candidate):
+      return candidate
+  raise SystemExit(
+    "No trained RNN checkpoint found for model-based policy baseline "
+    f"{baseline.baseline_id}. Expected one of: "
+    + ", ".join(dedupe(run_candidates + global_candidates))
+    + ". Run the world-model phase first, for example: "
+    f'BASELINES="{baseline.baseline_id}" WANDB=1 ./run_world_model_baselines.bash'
+  )
 
 
 def resolve_initial_z_path(args, run_dir):
@@ -392,6 +409,16 @@ def resolve_initial_z_path(args, run_dir):
     return args.initial_z_json
   run_path = os.path.join(run_dir, "initial_z.json")
   return run_path if os.path.exists(run_path) else "initial_z/initial_z.json"
+
+
+def dedupe(items):
+  result = []
+  seen = set()
+  for item in items:
+    if item not in seen:
+      result.append(item)
+      seen.add(item)
+  return result
 
 
 def wandb_cli_args(args, group, name, tags, include=True):

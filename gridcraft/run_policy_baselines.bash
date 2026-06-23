@@ -8,6 +8,7 @@ SEEDS=${SEEDS:-"1"}
 MODEL_BASELINES=${MODEL_BASELINES:-"B24 B25 B26 B27 B28 B29"}
 MODEL_POLICIES=${MODEL_POLICIES:-"imagined_mappo mpc_cem"}
 RUN_B00=${RUN_B00:-1}
+VALIDATE_MODEL_BASELINES=${VALIDATE_MODEL_BASELINES:-1}
 POLICY_UPDATES=${POLICY_UPDATES:-100}
 EPISODES_PER_UPDATE=${EPISODES_PER_UPDATE:-8}
 POLICY_EVAL_EVERY=${POLICY_EVAL_EVERY:-10}
@@ -46,6 +47,23 @@ if [[ "$BATCHED_CEM_SAMPLE_Z" == "1" ]]; then
   MODEL_EXTRA_ARGS+=(--batched-cem-sample-z)
 fi
 MODEL_EXTRA_ARGS+=(--batched-cem-symbolic-mode "$BATCHED_CEM_SYMBOLIC_MODE")
+
+if [[ "$VALIDATE_MODEL_BASELINES" == "1" ]]; then
+  for seed in $SEEDS; do
+    for baseline in $MODEL_BASELINES; do
+      "$PYTHON" run_baseline.py \
+        --baseline-id "$baseline" \
+        --phase policy \
+        --policy-baseline mpc_cem \
+        --python "$PYTHON" \
+        --seed "$seed" \
+        --dry-run \
+        "${EXTRA_COMMON_ARGS[@]}" \
+        "${MODEL_EXTRA_ARGS[@]}" \
+        >/dev/null
+    done
+  done
+fi
 
 for seed in $SEEDS; do
   if [[ "$RUN_B00" == "1" ]]; then
