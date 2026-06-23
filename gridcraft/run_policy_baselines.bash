@@ -5,6 +5,9 @@ cd "$(dirname "$0")"
 
 PYTHON=${PYTHON:-../.venv/bin/python}
 SEEDS=${SEEDS:-"1"}
+MODEL_BASELINES=${MODEL_BASELINES:-"B24 B25 B26 B27 B28 B29"}
+MODEL_POLICIES=${MODEL_POLICIES:-"imagined_mappo mpc_cem"}
+RUN_B00=${RUN_B00:-1}
 POLICY_UPDATES=${POLICY_UPDATES:-100}
 EPISODES_PER_UPDATE=${EPISODES_PER_UPDATE:-8}
 POLICY_EVAL_EVERY=${POLICY_EVAL_EVERY:-10}
@@ -21,6 +24,7 @@ VIDEO_FPS=${VIDEO_FPS:-10}
 NO_WANDB_VIDEOS=${NO_WANDB_VIDEOS:-0}
 WANDB_ARGS=()
 EXTRA_COMMON_ARGS=()
+MODEL_EXTRA_ARGS=()
 
 if [[ "${WANDB:-0}" == "1" ]]; then
   WANDB_ARGS+=(--wandb --wandb-project "${WANDB_PROJECT:-ns-mawm-gridcraft}")
@@ -36,33 +40,35 @@ if [[ "$NO_WANDB_VIDEOS" == "1" ]]; then
   EXTRA_COMMON_ARGS+=(--no-wandb-videos)
 fi
 if [[ "$BATCHED_CEM" == "1" ]]; then
-  EXTRA_COMMON_ARGS+=(--batched-cem)
+  MODEL_EXTRA_ARGS+=(--batched-cem)
 fi
 if [[ "$BATCHED_CEM_SAMPLE_Z" == "1" ]]; then
-  EXTRA_COMMON_ARGS+=(--batched-cem-sample-z)
+  MODEL_EXTRA_ARGS+=(--batched-cem-sample-z)
 fi
-EXTRA_COMMON_ARGS+=(--batched-cem-symbolic-mode "$BATCHED_CEM_SYMBOLIC_MODE")
+MODEL_EXTRA_ARGS+=(--batched-cem-symbolic-mode "$BATCHED_CEM_SYMBOLIC_MODE")
 
 for seed in $SEEDS; do
-  "$PYTHON" run_baseline.py \
-    --baseline-id B00 \
-    --phase policy \
-    --policy-baseline real_mappo \
-    --python "$PYTHON" \
-    --policy-updates "$POLICY_UPDATES" \
-    --episodes-per-update "$EPISODES_PER_UPDATE" \
-    --policy-eval-every "$POLICY_EVAL_EVERY" \
-    --policy-eval-episodes "$POLICY_EVAL_EPISODES" \
-    --max-steps "$MAX_STEPS" \
-    --video-episodes "$VIDEO_EPISODES" \
-    --video-max-steps "$VIDEO_MAX_STEPS" \
-    --video-fps "$VIDEO_FPS" \
-    --seed "$seed" \
-    "${EXTRA_COMMON_ARGS[@]}" \
-    "${WANDB_ARGS[@]}"
+  if [[ "$RUN_B00" == "1" ]]; then
+    "$PYTHON" run_baseline.py \
+      --baseline-id B00 \
+      --phase policy \
+      --policy-baseline real_mappo \
+      --python "$PYTHON" \
+      --policy-updates "$POLICY_UPDATES" \
+      --episodes-per-update "$EPISODES_PER_UPDATE" \
+      --policy-eval-every "$POLICY_EVAL_EVERY" \
+      --policy-eval-episodes "$POLICY_EVAL_EPISODES" \
+      --max-steps "$MAX_STEPS" \
+      --video-episodes "$VIDEO_EPISODES" \
+      --video-max-steps "$VIDEO_MAX_STEPS" \
+      --video-fps "$VIDEO_FPS" \
+      --seed "$seed" \
+      "${EXTRA_COMMON_ARGS[@]}" \
+      "${WANDB_ARGS[@]}"
+  fi
 
-  for baseline in ${MODEL_BASELINES:-"B24 B25 B26 B27 B28 B29"}; do
-    for policy in ${MODEL_POLICIES:-"imagined_mappo mpc_cem"}; do
+  for baseline in $MODEL_BASELINES; do
+    for policy in $MODEL_POLICIES; do
       "$PYTHON" run_baseline.py \
         --baseline-id "$baseline" \
         --phase policy \
@@ -80,6 +86,7 @@ for seed in $SEEDS; do
         --video-fps "$VIDEO_FPS" \
         --seed "$seed" \
         "${EXTRA_COMMON_ARGS[@]}" \
+        "${MODEL_EXTRA_ARGS[@]}" \
         "${WANDB_ARGS[@]}"
     done
   done
