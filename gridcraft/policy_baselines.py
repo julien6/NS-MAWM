@@ -297,6 +297,7 @@ def run_mpc_cem(args):
   rewards = []
   imagined_returns = []
   entropies = []
+  planning_times = []
   lengths = []
   for episode in range(args.eval_episodes):
     env = make_env(seed=args.seed + episode, render_mode=False, max_steps=args.max_steps)
@@ -306,13 +307,19 @@ def run_mpc_cem(args):
     total = 0.0
     for t in range(args.max_steps):
       mu, _ = vae.encode_mu_logvar(obs.reshape(1, -1))
-      action, imagined_return, entropy = cem_action(rnn, vae, mu[0], state, current_tabular, rng, args)
+      planning_start = time.time()
+      if args.batched_cem:
+        action, imagined_return, entropy = cem_action_batched(rnn, vae, mu[0], state, current_tabular, rng, args)
+      else:
+        action, imagined_return, entropy = cem_action(rnn, vae, mu[0], state, current_tabular, rng, args)
+      planning_step_time_ms = float((time.time() - planning_start) * 1000.0)
       logmix, mean, logstd, reward_pred, done_logit, state = rnn.step(mu[0], action, state)
       obs, reward, done, _ = env.step(action)
       current_tabular = env.last_obs
       total += reward
       imagined_returns.append(imagined_return)
       entropies.append(entropy)
+      planning_times.append(planning_step_time_ms)
       if done:
         break
     env.close()
@@ -323,6 +330,10 @@ def run_mpc_cem(args):
       "planning_imagined_return": float(np.mean(imagined_returns)) if imagined_returns else 0.0,
       "real_imagined_reward_gap": float(total - np.mean(imagined_returns)) if imagined_returns else float(total),
       "planning_action_entropy": float(np.mean(entropies)) if entropies else 0.0,
+      "planning_step_time_ms": float(np.mean(planning_times)) if planning_times else 0.0,
+      "planning_batch_size": float(args.cem_samples if args.batched_cem else 1),
+      "planning_horizon": float(args.planning_horizon),
+      "planning_device": planning_device(),
       "episode_length": float(t + 1),
     }
     logger.log(metrics, step=episode + 1, namespace="marl_evaluation")
@@ -332,6 +343,10 @@ def run_mpc_cem(args):
     "planning_imagined_return": float(np.mean(imagined_returns)) if imagined_returns else 0.0,
     "real_imagined_reward_gap": float(np.mean(rewards) - np.mean(imagined_returns)) if imagined_returns else float(np.mean(rewards)),
     "planning_action_entropy": float(np.mean(entropies)) if entropies else 0.0,
+    "planning_step_time_ms": float(np.mean(planning_times)) if planning_times else 0.0,
+    "planning_batch_size": float(args.cem_samples if args.batched_cem else 1),
+    "planning_horizon": float(args.planning_horizon),
+    "planning_device": planning_device(),
     "eval_real_episode_length": float(np.mean(lengths)),
   }
   os.makedirs(args.out_dir, exist_ok=True)
@@ -419,6 +434,92 @@ def cem_action(rnn, vae, z, state, current_obs, rng, args):
   return action, float(np.mean(returns[elite_idx])), entropy
 
 
+def cem_action_batched(rnn, vae, z, state, current_obs, rng, args):
+  sequences = rng.integers(0, ACTION_SIZE, size=(args.cem_samples, args.planning_horizon), dtype=np.int32)
+  rollout_z = np.repeat(np.asarray(z, dtype=np.float32).reshape(1, -1), args.cem_samples, axis=0)
+  rollout_state = [
+    tf.repeat(tf.convert_to_tensor(state[0], dtype=tf.float32), args.cem_samples, axis=0),
+    tf.repeat(tf.convert_to_tensor(state[1], dtype=tf.float32), args.cem_samples, axis=0),
+  ]
+  returns = np.zeros((args.cem_samples,), dtype=np.float32)
+  active = np.ones((args.cem_samples,), dtype=np.float32)
+  discount = 1.0
+  rollout_obs = None
+  if args.ns_variant in ("projection", "residual"):
+    rollout_obs = [
+      {
+        "grid": np.asarray(current_obs["grid"]).copy(),
+        "self": np.asarray(current_obs["self"]).copy(),
+      }
+      for _ in range(args.cem_samples)
+    ]
+
+  for t in range(args.planning_horizon):
+    actions = sequences[:, t]
+    next_z, reward, done_logit, rollout_state, _ = rnn.step_batch(
+      rollout_z,
+      actions,
+      rollout_state,
+      deterministic=args.batched_cem_deterministic_z,
+      rng=rng,
+    )
+    reward_np = reward.numpy().astype(np.float32)
+    done_np = (done_logit.numpy() > 0).astype(np.float32)
+    rollout_z = next_z.numpy().astype(np.float32)
+
+    if args.ns_variant in ("projection", "residual"):
+      rollout_z = apply_batched_symbolic_projection(vae, rollout_z, rollout_obs, actions, args)
+
+    returns += active * discount * reward_np
+    active *= 1.0 - done_np
+    discount *= args.gamma
+    if not np.any(active):
+      break
+
+  elite_count = max(1, int(args.cem_elite_frac * args.cem_samples))
+  elite_idx = np.argsort(returns)[-elite_count:]
+  first_actions = sequences[elite_idx, 0]
+  counts = np.bincount(first_actions, minlength=ACTION_SIZE).astype(np.float32)
+  probs = counts / np.sum(counts)
+  action = int(np.argmax(probs))
+  entropy = float(-np.sum(probs[probs > 0] * np.log(probs[probs > 0])))
+  return action, float(np.mean(returns[elite_idx])), entropy
+
+
+def apply_batched_symbolic_projection(vae, rollout_z, rollout_obs, actions, args):
+  if args.batched_cem_symbolic_mode != "cpu_projection":
+    raise ValueError(f"unsupported batched CEM symbolic mode: {args.batched_cem_symbolic_mode}")
+  decoded = vae.decode_tabular(rollout_z)
+  if isinstance(decoded, dict):
+    decoded = [decoded]
+  projected_z = np.asarray(rollout_z, dtype=np.float32).copy()
+  encoded_rows = []
+  encoded_indices = []
+  for i, imagined_obs in enumerate(decoded):
+    projected_obs, _ = apply_symbolic_projection(
+      imagined_obs,
+      rollout_obs[i],
+      int(actions[i]),
+      args.ns_variant,
+      coverage=args.symbolic_coverage,
+    )
+    rollout_obs[i] = projected_obs
+    vec = tabular_to_vector(projected_obs)
+    encoded_rows.append(vec)
+    encoded_indices.append(i)
+  if encoded_rows:
+    mu, _ = vae.encode_mu_logvar(np.asarray(encoded_rows, dtype=np.float32))
+    projected_z[np.asarray(encoded_indices, dtype=np.int64)] = mu.astype(np.float32)
+  return projected_z
+
+
+def planning_device():
+  gpus = tf.config.list_logical_devices("GPU")
+  if gpus:
+    return gpus[0].name
+  return "CPU"
+
+
 def save_json(path, payload):
   os.makedirs(os.path.dirname(path), exist_ok=True)
   with open(path, "w") as f:
@@ -450,6 +551,11 @@ def main():
   parser.add_argument("--planning-horizon", type=int, default=15)
   parser.add_argument("--cem-samples", type=int, default=64)
   parser.add_argument("--cem-elite-frac", type=float, default=0.2)
+  parser.add_argument("--batched-cem", action="store_true")
+  batch_z_group = parser.add_mutually_exclusive_group()
+  batch_z_group.add_argument("--batched-cem-deterministic-z", dest="batched_cem_deterministic_z", action="store_true", default=True)
+  batch_z_group.add_argument("--batched-cem-sample-z", dest="batched_cem_deterministic_z", action="store_false")
+  parser.add_argument("--batched-cem-symbolic-mode", choices=["cpu_projection"], default="cpu_projection")
   add_wandb_args(parser)
   args = parser.parse_args()
   if args.policy_baseline == "mpc_cem":

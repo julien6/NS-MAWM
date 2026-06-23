@@ -299,6 +299,25 @@ use `SEEDS="1 2 3"`, `EXTRACT_EPISODES=20000`, `VAE_STEPS=50000`,
 `EVAL_EPISODES=200`, `POLICY_UPDATES=2000`, and `POLICY_EVAL_EPISODES=50`.
 Override these variables from the shell to scale the run up or down.
 
+`MPC-CEM` can also batch its imagined rollouts through TensorFlow while keeping
+the real Gridcraft environment scalar. This is opt-in:
+
+```bash
+WANDB=1 \
+BATCHED_CEM=1 \
+MODEL_POLICIES="mpc_cem" \
+CEM_SAMPLES=256 \
+PLANNING_HORIZON=25 \
+./run_policy_baselines.bash
+```
+
+The batched path uses deterministic latent predictions by default. Use
+`BATCHED_CEM_SAMPLE_Z=1` only when you explicitly want stochastic latent
+sampling. For `projection` and `residual`, symbolic correction remains the same
+CPU observation-space projection as the scalar path. W&B logs
+`planning_step_time_ms`, `planning_batch_size`, `planning_horizon`, and
+`planning_device` under `MARL evaluation`.
+
 W&B sweeps are available under `sweeps/`. Start with the smoke sweep:
 
 ```bash

@@ -46,6 +46,11 @@ def main():
   parser.add_argument("--policy-eval-episodes", type=int, default=10)
   parser.add_argument("--planning-horizon", type=int, default=15)
   parser.add_argument("--cem-samples", type=int, default=64)
+  parser.add_argument("--batched-cem", action="store_true")
+  batch_z_group = parser.add_mutually_exclusive_group()
+  batch_z_group.add_argument("--batched-cem-deterministic-z", dest="batched_cem_deterministic_z", action="store_true", default=True)
+  batch_z_group.add_argument("--batched-cem-sample-z", dest="batched_cem_deterministic_z", action="store_false")
+  parser.add_argument("--batched-cem-symbolic-mode", choices=["cpu_projection"], default="cpu_projection")
   parser.add_argument("--learning-rate", type=float, default=3e-4)
   parser.add_argument("--rnn-json", default=None)
   parser.add_argument("--initial-z-json", default=None)
@@ -210,6 +215,11 @@ def main():
       "--planning-horizon", str(args.planning_horizon),
       "--cem-samples", str(args.cem_samples),
     ]
+    if args.batched_cem:
+      policy_cmd.append("--batched-cem")
+    if not args.batched_cem_deterministic_z:
+      policy_cmd.append("--batched-cem-sample-z")
+    policy_cmd.extend(["--batched-cem-symbolic-mode", args.batched_cem_symbolic_mode])
     policy_cmd.extend(video_cli_args(args))
     policy_cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_{policy_baseline}", tags=[baseline.ns_variant, "policy", policy_baseline], include=args.subprocess_wandb and not args.no_subprocess_wandb))
     commands.append(policy_cmd)
@@ -373,7 +383,8 @@ def resolve_rnn_path(args, baseline, run_rnn_json, train_variant):
     "regularization": "rnn/rnn.regularization.json",
     "residual": "rnn/rnn.residual.json",
   }
-  return candidates.get(train_variant, "rnn/rnn.json")
+  candidate = candidates.get(train_variant, "rnn/rnn.json")
+  return candidate if os.path.exists(candidate) else "rnn/rnn.json"
 
 
 def resolve_initial_z_path(args, run_dir):

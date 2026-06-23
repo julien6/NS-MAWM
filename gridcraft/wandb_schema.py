@@ -70,6 +70,10 @@ MARL_EVALUATION_KEYS = {
   "planning_real_return",
   "planning_imagined_return",
   "planning_action_entropy",
+  "planning_step_time_ms",
+  "planning_batch_size",
+  "planning_horizon",
+  "planning_device",
 }
 
 INFO_PANELS = {

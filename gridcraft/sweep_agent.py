@@ -92,6 +92,7 @@ def build_run_baseline_argv(python, config, sweep_run_name):
   add_str(cmd, config, "vae_json", "--vae-json")
   add_str(cmd, config, "rnn_json", "--rnn-json")
   add_str(cmd, config, "initial_z_json", "--initial-z-json")
+  add_str(cmd, config, "batched_cem_symbolic_mode", "--batched-cem-symbolic-mode")
 
   if bool(config.get("skip_extract", False)):
     cmd.append("--skip-extract")
@@ -107,6 +108,10 @@ def build_run_baseline_argv(python, config, sweep_run_name):
     cmd.append("--no-wandb-info-panels")
   if bool(config.get("no_wandb_videos", False)):
     cmd.append("--no-wandb-videos")
+  if bool(config.get("batched_cem", False)):
+    cmd.append("--batched-cem")
+  if bool(config.get("batched_cem_sample_z", False)):
+    cmd.append("--batched-cem-sample-z")
   return cmd
 
 

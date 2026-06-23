@@ -117,6 +117,26 @@ class GridcraftRNN:
       next_state,
     )
 
+  def step_batch(self, z_batch, action_batch, state, deterministic=True, rng=None):
+    z_batch = tf.convert_to_tensor(z_batch, dtype=tf.float32)
+    action_batch = tf.convert_to_tensor(action_batch, dtype=tf.int32)
+    action_oh = tf.one_hot(tf.clip_by_value(action_batch, 0, self.action_size - 1), self.action_size, dtype=tf.float32)
+    x = tf.concat([z_batch, action_oh], axis=1)
+    h, next_state = self.cell(x, states=state)
+    raw = self.out(h)
+    logmix, mean, logstd, reward, done_logit = self._split_output(raw)
+    mix = tf.exp(logmix)
+    if deterministic:
+      next_z = tf.reduce_sum(mix * mean, axis=2)
+    else:
+      next_z = sample_mdn_batch(logmix, mean, logstd, rng=rng)
+    diagnostics = {
+      "logmix": logmix,
+      "mean": mean,
+      "logstd": logstd,
+    }
+    return next_z, reward, done_logit, next_state, diagnostics
+
   def train_batch(self, z, action, reward, done, symbolic_target=None, symbolic_mask=None, target_obs=None, target_obs_mask=None, vae_decoder=None, lambda_sym=1.0):
     z = tf.convert_to_tensor(z, dtype=tf.float32)
     action_oh = tf.convert_to_tensor(one_hot_action(action), dtype=tf.float32)
@@ -193,8 +213,8 @@ class GridcraftRNN:
     self.out.set_weights(params[3:])
 
 
-def rnn_init_state(rnn):
-  return rnn.zero_state(batch_size=1)
+def rnn_init_state(rnn, batch_size=1):
+  return rnn.zero_state(batch_size=batch_size)
 
 
 def rnn_next_state(rnn, z, action, state):
@@ -209,6 +229,29 @@ def rnn_output(state, z):
 
 def rnn_output_size():
   return Z_SIZE + RNN_SIZE
+
+
+def sample_mdn_batch(logmix, mean, logstd, rng=None):
+  batch_size = tf.shape(logmix)[0]
+  z_size = tf.shape(logmix)[1]
+  num_mixture = tf.shape(logmix)[2]
+  flat_logits = tf.reshape(logmix, (-1, num_mixture))
+  if rng is not None:
+    seed = int(rng.integers(0, 2**31 - 1))
+    component = tf.random.stateless_categorical(flat_logits, 1, seed=[seed, seed ^ 0x5DEECE66D])
+    eps = tf.random.stateless_normal((batch_size, z_size), seed=[seed ^ 0x9E3779B9, seed])
+  else:
+    component = tf.random.categorical(flat_logits, 1)
+    eps = tf.random.normal((batch_size, z_size), dtype=tf.float32)
+  component = tf.cast(tf.reshape(tf.squeeze(component, axis=1), (batch_size, z_size)), tf.int32)
+  gather_idx = tf.stack([
+    tf.repeat(tf.range(batch_size), z_size),
+    tf.tile(tf.range(z_size), [batch_size]),
+    tf.reshape(component, (-1,)),
+  ], axis=1)
+  selected_mean = tf.reshape(tf.gather_nd(mean, gather_idx), (batch_size, z_size))
+  selected_logstd = tf.reshape(tf.gather_nd(logstd, gather_idx), (batch_size, z_size))
+  return selected_mean + tf.exp(selected_logstd) * eps
 
 
 def masked_observation_loss(decoded, target, mask):
