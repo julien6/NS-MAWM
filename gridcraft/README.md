@@ -342,6 +342,11 @@ group: baseline id, for example B10 or B25
 name: <baseline_slug>_seed<seed>[_policy]
 ```
 
+World-model scripts enable `SUBPROCESS_WANDB=1` by default. The parent baseline
+run logs pipeline progress and final summaries; detailed real-time curves are in
+the stage runs suffixed with `_extract`, `_vae`, `_series`, `_train`, and
+`_eval`. Set `SUBPROCESS_WANDB=0` to keep only the parent run.
+
 `run_baseline.py --list` prints the deterministic `baseline_slug` for every
 baseline. The slug keeps the `BXX` prefix and appends the main keywords that
 define the baseline, for example:

@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 from experiment_config import get_baseline, list_baselines
 from experiment_logging import add_wandb_args, logger_from_args, normalize_wandb_tags, should_log_wandb_videos
@@ -107,30 +108,36 @@ def main():
 
   commands = []
   if args.phase in ("world_model", "all") and should_extract(args):
-    commands.append([
+    cmd = [
       args.python, "extract.py",
       "--episodes", str(args.extract_episodes),
       "--max-steps", str(args.extract_max_steps or args.max_steps),
       "--seed", str(seed),
       "--out-dir", args.record_dir,
-    ])
+    ]
+    cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_extract", tags=[baseline.ns_variant, "extract"], include=args.subprocess_wandb and not args.no_subprocess_wandb))
+    commands.append(cmd)
   if args.phase in ("world_model", "all") and should_train_vae(args, vae_json):
     vae_json = os.path.join(vae_dir, "vae.json")
-    commands.append([
+    cmd = [
       args.python, "vae_train.py",
       "--record-dir", args.record_dir,
       "--out-dir", vae_dir,
       "--steps", str(args.vae_steps),
       "--batch-size", str(args.vae_batch_size),
       "--seed", str(seed),
-    ])
+    ]
+    cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_vae", tags=[baseline.ns_variant, "vae"], include=args.subprocess_wandb and not args.no_subprocess_wandb))
+    commands.append(cmd)
   if args.phase in ("world_model", "all") and not args.skip_series:
-    commands.append([
+    cmd = [
       args.python, "series.py",
       "--record-dir", args.record_dir,
       "--model-dir", os.path.dirname(vae_json),
       "--out-dir", series_dir,
-    ] + (["--limit", str(args.series_limit)] if args.series_limit is not None else []))
+    ] + (["--limit", str(args.series_limit)] if args.series_limit is not None else [])
+    cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_series", tags=[baseline.ns_variant, "series"], include=args.subprocess_wandb and not args.no_subprocess_wandb))
+    commands.append(cmd)
   if args.phase in ("world_model", "all") and not args.skip_train:
     train_seq_len = effective_seq_len(args.seq_len, args.max_steps)
     cmd = [
@@ -224,10 +231,24 @@ def main():
     policy_cmd.extend(wandb_cli_args(args, group=baseline.baseline_id, name=f"{run_name}_{policy_baseline}", tags=[baseline.ns_variant, "policy", policy_baseline], include=args.subprocess_wandb and not args.no_subprocess_wandb))
     commands.append(policy_cmd)
 
-  for cmd in commands:
+  for command_index, cmd in enumerate(commands, start=1):
     print(" ".join(cmd), flush=True)
     if not args.dry_run:
+      stage_name = command_stage_name(cmd)
+      stage_namespace = stage_namespace_for(stage_name)
+      stage_start = time.time()
+      logger.log({
+        "pipeline_stage_index": command_index,
+        "pipeline_stage_started": 1,
+        f"pipeline_stage_{stage_name}_started": 1,
+      }, step=command_index * 2 - 1, namespace=stage_namespace)
       subprocess.run(cmd, check=True)
+      logger.log({
+        "pipeline_stage_index": command_index,
+        "pipeline_stage_finished": 1,
+        f"pipeline_stage_{stage_name}_finished": 1,
+        "pipeline_stage_duration_sec": float(time.time() - stage_start),
+      }, step=command_index * 2, namespace=stage_namespace)
   if args.dry_run:
     logger.finish()
     return
@@ -253,6 +274,21 @@ def resolve_policy_baseline(args, baseline):
   if baseline.baseline_id == "B00":
     return "real_mappo"
   return "mpc_cem"
+
+
+def command_stage_name(cmd):
+  if len(cmd) < 2:
+    return "unknown"
+  name = os.path.basename(cmd[1])
+  return os.path.splitext(name)[0].replace("-", "_")
+
+
+def stage_namespace_for(stage_name):
+  if stage_name in ("policy_baselines",):
+    return "marl_training"
+  if stage_name in ("evaluate_world_model",):
+    return "wm_evaluation"
+  return "wm_training"
 
 
 def effective_seq_len(seq_len, max_steps):
