@@ -1,0 +1,6 @@
+width: 16
+height: 16
+num_agents: 1
+view_size: 7
+max_steps: 500
+seed: null
