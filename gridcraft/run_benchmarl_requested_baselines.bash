@@ -39,33 +39,32 @@ MARL_NUM_ENVS="${MARL_NUM_ENVS:-256}"
 MARL_MAX_STEPS="${MARL_MAX_STEPS:-500}"
 MARL_MAX_ITERS="${MARL_MAX_ITERS:-2000}"
 MARL_FRAMES_PER_BATCH="${MARL_FRAMES_PER_BATCH:-8192}"
+MAPPO_MINIBATCH_SIZE="${MAPPO_MINIBATCH_SIZE:-1024}"
+MAPPO_MINIBATCH_ITERS="${MAPPO_MINIBATCH_ITERS:-2}"
+MAPPO_EVAL_EVERY_ITERS="${MAPPO_EVAL_EVERY_ITERS:-25}"
+MAPPO_EVAL_EPISODES="${MAPPO_EVAL_EPISODES:-4}"
+MAPPO_HIDDEN_SIZE="${MAPPO_HIDDEN_SIZE:-256}"
 
 # Evaluation media.
 VIDEO_MAX_STEPS="${VIDEO_MAX_STEPS:-100}"
 VIDEO_FPS="${VIDEO_FPS:-10}"
 
-BASELINES=(
-  B00_model-free-control
-  B25_residual_k0.3
-  B25_projection_k0.3
-  B25_regularization_k0.3
-  B26_residual_k0.6
-  B26_projection_k0.6
-  B26_regularization_k0.6
-)
+BASELINES="${BASELINES:-B00_model-free-control B25_residual_k0.3 B25_projection_k0.3 B25_regularization_k0.3 B26_residual_k0.6 B26_projection_k0.6 B26_regularization_k0.6}"
 
 echo "Running requested Gridcraft baselines:"
-printf '  - %s\n' "${BASELINES[@]}"
+for baseline in $BASELINES; do
+  printf '  - %s\n' "$baseline"
+done
 echo "Seeds: ${SEEDS}"
 echo "W&B project: ${WANDB_PROJECT}"
 echo "Device: ${DEVICE}"
 echo "Agents: ${NUM_AGENTS}"
 echo "World model: num_envs=${WM_NUM_ENVS}, episodes=${WM_EPISODES}, max_steps=${WM_MAX_STEPS}, vae_steps=${VAE_STEPS}, rnn_steps=${RNN_STEPS}, batch=${WM_BATCH_SIZE}, eval_every=${WM_EVAL_EVERY}"
-echo "MARL: num_envs=${MARL_NUM_ENVS}, max_steps=${MARL_MAX_STEPS}, max_iters=${MARL_MAX_ITERS}, frames_per_batch=${MARL_FRAMES_PER_BATCH}"
+echo "MARL: num_envs=${MARL_NUM_ENVS}, max_steps=${MARL_MAX_STEPS}, max_iters=${MARL_MAX_ITERS}, frames_per_batch=${MARL_FRAMES_PER_BATCH}, minibatch=${MAPPO_MINIBATCH_SIZE}, minibatch_iters=${MAPPO_MINIBATCH_ITERS}, eval_every_iters=${MAPPO_EVAL_EVERY_ITERS}"
 echo "Videos: every=${WM_VIDEO_EVERY}, max_steps=${VIDEO_MAX_STEPS}, fps=${VIDEO_FPS}"
 
 for seed in $SEEDS; do
-  for baseline in "${BASELINES[@]}"; do
+  for baseline in $BASELINES; do
     echo
     echo "=== Baseline ${baseline}, seed ${seed} ==="
     PYTHON_BIN="$PYTHON_BIN" \
@@ -91,6 +90,11 @@ for seed in $SEEDS; do
     MARL_MAX_STEPS="$MARL_MAX_STEPS" \
     MARL_MAX_ITERS="$MARL_MAX_ITERS" \
     MARL_FRAMES_PER_BATCH="$MARL_FRAMES_PER_BATCH" \
+    MAPPO_MINIBATCH_SIZE="$MAPPO_MINIBATCH_SIZE" \
+    MAPPO_MINIBATCH_ITERS="$MAPPO_MINIBATCH_ITERS" \
+    MAPPO_EVAL_EVERY_ITERS="$MAPPO_EVAL_EVERY_ITERS" \
+    MAPPO_EVAL_EPISODES="$MAPPO_EVAL_EPISODES" \
+    MAPPO_HIDDEN_SIZE="$MAPPO_HIDDEN_SIZE" \
     VIDEO_MAX_STEPS="$VIDEO_MAX_STEPS" \
     VIDEO_FPS="$VIDEO_FPS" \
     ./run_full_benchmarl_baseline.bash

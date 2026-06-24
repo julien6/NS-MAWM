@@ -30,6 +30,11 @@ MARL_NUM_ENVS="${MARL_NUM_ENVS:-64}"
 MARL_MAX_STEPS="${MARL_MAX_STEPS:-200}"
 MARL_MAX_ITERS="${MARL_MAX_ITERS:-50}"
 MARL_FRAMES_PER_BATCH="${MARL_FRAMES_PER_BATCH:-2048}"
+MAPPO_MINIBATCH_SIZE="${MAPPO_MINIBATCH_SIZE:-1024}"
+MAPPO_MINIBATCH_ITERS="${MAPPO_MINIBATCH_ITERS:-2}"
+MAPPO_EVAL_EVERY_ITERS="${MAPPO_EVAL_EVERY_ITERS:-25}"
+MAPPO_EVAL_EPISODES="${MAPPO_EVAL_EPISODES:-4}"
+MAPPO_HIDDEN_SIZE="${MAPPO_HIDDEN_SIZE:-256}"
 MARL_WANDB_STEP_OFFSET="${MARL_WANDB_STEP_OFFSET:-$((VAE_STEPS + RNN_STEPS + 1000))}"
 
 echo "=== Step 1/2: World Model train/eval + lightweight policy eval (${BASELINE_ID}) ==="
@@ -66,6 +71,11 @@ echo "=== Step 2/2: Native BenchMARL MAPPO train/eval on vGridcraft ==="
   --max-steps "$MARL_MAX_STEPS" \
   --max-iters "$MARL_MAX_ITERS" \
   --frames-per-batch "$MARL_FRAMES_PER_BATCH" \
+  --mappo-minibatch-size "$MAPPO_MINIBATCH_SIZE" \
+  --mappo-minibatch-iters "$MAPPO_MINIBATCH_ITERS" \
+  --mappo-eval-every-iters "$MAPPO_EVAL_EVERY_ITERS" \
+  --mappo-eval-episodes "$MAPPO_EVAL_EPISODES" \
+  --mappo-hidden-size "$MAPPO_HIDDEN_SIZE" \
   --device "$DEVICE" \
   --wandb-id "$WANDB_RUN_ID" \
   --wandb-name "$RUN_NAME" \

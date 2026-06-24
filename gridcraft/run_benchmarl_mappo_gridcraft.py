@@ -24,6 +24,11 @@ def main() -> None:
     parser.add_argument("--max-steps", type=int, default=200)
     parser.add_argument("--max-iters", type=int, default=2)
     parser.add_argument("--frames-per-batch", type=int, default=256)
+    parser.add_argument("--mappo-minibatch-size", type=int, default=1024)
+    parser.add_argument("--mappo-minibatch-iters", type=int, default=2)
+    parser.add_argument("--mappo-eval-every-iters", type=int, default=25)
+    parser.add_argument("--mappo-eval-episodes", type=int, default=4)
+    parser.add_argument("--mappo-hidden-size", type=int, default=256)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--save-folder", default="runs_benchmarl/native_mappo")
@@ -69,10 +74,10 @@ def main() -> None:
     experiment_config.max_n_frames = None
     experiment_config.on_policy_collected_frames_per_batch = args.frames_per_batch
     experiment_config.on_policy_n_envs_per_worker = args.num_envs
-    experiment_config.on_policy_minibatch_size = min(128, args.frames_per_batch)
-    experiment_config.on_policy_n_minibatch_iters = 4
-    experiment_config.evaluation_interval = args.frames_per_batch
-    experiment_config.evaluation_episodes = min(4, args.num_envs)
+    experiment_config.on_policy_minibatch_size = min(args.mappo_minibatch_size, args.frames_per_batch)
+    experiment_config.on_policy_n_minibatch_iters = args.mappo_minibatch_iters
+    experiment_config.evaluation_interval = args.frames_per_batch * max(1, args.mappo_eval_every_iters)
+    experiment_config.evaluation_episodes = min(args.mappo_eval_episodes, args.num_envs)
     experiment_config.render = False
     experiment_config.loggers = ["csv", "wandb"] if args.wandb else ["csv"]
     experiment_config.project_name = args.wandb_project
@@ -86,8 +91,8 @@ def main() -> None:
     save_folder = (ROOT / "gridcraft" / args.save_folder).resolve()
     save_folder.mkdir(parents=True, exist_ok=True)
     experiment_config.save_folder = str(save_folder)
-    model_config = MlpConfig(num_cells=[256, 256], activation_class=nn.Tanh, layer_class=nn.Linear)
-    critic_model_config = MlpConfig(num_cells=[256, 256], activation_class=nn.Tanh, layer_class=nn.Linear)
+    model_config = MlpConfig(num_cells=[args.mappo_hidden_size, args.mappo_hidden_size], activation_class=nn.Tanh, layer_class=nn.Linear)
+    critic_model_config = MlpConfig(num_cells=[args.mappo_hidden_size, args.mappo_hidden_size], activation_class=nn.Tanh, layer_class=nn.Linear)
     experiment = Experiment(
         task=task,
         algorithm_config=algorithm_config,
