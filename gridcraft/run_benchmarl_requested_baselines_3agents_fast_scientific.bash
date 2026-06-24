@@ -3,11 +3,13 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-# Faster scientific 3-agent campaign.
+# Medium scientific 3-agent campaign.
 #
 # This profile keeps the same seven baselines as the long 3-agent campaign but
-# reduces wall-clock time by using a larger vectorized batch, fewer MAPPO
-# optimization passes per iteration, less frequent evaluation, and shorter
+# targets roughly two hours per baseline on Spark. It is calibrated from an
+# observed 3-agent B00 run where 600 MAPPO iterations with 2 PPO passes took
+# around 10-12 minutes. The defaults below do about 10x that policy work while
+# keeping vectorization, larger minibatches, periodic evaluation, and shorter
 # videos. Override any variable from the shell for runtime probes.
 
 export NUM_AGENTS="${NUM_AGENTS:-3}"
@@ -27,11 +29,11 @@ export WM_HORIZONS="${WM_HORIZONS:-1 5 10 25 50 100}"
 # Native BenchMARL MAPPO.
 export MARL_NUM_ENVS="${MARL_NUM_ENVS:-512}"
 export MARL_MAX_STEPS="${MARL_MAX_STEPS:-500}"
-export MARL_MAX_ITERS="${MARL_MAX_ITERS:-600}"
+export MARL_MAX_ITERS="${MARL_MAX_ITERS:-3000}"
 export MARL_FRAMES_PER_BATCH="${MARL_FRAMES_PER_BATCH:-8192}"
 export MAPPO_MINIBATCH_SIZE="${MAPPO_MINIBATCH_SIZE:-1024}"
-export MAPPO_MINIBATCH_ITERS="${MAPPO_MINIBATCH_ITERS:-2}"
-export MAPPO_EVAL_EVERY_ITERS="${MAPPO_EVAL_EVERY_ITERS:-25}"
+export MAPPO_MINIBATCH_ITERS="${MAPPO_MINIBATCH_ITERS:-4}"
+export MAPPO_EVAL_EVERY_ITERS="${MAPPO_EVAL_EVERY_ITERS:-50}"
 export MAPPO_EVAL_EPISODES="${MAPPO_EVAL_EPISODES:-4}"
 export MAPPO_HIDDEN_SIZE="${MAPPO_HIDDEN_SIZE:-256}"
 
