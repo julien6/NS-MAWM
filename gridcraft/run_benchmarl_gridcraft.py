@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "vGridcraft"))
 sys.path.insert(0, str(ROOT / "gridcraft"))
 
-from experiment_logging import add_wandb_args, logger_from_args
+from experiment_logging import add_wandb_args, logger_from_args, should_log_wandb_videos
 from wandb_schema import GENERAL, MARL_EVALUATION, MARL_TRAINING, WORLD_MODEL_EVALUATION, WORLD_MODEL_TRAINING
 from torch_world_model import TorchGridcraftRNN, TorchGridcraftVAE
 from vgridcraft import VGridcraftConfig, VectorizedGridcraftEnv
@@ -118,15 +118,19 @@ def main() -> None:
         )
         vae = train_vae(data, args, device, checkpoint_dir, logger)
         z = encode_dataset(vae, data, device, args.wm_batch_size)
-        rnn = train_rnn(z, data, args, device, checkpoint_dir, eval_dir, logger, vae)
+        rnn = train_rnn(z, data, args, device, checkpoint_dir, eval_dir, logger, vae, step_offset=args.vae_steps)
         metrics = evaluate_world_model(vae, rnn, data, device, horizons=args.horizons)
         (eval_dir / "world_model_summary.json").write_text(json.dumps(metrics, indent=2))
-        logger.log(metrics, step=args.rnn_steps, namespace="wm_evaluation")
+        final_eval_step = args.vae_steps + args.rnn_steps + 1
+        logger.log(metrics, step=final_eval_step, namespace="wm_evaluation")
+        log_world_model_video(logger, args, config, vae, rnn, device, step=final_eval_step)
         logger.log_summary(metrics, namespace="wm_evaluation")
 
     if args.phase in ("policy", "all"):
         policy_metrics = run_vectorized_policy_smoke(args, config, device, model_based=baseline["model_based"])
-        logger.log(policy_metrics, step=1, namespace="marl_evaluation")
+        policy_step = args.vae_steps + args.rnn_steps + 2 if baseline["model_based"] else 1
+        logger.log(policy_metrics, step=policy_step, namespace="marl_evaluation")
+        log_policy_video(logger, args, config, device, step=policy_step)
         logger.log_summary(policy_metrics, namespace="marl_evaluation")
 
     logger.finish()
@@ -177,7 +181,7 @@ def encode_dataset(vae, data, device, batch_size):
     return z.reshape(obs.shape[0], obs.shape[1], -1)
 
 
-def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logger, vae):
+def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logger, vae, step_offset: int = 0):
     model = TorchGridcraftRNN().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     actions = data["action"].squeeze(-1)
@@ -209,16 +213,19 @@ def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logge
         loss, metrics = model.loss(z_seq, action, reward, done)
         loss.backward()
         optimizer.step()
+        global_step = step_offset + step
         if step == 1 or step % 100 == 0:
             metrics["rnn_sequences_per_second"] = step * effective_batch_size / max(time.time() - start, 1e-6)
-            logger.log(metrics, step=step, namespace="wm_training")
+            logger.log(metrics, step=global_step, namespace="wm_training")
         if args.eval_every and step % args.eval_every == 0:
             checkpoint = checkpoint_dir / f"rnn_step_{step}.pt"
             torch.save(model.state_dict(), checkpoint)
             metrics = evaluate_world_model(vae, model, data, device, horizons=args.horizons)
             metrics["checkpoint_step"] = step
             (eval_dir / f"world_model_step_{step}.json").write_text(json.dumps(metrics, indent=2))
-            logger.log(metrics, step=step, namespace="wm_evaluation")
+            logger.log(metrics, step=global_step, namespace="wm_evaluation")
+            if args.video_every and step % args.video_every == 0:
+                log_world_model_video(logger, args, args_to_config(args), vae, model, device, step=global_step)
     torch.save(model.state_dict(), checkpoint_dir / "rnn.pt")
     return model
 
@@ -284,6 +291,125 @@ def run_vectorized_policy_smoke(args, config, device, model_based: bool):
         "episode_length": float(lengths.mean().cpu()),
         "policy_backend": "vectorized_random_smoke",
     }
+
+
+def args_to_config(args):
+    return VGridcraftConfig(num_agents=args.num_agents, max_steps=args.max_steps, seed=args.seed)
+
+
+@torch.no_grad()
+def log_world_model_video(logger, args, config, vae, rnn, device, step=None):
+    if not should_log_wandb_videos(args):
+        return
+    try:
+        frames = record_world_model_video(args, config, vae, rnn, device)
+        logged = logger.log_video(
+            "video_real_vs_imagined",
+            frames,
+            fps=args.video_fps,
+            step=step,
+            namespace="wm_evaluation",
+        )
+        logger.log(
+            {
+                "video_real_vs_imagined_logged": int(bool(logged)),
+                "video_real_vs_imagined_frame_count": int(len(frames)),
+            },
+            step=step,
+            namespace="wm_evaluation",
+        )
+    except Exception as exc:
+        logger.log(
+            {
+                "video_real_vs_imagined_logged": 0,
+                "video_real_vs_imagined_generation_failed": 1,
+                "video_real_vs_imagined_error": str(exc),
+            },
+            step=step,
+            namespace="wm_evaluation",
+        )
+
+
+@torch.no_grad()
+def record_world_model_video(args, config, vae, rnn, device):
+    env = VectorizedGridcraftEnv(num_envs=1, num_agents=config.num_agents, device=device, seed=args.seed + 9000, config=config)
+    generator = torch.Generator(device=device)
+    generator.manual_seed(args.seed + 9001)
+    frames = []
+    obs = env.reset()
+    z = vae.encode(obs["vector"][:, 0, :].to(device), sample=False)
+    state = None
+    max_steps = max(1, int(args.video_max_steps))
+    for _ in range(max_steps):
+        action = torch.randint(0, config.action_size, (1, config.num_agents), generator=generator, device=device)
+        obs, reward, done, truncated, _ = env.step(action)
+        pred_z, _, _, state = rnn.step(z, action[:, 0], state, deterministic=True)
+        imagined = vae.decode_tabular(pred_z)
+        tabular = {
+            "agent_0": {
+                "grid": imagined["grid"][0].detach().cpu().numpy().astype("int8"),
+                "self": imagined["self"][0].detach().cpu().numpy().astype("int16"),
+            }
+        }
+        frame = env.render(env_index=0, mode="rgb_array", tabular_observations=tabular)
+        frames.append(frame[:, :, :3] if frame.shape[-1] == 4 else frame)
+        z = vae.encode(obs["vector"][:, 0, :].to(device), sample=False)
+        if bool((done | truncated).all()):
+            break
+    env.close()
+    return frames
+
+
+@torch.no_grad()
+def log_policy_video(logger, args, config, device, step=None):
+    if not should_log_wandb_videos(args):
+        return
+    try:
+        frames = record_real_policy_video(args, config, device)
+        logged = logger.log_video(
+            "video_policy_rollout",
+            frames,
+            fps=args.video_fps,
+            step=step,
+            namespace="marl_evaluation",
+        )
+        logger.log(
+            {
+                "video_policy_rollout_logged": int(bool(logged)),
+                "video_policy_rollout_frame_count": int(len(frames)),
+            },
+            step=step,
+            namespace="marl_evaluation",
+        )
+    except Exception as exc:
+        logger.log(
+            {
+                "video_policy_rollout_logged": 0,
+                "video_policy_rollout_generation_failed": 1,
+                "video_policy_rollout_error": str(exc),
+            },
+            step=step,
+            namespace="marl_evaluation",
+        )
+
+
+@torch.no_grad()
+def record_real_policy_video(args, config, device):
+    env = VectorizedGridcraftEnv(num_envs=1, num_agents=config.num_agents, device=device, seed=args.seed + 9100, config=config)
+    generator = torch.Generator(device=device)
+    generator.manual_seed(args.seed + 9101)
+    frames = []
+    env.reset()
+    max_steps = max(1, int(args.video_max_steps))
+    for _ in range(max_steps):
+        action = torch.randint(0, config.action_size, (1, config.num_agents), generator=generator, device=device)
+        _, _, done, truncated, _ = env.step(action)
+        frame = env.render(env_index=0, mode="rgb_array")
+        frames.append(frame[:, :, :3] if frame.shape[-1] == 4 else frame)
+        if bool((done | truncated).all()):
+            break
+    env.close()
+    return frames
 
 
 if __name__ == "__main__":

@@ -19,13 +19,17 @@ RNN_STEPS="${RNN_STEPS:-2000}"
 WM_BATCH_SIZE="${WM_BATCH_SIZE:-512}"
 WM_NUM_WORKERS="${WM_NUM_WORKERS:-4}"
 WM_EVAL_EVERY="${WM_EVAL_EVERY:-500}"
+WM_VIDEO_EVERY="${WM_VIDEO_EVERY:-$WM_EVAL_EVERY}"
 WM_HORIZONS="${WM_HORIZONS:-1 5 10 25 50}"
+VIDEO_MAX_STEPS="${VIDEO_MAX_STEPS:-100}"
+VIDEO_FPS="${VIDEO_FPS:-10}"
 
 # Native BenchMARL MAPPO train/eval.
 MARL_NUM_ENVS="${MARL_NUM_ENVS:-64}"
 MARL_MAX_STEPS="${MARL_MAX_STEPS:-200}"
 MARL_MAX_ITERS="${MARL_MAX_ITERS:-50}"
 MARL_FRAMES_PER_BATCH="${MARL_FRAMES_PER_BATCH:-2048}"
+MARL_WANDB_STEP_OFFSET="${MARL_WANDB_STEP_OFFSET:-$((VAE_STEPS + RNN_STEPS + 1000))}"
 
 echo "=== Step 1/2: World Model train/eval + lightweight policy eval (${BASELINE_ID}) ==="
 echo "W&B run id: ${WANDB_RUN_ID}"
@@ -42,6 +46,9 @@ echo "W&B run id: ${WANDB_RUN_ID}"
   --wm-num-workers "$WM_NUM_WORKERS" \
   --seq-len 32 \
   --eval-every "$WM_EVAL_EVERY" \
+  --video-every "$WM_VIDEO_EVERY" \
+  --video-max-steps "$VIDEO_MAX_STEPS" \
+  --video-fps "$VIDEO_FPS" \
   --horizons $WM_HORIZONS \
   --device "$DEVICE" \
   --wandb-id "$WANDB_RUN_ID" \
@@ -60,6 +67,9 @@ echo "=== Step 2/2: Native BenchMARL MAPPO train/eval on vGridcraft ==="
   --wandb-id "$WANDB_RUN_ID" \
   --wandb-name "$RUN_NAME" \
   --wandb-group "$WANDB_GROUP" \
+  --wandb-step-offset "$MARL_WANDB_STEP_OFFSET" \
+  --video-max-steps "$VIDEO_MAX_STEPS" \
+  --video-fps "$VIDEO_FPS" \
   $WANDB_FLAG
 
 echo "=== Completed full baseline pipeline (${BASELINE_ID}) ==="
