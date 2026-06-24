@@ -42,8 +42,20 @@ def collect_or_load_dataset(
 ) -> tuple[dict[str, torch.Tensor], Path, bool]:
     config = config or VGridcraftConfig(max_steps=max_steps, seed=seed)
     path = dataset_path(dataset_dir, config, episodes, max_steps, seed)
+    print(
+        "[dataset] requested "
+        f"path={path} episodes={episodes} max_steps={max_steps} "
+        f"num_envs={num_envs} num_agents={config.num_agents} seed={seed} "
+        f"reuse={int(bool(reuse))} force_recollect={int(bool(force_recollect))}",
+        flush=True,
+    )
     if reuse and path.exists() and not force_recollect:
+        print(f"[dataset] reusing cached transitions from {path}", flush=True)
         return torch.load(path, map_location="cpu"), path, True
+    if force_recollect and path.exists():
+        print(f"[dataset] force recollect enabled; replacing cached transitions at {path}", flush=True)
+    else:
+        print(f"[dataset] cache miss; collecting transitions into {path}", flush=True)
     data = collect_dataset(
         episodes=episodes,
         max_steps=max_steps,
@@ -54,6 +66,7 @@ def collect_or_load_dataset(
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(data, path)
+    print(f"[dataset] saved transitions to {path}", flush=True)
     return data, path, False
 
 
@@ -74,6 +87,12 @@ def collect_dataset(
     completed = 0
     generator = torch.Generator(device=env.device)
     generator.manual_seed(seed + 991)
+    print(
+        "[dataset] collection started "
+        f"episodes={episodes} max_steps={max_steps} num_envs={num_envs} "
+        f"num_agents={config.num_agents} device={env.device}",
+        flush=True,
+    )
     while completed < episodes:
         obs = env.reset()
         episode_obs = []
@@ -103,6 +122,8 @@ def collect_dataset(
         reward_records.append(reward_tensor[:take])
         done_records.append(done_tensor[:take])
         completed += take
+        if completed == episodes or completed % max(num_envs * 10, 1) == 0:
+            print(f"[dataset] collected {completed}/{episodes} episodes", flush=True)
     return {
         "obs": torch.cat(obs_records, dim=0).float(),
         "action": torch.cat(action_records, dim=0).long(),

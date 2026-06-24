@@ -13,8 +13,9 @@ cd "$(dirname "$0")"
 
 PYTHON_BIN="${PYTHON_BIN:-../.venv/bin/python}"
 DEVICE="${DEVICE:-cuda}"
+NUM_AGENTS="${NUM_AGENTS:-1}"
 SEEDS="${SEEDS:-1 2 3}"
-WANDB_FLAG="${WANDB_FLAG:---wandb}"
+WANDB_FLAG="${WANDB_FLAG---wandb}"
 WANDB_PROJECT="${WANDB_PROJECT:-ns-mawm-gridcraft}"
 
 # World model defaults. These are intended for serious experimental runs, not
@@ -58,6 +59,7 @@ printf '  - %s\n' "${BASELINES[@]}"
 echo "Seeds: ${SEEDS}"
 echo "W&B project: ${WANDB_PROJECT}"
 echo "Device: ${DEVICE}"
+echo "Agents: ${NUM_AGENTS}"
 echo "World model: num_envs=${WM_NUM_ENVS}, episodes=${WM_EPISODES}, max_steps=${WM_MAX_STEPS}, vae_steps=${VAE_STEPS}, rnn_steps=${RNN_STEPS}, batch=${WM_BATCH_SIZE}, eval_every=${WM_EVAL_EVERY}"
 echo "MARL: num_envs=${MARL_NUM_ENVS}, max_steps=${MARL_MAX_STEPS}, max_iters=${MARL_MAX_ITERS}, frames_per_batch=${MARL_FRAMES_PER_BATCH}"
 echo "Videos: every=${WM_VIDEO_EVERY}, max_steps=${VIDEO_MAX_STEPS}, fps=${VIDEO_FPS}"
@@ -70,9 +72,10 @@ for seed in $SEEDS; do
     BASELINE_ID="$baseline" \
     SEED="$seed" \
     DEVICE="$DEVICE" \
+    NUM_AGENTS="$NUM_AGENTS" \
     WANDB_FLAG="$WANDB_FLAG" \
     WANDB_PROJECT="$WANDB_PROJECT" \
-    RUN_NAME="${baseline}_full_seed${seed}" \
+    RUN_NAME="${baseline}_a${NUM_AGENTS}_full_seed${seed}" \
     WANDB_GROUP="$baseline" \
     WM_NUM_ENVS="$WM_NUM_ENVS" \
     WM_EPISODES="$WM_EPISODES" \

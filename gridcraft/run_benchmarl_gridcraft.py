@@ -61,7 +61,7 @@ def main() -> None:
 
     baseline = BASELINES[args.baseline_id]
     config = VGridcraftConfig(num_agents=args.num_agents, max_steps=args.max_steps, seed=args.seed)
-    run_name = f"{args.baseline_id}_seed{args.seed}"
+    run_name = f"{args.baseline_id}_a{args.num_agents}_seed{args.seed}"
     run_dir = Path(args.run_dir) / run_name
     checkpoint_dir = run_dir / "checkpoints"
     eval_dir = run_dir / "eval"
@@ -109,8 +109,11 @@ def main() -> None:
         logger.log(
             {
                 "dataset_reused": float(reused),
+                "dataset_collected": float(not reused),
                 "dataset_episodes": int(data["obs"].shape[0]),
                 "dataset_steps": int(data["obs"].shape[1]),
+                "dataset_agents": int(data["obs"].shape[2]) if data["obs"].ndim == 4 else 1,
+                "dataset_agent_steps": int(data["obs"].shape[0] * data["obs"].shape[1] * (data["obs"].shape[2] if data["obs"].ndim == 4 else 1)),
                 "dataset_path": str(dataset_file),
             },
             step=1,
@@ -172,22 +175,20 @@ def train_vae(data, args, device, checkpoint_dir: Path, logger):
 
 @torch.no_grad()
 def encode_dataset(vae, data, device, batch_size):
-    obs = first_agent_obs(data["obs"])
+    obs = all_agent_obs(data["obs"])
     flat = obs.reshape(-1, obs.shape[-1]).float()
     chunks = []
     for start in range(0, flat.shape[0], batch_size):
         chunks.append(vae.encode(flat[start:start + batch_size].to(device), sample=False).cpu())
     z = torch.cat(chunks, dim=0)
-    return z.reshape(obs.shape[0], obs.shape[1], -1)
+    return z.reshape(*obs.shape[:-1], -1)
 
 
 def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logger, vae, step_offset: int = 0):
     model = TorchGridcraftRNN().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
-    actions = data["action"].squeeze(-1)
-    rewards = data["reward"].squeeze(-1)
-    dones = data["done"].float()
-    dataset = SequenceDataset(z, actions, rewards, dones, seq_len=min(args.seq_len, z.shape[1] - 1))
+    z_seq, actions, rewards, dones = flatten_agent_sequences(z, data["action"], data["reward"], data["done"])
+    dataset = SequenceDataset(z_seq, actions, rewards, dones, seq_len=min(args.seq_len, z_seq.shape[1] - 1))
     effective_batch_size = min(args.wm_batch_size, len(dataset))
     loader = DataLoader(
         dataset,
@@ -232,8 +233,10 @@ def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logge
 
 @torch.no_grad()
 def evaluate_world_model(vae, rnn, data, device, horizons):
-    obs = first_agent_obs(data["obs"])[: min(128, data["obs"].shape[0])].to(device)
-    actions = data["action"][: obs.shape[0]].squeeze(-1).to(device)
+    obs = all_agent_obs(data["obs"])[: min(128, data["obs"].shape[0])]
+    action_data = data["action"][: obs.shape[0]]
+    obs = flatten_obs_agents(obs).to(device)
+    actions = flatten_action_agents(action_data).to(device)
     z = vae.encode(obs.reshape(-1, obs.shape[-1]), sample=False).reshape(obs.shape[0], obs.shape[1], -1)
     result = {}
     for horizon in horizons:
@@ -253,10 +256,70 @@ def evaluate_world_model(vae, rnn, data, device, horizons):
     return result
 
 
-def first_agent_obs(obs: torch.Tensor) -> torch.Tensor:
+def all_agent_obs(obs: torch.Tensor) -> torch.Tensor:
     if obs.ndim == 4:
-        return obs[:, :, 0, :]
+        return obs
+    if obs.ndim == 3:
+        return obs.unsqueeze(2)
     return obs
+
+
+def flatten_obs_agents(obs: torch.Tensor) -> torch.Tensor:
+    obs = all_agent_obs(obs)
+    episodes, steps, agents, obs_size = obs.shape
+    return obs.permute(0, 2, 1, 3).reshape(episodes * agents, steps, obs_size)
+
+
+def flatten_action_agents(actions: torch.Tensor) -> torch.Tensor:
+    if actions.ndim == 2:
+        return actions
+    if actions.ndim == 3:
+        episodes, steps, agents = actions.shape
+        return actions.permute(0, 2, 1).reshape(episodes * agents, steps)
+    if actions.ndim == 4 and actions.shape[-1] == 1:
+        return flatten_action_agents(actions.squeeze(-1))
+    raise ValueError(f"unsupported action tensor shape: {tuple(actions.shape)}")
+
+
+def flatten_reward_agents(rewards: torch.Tensor) -> torch.Tensor:
+    if rewards.ndim == 2:
+        return rewards
+    if rewards.ndim == 3:
+        episodes, steps, agents = rewards.shape
+        return rewards.permute(0, 2, 1).reshape(episodes * agents, steps)
+    if rewards.ndim == 4 and rewards.shape[-1] == 1:
+        return flatten_reward_agents(rewards.squeeze(-1))
+    raise ValueError(f"unsupported reward tensor shape: {tuple(rewards.shape)}")
+
+
+def flatten_done_agents(dones: torch.Tensor, num_agents: int) -> torch.Tensor:
+    if dones.ndim == 2:
+        episodes, steps = dones.shape
+        return dones[:, None, :].expand(episodes, num_agents, steps).reshape(episodes * num_agents, steps)
+    if dones.ndim == 3:
+        episodes, steps, agents = dones.shape
+        return dones.permute(0, 2, 1).reshape(episodes * agents, steps)
+    if dones.ndim == 4 and dones.shape[-1] == 1:
+        return flatten_done_agents(dones.squeeze(-1), num_agents)
+    raise ValueError(f"unsupported done tensor shape: {tuple(dones.shape)}")
+
+
+def flatten_agent_sequences(z: torch.Tensor, actions: torch.Tensor, rewards: torch.Tensor, dones: torch.Tensor):
+    if z.ndim == 3:
+        z_seq = z
+        num_agents = 1
+    elif z.ndim == 4:
+        episodes, steps, agents, z_size = z.shape
+        num_agents = agents
+        z_seq = z.permute(0, 2, 1, 3).reshape(episodes * agents, steps, z_size)
+    else:
+        raise ValueError(f"unsupported latent tensor shape: {tuple(z.shape)}")
+    return (
+        z_seq,
+        flatten_action_agents(actions),
+        flatten_reward_agents(rewards),
+        flatten_done_agents(dones, num_agents).float(),
+    )
 
 
 def grid_mismatch(decoded, target):
@@ -337,23 +400,23 @@ def record_world_model_video(args, config, vae, rnn, device):
     generator.manual_seed(args.seed + 9001)
     frames = []
     obs = env.reset()
-    z = vae.encode(obs["vector"][:, 0, :].to(device), sample=False)
+    z = vae.encode(obs["vector"][0].to(device), sample=False)
     state = None
     max_steps = max(1, int(args.video_max_steps))
     for _ in range(max_steps):
         action = torch.randint(0, config.action_size, (1, config.num_agents), generator=generator, device=device)
         obs, reward, done, truncated, _ = env.step(action)
-        pred_z, _, _, state = rnn.step(z, action[:, 0], state, deterministic=True)
+        pred_z, _, _, state = rnn.step(z, action[0], state, deterministic=True)
         imagined = vae.decode_tabular(pred_z)
-        tabular = {
-            "agent_0": {
-                "grid": imagined["grid"][0].detach().cpu().numpy().astype("int8"),
-                "self": imagined["self"][0].detach().cpu().numpy().astype("int16"),
+        tabular = {}
+        for agent_idx in range(config.num_agents):
+            tabular[f"agent_{agent_idx}"] = {
+                "grid": imagined["grid"][agent_idx].detach().cpu().numpy().astype("int8"),
+                "self": imagined["self"][agent_idx].detach().cpu().numpy().astype("int16"),
             }
-        }
         frame = env.render(env_index=0, mode="rgb_array", tabular_observations=tabular)
         frames.append(frame[:, :, :3] if frame.shape[-1] == 4 else frame)
-        z = vae.encode(obs["vector"][:, 0, :].to(device), sample=False)
+        z = vae.encode(obs["vector"][0].to(device), sample=False)
         if bool((done | truncated).all()):
             break
     env.close()

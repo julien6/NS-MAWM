@@ -5,8 +5,9 @@ PYTHON_BIN="${PYTHON_BIN:-../.venv/bin/python}"
 BASELINE_ID="${BASELINE_ID:-B25_projection_k0.3}"
 SEED="${SEED:-1}"
 DEVICE="${DEVICE:-cuda}"
-WANDB_FLAG="${WANDB_FLAG:---wandb}"
-RUN_NAME="${RUN_NAME:-${BASELINE_ID}_full_seed${SEED}}"
+NUM_AGENTS="${NUM_AGENTS:-1}"
+WANDB_FLAG="${WANDB_FLAG---wandb}"
+RUN_NAME="${RUN_NAME:-${BASELINE_ID}_a${NUM_AGENTS}_full_seed${SEED}}"
 WANDB_RUN_ID="${WANDB_RUN_ID:-${RUN_NAME}_$(date +%Y%m%d_%H%M%S)}"
 WANDB_GROUP="${WANDB_GROUP:-${BASELINE_ID}}"
 
@@ -38,6 +39,7 @@ echo "W&B run id: ${WANDB_RUN_ID}"
   --phase all \
   --seed "$SEED" \
   --num-envs "$WM_NUM_ENVS" \
+  --num-agents "$NUM_AGENTS" \
   --episodes "$WM_EPISODES" \
   --max-steps "$WM_MAX_STEPS" \
   --vae-steps "$VAE_STEPS" \
@@ -60,6 +62,7 @@ echo "=== Step 2/2: Native BenchMARL MAPPO train/eval on vGridcraft ==="
 "$PYTHON_BIN" run_benchmarl_mappo_gridcraft.py \
   --seed "$SEED" \
   --num-envs "$MARL_NUM_ENVS" \
+  --num-agents "$NUM_AGENTS" \
   --max-steps "$MARL_MAX_STEPS" \
   --max-iters "$MARL_MAX_ITERS" \
   --frames-per-batch "$MARL_FRAMES_PER_BATCH" \

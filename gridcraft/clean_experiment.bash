@@ -21,10 +21,16 @@ This will remove generated Gridcraft World Models training artifacts:
   __pycache__/ and nested __pycache__ directories
 
 Source files are kept.
+Vectorized dataset caches under datasets/gridcraft/ are kept by default so
+model-based baselines can reuse collected transitions across runs.
 
 Run again with:
 
   ./clean_experiment.bash --yes
+
+To also remove reusable vectorized datasets, run:
+
+  ./clean_experiment.bash --yes --datasets
 
 EOF
   exit 1
@@ -47,6 +53,11 @@ rm -f \
 
 find . -type d -name __pycache__ -prune -exec rm -rf {} +
 
+if [[ "${2:-}" == "--datasets" ]]; then
+  rm -rf datasets/gridcraft
+  echo "Reusable vectorized dataset cache removed."
+fi
+
 mkdir -p \
   record \
   series \
@@ -57,5 +68,6 @@ mkdir -p \
   initial_z
 
 echo "Gridcraft experiment artifacts removed."
+echo "Reusable vectorized datasets are kept unless --datasets is passed."
 echo "You can start a fresh run with:"
 echo "  ./train_world_model.bash"
