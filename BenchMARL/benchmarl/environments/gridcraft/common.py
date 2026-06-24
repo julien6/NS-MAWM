@@ -51,7 +51,7 @@ class GridcraftClass(TaskClass):
         return env.group_map
 
     def observation_spec(self, env: EnvBase) -> Composite:
-        return env.observation_spec
+        return env.full_observation_spec_unbatched
 
     def info_spec(self, env: EnvBase):
         return None
@@ -60,7 +60,7 @@ class GridcraftClass(TaskClass):
         return None
 
     def action_spec(self, env: EnvBase) -> Composite:
-        return env.action_spec
+        return env.full_action_spec_unbatched
 
     def action_mask_spec(self, env: EnvBase):
         return None

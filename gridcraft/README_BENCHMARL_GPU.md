@@ -35,6 +35,24 @@ Recommended serious command on a CUDA machine:
 
 Datasets are cached under `datasets/gridcraft/` using a deterministic key from the environment config, number of episodes, max steps, and seed. Use `--force-recollect` to rebuild the dataset.
 
+Single-command pipeline: World Model train/eval first, then native BenchMARL
+MAPPO train/eval:
+
+```bash
+cd gridcraft
+./run_full_benchmarl_baseline.bash
+```
+
+Smoke version of the same pipeline:
+
+```bash
+cd gridcraft
+DEVICE=cpu WANDB_FLAG= WM_NUM_ENVS=8 WM_EPISODES=16 WM_MAX_STEPS=20 \
+VAE_STEPS=5 RNN_STEPS=5 WM_BATCH_SIZE=32 WM_NUM_WORKERS=0 WM_EVAL_EVERY=5 \
+MARL_NUM_ENVS=4 MARL_MAX_STEPS=20 MARL_MAX_ITERS=1 MARL_FRAMES_PER_BATCH=64 \
+./run_full_benchmarl_baseline.bash
+```
+
 vGridcraft rendering uses the existing Gridcraft renderer:
 
 ```python

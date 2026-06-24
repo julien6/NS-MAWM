@@ -2,10 +2,10 @@ from html import escape
 
 
 GENERAL = "General"
-WORLD_MODEL_TRAINING = "World Model training"
-WORLD_MODEL_EVALUATION = "World Model evaluation"
-MARL_TRAINING = "MARL training"
-MARL_EVALUATION = "MARL evaluation"
+WORLD_MODEL_TRAINING = "World Model Training"
+WORLD_MODEL_EVALUATION = "World Model Evaluation"
+MARL_TRAINING = "MARL Training"
+MARL_EVALUATION = "MARL Evaluation"
 
 SECTIONS = (
   GENERAL,

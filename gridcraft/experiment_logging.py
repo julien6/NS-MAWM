@@ -32,6 +32,12 @@ class ExperimentLogger:
       "tags": normalize_wandb_tags(tags or []),
       "config": config or {},
     }
+    run_id = os.environ.get("WANDB_RUN_ID")
+    if not run_id and isinstance(config, dict):
+      run_id = config.get("wandb_id")
+    if run_id:
+      kwargs["id"] = run_id
+      kwargs["resume"] = "allow"
     if mode:
       kwargs["mode"] = mode
     kwargs = {key: value for key, value in kwargs.items() if value is not None}
@@ -105,6 +111,7 @@ def add_wandb_args(parser):
   parser.add_argument("--wandb-entity", default=os.environ.get("WANDB_ENTITY"))
   parser.add_argument("--wandb-group", default=None)
   parser.add_argument("--wandb-name", default=None)
+  parser.add_argument("--wandb-id", default=os.environ.get("WANDB_RUN_ID"))
   parser.add_argument("--wandb-mode", default=os.environ.get("WANDB_MODE"))
   parser.add_argument("--wandb-tags", nargs="*", default=[])
   panel_group = parser.add_mutually_exclusive_group()
@@ -131,7 +138,7 @@ def logger_from_args(args, config=None, default_group=None, default_name=None, t
     group=getattr(args, "wandb_group", None) or default_group,
     name=getattr(args, "wandb_name", None) or default_name,
     tags=merged_tags,
-    config=config,
+    config={**(config or {}), **({"wandb_id": getattr(args, "wandb_id", None)} if getattr(args, "wandb_id", None) else {})},
     mode=getattr(args, "wandb_mode", None),
     out_dir=out_dir or "trainlog",
     info_panels=bool(getattr(args, "wandb_info_panels", True)),
