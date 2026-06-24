@@ -44,6 +44,8 @@ gridcraft/tf_rnn/
 gridcraft/tf_initial_z/
 gridcraft/log/
 gridcraft/trainlog/
+gridcraft/runs_benchmarl/
+gridcraft/datasets/
 gridcraft/*.npz
 gridcraft/*.npy
 
