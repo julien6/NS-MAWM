@@ -59,6 +59,8 @@ class VGridcraftConfig:
     entity_classes: int = 4
     item_classes: int = 9
     action_size: int = 15
+    tile_size: int = 48
+    fps: int = 12
 
     @property
     def obs_size(self) -> int:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from pathlib import Path
+import sys
 from typing import Any
 
 import torch
@@ -68,6 +70,7 @@ class VectorizedGridcraftEnv:
         if self.seed is not None:
             self.generator.manual_seed(int(self.seed))
         self._allocate()
+        self._renderer = None
         self.reset()
 
     def _allocate(self) -> None:
@@ -210,6 +213,117 @@ class VectorizedGridcraftEnv:
         numeric[..., :2] = self_vec[..., :2].float() / 20.0
         numeric[..., 2:] = self_vec[..., 2:].float().clamp(0, 10) / 10.0
         return torch.cat([terrain, blocks, entities, numeric], dim=-1)
+
+    def render(self, env_index: int = 0, mode: str = "rgb_array", tabular_observations: object | None = None):
+        """Render one environment from the batch with Gridcraft's PygameRenderer.
+
+        Args:
+            env_index: Batch index to render.
+            mode: `"rgb_array"` returns an RGB frame, `"human"` opens a pygame window.
+            tabular_observations: Optional extra imagined observations. When provided,
+                the Gridcraft renderer appends them to the right of the real world and
+                real observations, matching the existing comparison view.
+        """
+        renderer, render_config = self._ensure_renderer()
+        world = self.to_gridcraft_world(env_index=env_index, render_config=render_config)
+        return renderer.render(world, mode, tabular_observations=tabular_observations)
+
+    def close(self) -> None:
+        if self._renderer is not None:
+            renderer, _ = self._renderer
+            renderer.close()
+            self._renderer = None
+
+    def to_gridcraft_world(self, env_index: int = 0, render_config=None):
+        modules = _gridcraft_render_modules()
+        Item = modules["Item"]
+        AgentState = modules["AgentState"]
+        MobState = modules["MobState"]
+        ItemDrop = modules["ItemDrop"]
+        env_index = int(env_index)
+        if env_index < 0 or env_index >= self.num_envs:
+            raise IndexError(f"env_index {env_index} out of range for num_envs={self.num_envs}")
+
+        class _VectorizedWorldSnapshot:
+            def observations(snapshot_self):
+                return self._observations_numpy(env_index)
+
+        snapshot = _VectorizedWorldSnapshot()
+        snapshot.config = render_config
+        snapshot.terrain = self.terrain[env_index].detach().cpu().numpy().astype("int8")
+        snapshot.blocks = self.blocks[env_index].detach().cpu().numpy().astype("int8")
+        snapshot.agents = {}
+        for agent_idx in range(self.num_agents):
+            inventory = {
+                Item(item_idx): int(self.inventory[env_index, agent_idx, item_idx].detach().cpu())
+                for item_idx in range(self.config.item_classes)
+                if int(self.inventory[env_index, agent_idx, item_idx].detach().cpu()) > 0
+            }
+            equipped_idx = int(self.equipped[env_index, agent_idx].detach().cpu())
+            snapshot.agents[f"agent_{agent_idx}"] = AgentState(
+                agent_id=f"agent_{agent_idx}",
+                x=int(self.agent_x[env_index, agent_idx].detach().cpu()),
+                y=int(self.agent_y[env_index, agent_idx].detach().cpu()),
+                hp=int(self.hp[env_index, agent_idx].detach().cpu()),
+                hunger=int(self.hunger[env_index, agent_idx].detach().cpu()),
+                inventory=inventory,
+                inventory_order=list(Item),
+                equipped=Item(equipped_idx) if equipped_idx >= 0 else None,
+                alive=bool(self.alive[env_index, agent_idx].detach().cpu()),
+            )
+        snapshot.mobs = [
+            MobState(
+                mob_id=mob_idx + 1,
+                x=int(self.mob_x[env_index, mob_idx].detach().cpu()),
+                y=int(self.mob_y[env_index, mob_idx].detach().cpu()),
+                hp=int(self.mob_hp[env_index, mob_idx].detach().cpu()),
+                alive=True,
+            )
+            for mob_idx in range(self.config.max_mobs)
+            if bool(self.mob_alive[env_index, mob_idx].detach().cpu())
+        ]
+        snapshot.items = [
+            ItemDrop(
+                item=Item(int(self.item_type[env_index, item_idx].detach().cpu())),
+                count=int(self.item_count[env_index, item_idx].detach().cpu()),
+                x=int(self.item_x[env_index, item_idx].detach().cpu()),
+                y=int(self.item_y[env_index, item_idx].detach().cpu()),
+            )
+            for item_idx in range(self.config.max_items)
+            if bool(self.item_alive[env_index, item_idx].detach().cpu())
+        ]
+        return snapshot
+
+    def _observations_numpy(self, env_index: int) -> dict[str, dict]:
+        obs = self.observation()
+        grid = obs["grid"][env_index].detach().cpu().numpy().astype("int8")
+        self_vec = obs["self"][env_index].detach().cpu().numpy().astype("int16")
+        return {
+            f"agent_{agent_idx}": {
+                "grid": grid[agent_idx],
+                "self": self_vec[agent_idx],
+            }
+            for agent_idx in range(self.num_agents)
+        }
+
+    def _ensure_renderer(self):
+        if self._renderer is not None:
+            return self._renderer
+        modules = _gridcraft_render_modules()
+        GridcraftConfig = modules["GridcraftConfig"]
+        PygameRenderer = modules["PygameRenderer"]
+        render_config = GridcraftConfig(
+            width=self.config.width,
+            height=self.config.height,
+            num_agents=self.config.num_agents,
+            view_size=self.config.view_size,
+            max_steps=self.config.max_steps,
+            seed=self.config.seed,
+            tile_size=self.config.tile_size,
+            fps=self.config.fps,
+        )
+        self._renderer = (PygameRenderer(render_config), render_config)
+        return self._renderer
 
     def entity_map(self) -> torch.Tensor:
         cfg = self.config
@@ -463,3 +577,23 @@ class VectorizedGridcraftEnv:
         self.item_type[env_id, idx] = item
         self.item_count[env_id, idx] = count
         self.item_alive[env_id, idx] = True
+
+
+def _gridcraft_render_modules():
+    root = Path(__file__).resolve().parents[2]
+    gridcraft_path = root / "Gridcraft"
+    if gridcraft_path.exists() and str(gridcraft_path) not in sys.path:
+        sys.path.insert(0, str(gridcraft_path))
+    from gridcraft.config import GridcraftConfig
+    from gridcraft.constants import Item
+    from gridcraft.entities import AgentState, ItemDrop, MobState
+    from gridcraft.render import PygameRenderer
+
+    return {
+        "GridcraftConfig": GridcraftConfig,
+        "Item": Item,
+        "AgentState": AgentState,
+        "ItemDrop": ItemDrop,
+        "MobState": MobState,
+        "PygameRenderer": PygameRenderer,
+    }

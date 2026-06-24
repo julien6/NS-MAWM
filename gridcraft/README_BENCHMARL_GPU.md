@@ -34,3 +34,14 @@ Recommended serious command on a CUDA machine:
 ```
 
 Datasets are cached under `datasets/gridcraft/` using a deterministic key from the environment config, number of episodes, max steps, and seed. Use `--force-recollect` to rebuild the dataset.
+
+vGridcraft rendering uses the existing Gridcraft renderer:
+
+```python
+from vgridcraft import VGridcraftConfig, VectorizedGridcraftEnv
+
+env = VectorizedGridcraftEnv(num_envs=8, config=VGridcraftConfig(num_agents=1))
+frame = env.render(env_index=0, mode="rgb_array")
+env.render(env_index=0, mode="human")
+env.close()
+```
