@@ -113,7 +113,7 @@ def main() -> None:
                 "dataset_steps": int(data["obs"].shape[1]),
                 "dataset_path": str(dataset_file),
             },
-            step=0,
+            step=1,
             namespace="wm_training",
         )
         vae = train_vae(data, args, device, checkpoint_dir, logger)
@@ -126,7 +126,7 @@ def main() -> None:
 
     if args.phase in ("policy", "all"):
         policy_metrics = run_vectorized_policy_smoke(args, config, device, model_based=baseline["model_based"])
-        logger.log(policy_metrics, step=0, namespace="marl_evaluation")
+        logger.log(policy_metrics, step=1, namespace="marl_evaluation")
         logger.log_summary(policy_metrics, namespace="marl_evaluation")
 
     logger.finish()
@@ -135,13 +135,14 @@ def main() -> None:
 def train_vae(data, args, device, checkpoint_dir: Path, logger):
     model = TorchGridcraftVAE().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+    effective_batch_size = min(args.wm_batch_size, len(RolloutDataset(data)))
     loader = DataLoader(
         RolloutDataset(data),
-        batch_size=args.wm_batch_size,
+        batch_size=effective_batch_size,
         shuffle=True,
         num_workers=args.wm_num_workers,
         pin_memory=device.type == "cuda",
-        drop_last=True,
+        drop_last=False,
     )
     iterator = iter(loader)
     start = time.time()
@@ -157,7 +158,7 @@ def train_vae(data, args, device, checkpoint_dir: Path, logger):
         loss.backward()
         optimizer.step()
         if step == 1 or step % 100 == 0:
-            metrics["vae_samples_per_second"] = step * args.wm_batch_size / max(time.time() - start, 1e-6)
+            metrics["vae_samples_per_second"] = step * effective_batch_size / max(time.time() - start, 1e-6)
             logger.log(metrics, step=step, namespace="wm_training")
         if args.eval_every and step % args.eval_every == 0:
             torch.save(model.state_dict(), checkpoint_dir / f"vae_step_{step}.pt")
@@ -167,12 +168,13 @@ def train_vae(data, args, device, checkpoint_dir: Path, logger):
 
 @torch.no_grad()
 def encode_dataset(vae, data, device, batch_size):
-    flat = data["obs"].reshape(-1, data["obs"].shape[-1]).float()
+    obs = first_agent_obs(data["obs"])
+    flat = obs.reshape(-1, obs.shape[-1]).float()
     chunks = []
     for start in range(0, flat.shape[0], batch_size):
         chunks.append(vae.encode(flat[start:start + batch_size].to(device), sample=False).cpu())
     z = torch.cat(chunks, dim=0)
-    return z.reshape(data["obs"].shape[0], data["obs"].shape[1], -1)
+    return z.reshape(obs.shape[0], obs.shape[1], -1)
 
 
 def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logger, vae):
@@ -182,13 +184,14 @@ def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logge
     rewards = data["reward"].squeeze(-1)
     dones = data["done"].float()
     dataset = SequenceDataset(z, actions, rewards, dones, seq_len=min(args.seq_len, z.shape[1] - 1))
+    effective_batch_size = min(args.wm_batch_size, len(dataset))
     loader = DataLoader(
         dataset,
-        batch_size=args.wm_batch_size,
+        batch_size=effective_batch_size,
         shuffle=True,
         num_workers=args.wm_num_workers,
         pin_memory=device.type == "cuda",
-        drop_last=True,
+        drop_last=False,
     )
     iterator = iter(loader)
     start = time.time()
@@ -207,7 +210,7 @@ def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logge
         loss.backward()
         optimizer.step()
         if step == 1 or step % 100 == 0:
-            metrics["rnn_sequences_per_second"] = step * args.wm_batch_size / max(time.time() - start, 1e-6)
+            metrics["rnn_sequences_per_second"] = step * effective_batch_size / max(time.time() - start, 1e-6)
             logger.log(metrics, step=step, namespace="wm_training")
         if args.eval_every and step % args.eval_every == 0:
             checkpoint = checkpoint_dir / f"rnn_step_{step}.pt"
@@ -222,7 +225,7 @@ def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logge
 
 @torch.no_grad()
 def evaluate_world_model(vae, rnn, data, device, horizons):
-    obs = data["obs"][: min(128, data["obs"].shape[0])].to(device)
+    obs = first_agent_obs(data["obs"])[: min(128, data["obs"].shape[0])].to(device)
     actions = data["action"][: obs.shape[0]].squeeze(-1).to(device)
     z = vae.encode(obs.reshape(-1, obs.shape[-1]), sample=False).reshape(obs.shape[0], obs.shape[1], -1)
     result = {}
@@ -241,6 +244,12 @@ def evaluate_world_model(vae, rnn, data, device, horizons):
     result["grid_mismatch"] = float(grid_mismatch(decoded_one, obs[:, 1]).cpu())
     result["self_mse"] = float(torch.mean((decoded_one[:, -11:] - obs[:, 1, -11:]) ** 2).cpu())
     return result
+
+
+def first_agent_obs(obs: torch.Tensor) -> torch.Tensor:
+    if obs.ndim == 4:
+        return obs[:, :, 0, :]
+    return obs
 
 
 def grid_mismatch(decoded, target):

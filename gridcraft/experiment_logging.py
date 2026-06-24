@@ -83,7 +83,7 @@ class ExperimentLogger:
       if self.info_sections is None or GENERAL in self.info_sections:
         payload.update(general_panel_payload(self._wandb, self.config))
       payload.update(info_panel_payload(self._wandb, self.info_sections))
-      self._wandb.log(payload)
+      self._wandb.log(payload, step=0)
 
   def save_json(self, path, payload):
     out_dir = os.path.dirname(path)

@@ -9,7 +9,7 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
   exit 1
 fi
 
-"$PYTHON_BIN" -m pip install --upgrade pip setuptools wheel
+"$PYTHON_BIN" -m pip install --upgrade pip wheel "setuptools<82"
 "$PYTHON_BIN" -m pip install -r "$ROOT_DIR/requirements-benchmarl-gridcraft.txt"
 "$PYTHON_BIN" -m pip install -e "$ROOT_DIR/vGridcraft"
 
