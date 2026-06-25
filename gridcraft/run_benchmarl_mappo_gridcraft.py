@@ -15,6 +15,23 @@ sys.path.insert(0, str(BENCHMARL_DIR))
 sys.path.insert(0, str(ROOT / "vGridcraft"))
 
 from vgridcraft import VGridcraftConfig, VectorizedGridcraftEnv
+from benchmarl.experiment.callback import Callback
+
+
+class MappoEvaluationVideoCallback(Callback):
+    def __init__(self, args):
+        super().__init__()
+        self.args = args
+
+    def on_evaluation_end(self, rollouts):
+        iteration = int(self.experiment.n_iters_performed)
+        if iteration <= 0:
+            return
+        if int(self.args.mappo_video_every_iters) <= 0:
+            return
+        if iteration % int(self.args.mappo_video_every_iters) != 0:
+            return
+        log_marl_evaluation_video(self.args, policy=self.experiment.policy, iteration=iteration)
 
 
 def main() -> None:
@@ -28,6 +45,7 @@ def main() -> None:
     parser.add_argument("--mappo-minibatch-iters", type=int, default=2)
     parser.add_argument("--mappo-eval-every-iters", type=int, default=25)
     parser.add_argument("--mappo-eval-episodes", type=int, default=4)
+    parser.add_argument("--mappo-video-every-iters", type=int, default=250)
     parser.add_argument("--mappo-hidden-size", type=int, default=256)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=1)
@@ -100,9 +118,10 @@ def main() -> None:
         critic_model_config=critic_model_config,
         seed=args.seed,
         config=experiment_config,
+        callbacks=[MappoEvaluationVideoCallback(args)] if args.wandb and args.wandb_videos else None,
     )
     experiment.run()
-    log_marl_evaluation_video(args)
+    log_marl_evaluation_video(args, policy=experiment.policy)
 
 
 def patch_benchmarl_wandb_sections(logger_class, step_offset=0):
@@ -146,7 +165,7 @@ def canonical_benchmarl_key(key):
     return key.replace("/", "_").replace(" ", "_")
 
 
-def log_marl_evaluation_video(args):
+def log_marl_evaluation_video(args, policy=None, iteration=None):
     if not args.wandb or not args.wandb_videos:
         return
     try:
@@ -164,24 +183,28 @@ def log_marl_evaluation_video(args):
         )
         created_run = True
     try:
-        frames = record_real_policy_video(args)
+        frames = record_real_policy_video(args, policy=policy)
         video = np.transpose(np.asarray(frames, dtype=np.uint8), (0, 3, 1, 2))
-        step = int(args.wandb_step_offset) + int(args.max_iters) * int(args.frames_per_batch) + 1
+        policy_iteration = int(args.max_iters) + 1 if iteration is None else int(iteration)
+        step = int(args.wandb_step_offset) + policy_iteration
         wandb.log(
             {
                 "MARL Evaluation/video_policy_rollout": wandb.Video(video, fps=args.video_fps, format="mp4"),
                 "MARL Evaluation/video_policy_rollout_logged": 1,
                 "MARL Evaluation/video_policy_rollout_frame_count": len(frames),
+                "MARL Evaluation/video_policy_rollout_iteration": policy_iteration,
             },
             step=step,
         )
     except Exception as exc:
-        step = int(args.wandb_step_offset) + int(args.max_iters) * int(args.frames_per_batch) + 1
+        policy_iteration = int(args.max_iters) + 1 if iteration is None else int(iteration)
+        step = int(args.wandb_step_offset) + policy_iteration
         wandb.log(
             {
                 "MARL Evaluation/video_policy_rollout_logged": 0,
                 "MARL Evaluation/video_policy_rollout_generation_failed": 1,
                 "MARL Evaluation/video_policy_rollout_error": str(exc),
+                "MARL Evaluation/video_policy_rollout_iteration": policy_iteration,
             },
             step=step,
         )
@@ -191,22 +214,45 @@ def log_marl_evaluation_video(args):
 
 
 @torch.no_grad()
-def record_real_policy_video(args):
+def record_real_policy_video(args, policy=None):
+    from tensordict import TensorDict
+    from torchrl.envs.utils import ExplorationType, set_exploration_type
+
     device = torch.device(args.device)
     config = VGridcraftConfig(num_agents=args.num_agents, max_steps=args.max_steps, seed=args.seed)
     env = VectorizedGridcraftEnv(num_envs=1, num_agents=args.num_agents, device=device, seed=args.seed + 9200, config=config)
     generator = torch.Generator(device=device)
     generator.manual_seed(args.seed + 9201)
     frames = []
-    env.reset()
-    for _ in range(max(1, int(args.video_max_steps))):
-        action = torch.randint(0, config.action_size, (1, args.num_agents), generator=generator, device=device)
-        _, _, done, truncated, _ = env.step(action)
-        frame = env.render(env_index=0, mode="rgb_array")
-        frames.append(frame[:, :, :3] if frame.shape[-1] == 4 else frame)
-        if bool((done | truncated).all()):
-            break
-    env.close()
+    obs = env.reset()
+    try:
+        with set_exploration_type(ExplorationType.DETERMINISTIC):
+            for _ in range(max(1, int(args.video_max_steps))):
+                if policy is None:
+                    action = torch.randint(0, config.action_size, (1, args.num_agents), generator=generator, device=device)
+                else:
+                    td = TensorDict(
+                        {
+                            "agents": TensorDict(
+                                {"observation": obs["vector"].float()},
+                                batch_size=torch.Size([1, args.num_agents]),
+                                device=device,
+                            )
+                        },
+                        batch_size=torch.Size([1]),
+                        device=device,
+                    )
+                    out = policy(td)
+                    action = out.get(("agents", "action")).long()
+                    if action.ndim == 3 and action.shape[-1] == 1:
+                        action = action.squeeze(-1)
+                obs, _, done, truncated, _ = env.step(action)
+                frame = env.render(env_index=0, mode="rgb_array")
+                frames.append(frame[:, :, :3] if frame.shape[-1] == 4 else frame)
+                if bool((done | truncated).all()):
+                    break
+    finally:
+        env.close()
     return frames
 
 
