@@ -18,7 +18,7 @@ from experiment_logging import add_wandb_args, logger_from_args, should_log_wand
 from wandb_schema import GENERAL, MARL_EVALUATION, MARL_TRAINING, WORLD_MODEL_EVALUATION, WORLD_MODEL_TRAINING
 from torch_world_model import TorchGridcraftRNN, TorchGridcraftVAE
 from vgridcraft import VGridcraftConfig, VectorizedGridcraftEnv
-from vgridcraft.dataset import RolloutDataset, SequenceDataset, collect_or_load_dataset
+from vgridcraft.dataset import RolloutDataset, SequenceDataset, collect_or_load_dataset, observation_shape, observation_vectors
 
 
 BASELINES = {
@@ -110,10 +110,10 @@ def main() -> None:
             {
                 "dataset_reused": float(reused),
                 "dataset_collected": float(not reused),
-                "dataset_episodes": int(data["obs"].shape[0]),
-                "dataset_steps": int(data["obs"].shape[1]),
-                "dataset_agents": int(data["obs"].shape[2]) if data["obs"].ndim == 4 else 1,
-                "dataset_agent_steps": int(data["obs"].shape[0] * data["obs"].shape[1] * (data["obs"].shape[2] if data["obs"].ndim == 4 else 1)),
+                "dataset_episodes": observation_shape(data)[0],
+                "dataset_steps": observation_shape(data)[1],
+                "dataset_agents": observation_shape(data)[2],
+                "dataset_agent_steps": int(observation_shape(data)[0] * observation_shape(data)[1] * observation_shape(data)[2]),
                 "dataset_path": str(dataset_file),
             },
             step=1,
@@ -175,13 +175,21 @@ def train_vae(data, args, device, checkpoint_dir: Path, logger):
 
 @torch.no_grad()
 def encode_dataset(vae, data, device, batch_size):
-    obs = all_agent_obs(data["obs"])
-    flat = obs.reshape(-1, obs.shape[-1]).float()
+    episodes, steps, agents = observation_shape(data)
+    dataset = RolloutDataset(data)
+    loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=device.type == "cuda",
+        drop_last=False,
+    )
     chunks = []
-    for start in range(0, flat.shape[0], batch_size):
-        chunks.append(vae.encode(flat[start:start + batch_size].to(device), sample=False).cpu())
+    for batch in loader:
+        chunks.append(vae.encode(batch.to(device, non_blocking=True), sample=False).cpu())
     z = torch.cat(chunks, dim=0)
-    return z.reshape(*obs.shape[:-1], -1)
+    return z.reshape(episodes, steps, agents, -1)
 
 
 def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logger, vae, step_offset: int = 0):
@@ -233,7 +241,8 @@ def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logge
 
 @torch.no_grad()
 def evaluate_world_model(vae, rnn, data, device, horizons):
-    obs = all_agent_obs(data["obs"])[: min(128, data["obs"].shape[0])]
+    episodes, _, _ = observation_shape(data)
+    obs = observation_vectors(data, episode_limit=min(128, episodes))
     action_data = data["action"][: obs.shape[0]]
     obs = flatten_obs_agents(obs).to(device)
     actions = flatten_action_agents(action_data).to(device)
