@@ -9,6 +9,7 @@ from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "vGridcraft"))
@@ -95,6 +96,14 @@ def main() -> None:
     device = torch.device(args.device)
 
     if baseline["model_based"] and args.phase in ("world_model", "all"):
+        print(f"=== World Model Training/Evaluation ({args.baseline_id}) ===", flush=True)
+        print(
+            "World Model config: "
+            f"episodes={args.episodes}, max_steps={args.max_steps}, agents={args.num_agents}, "
+            f"vae_steps={args.vae_steps}, rnn_steps={args.rnn_steps}, "
+            f"batch={args.wm_batch_size}, eval_every={args.eval_every}, video_every={args.video_every}",
+            flush=True,
+        )
         data, dataset_file, reused = collect_or_load_dataset(
             dataset_dir=args.dataset_dir,
             episodes=args.episodes,
@@ -119,17 +128,23 @@ def main() -> None:
             step=1,
             namespace="wm_training",
         )
+        print("=== World Model phase 1/5: VAE training ===", flush=True)
         vae = train_vae(data, args, device, checkpoint_dir, logger)
+        print("=== World Model phase 2/5: latent encoding ===", flush=True)
         z = encode_dataset(vae, data, device, args.wm_batch_size)
+        print("=== World Model phase 3/5: MDN-RNN training and periodic evaluation ===", flush=True)
         rnn = train_rnn(z, data, args, device, checkpoint_dir, eval_dir, logger, vae, step_offset=args.vae_steps)
+        print("=== World Model phase 4/5: final evaluation ===", flush=True)
         metrics = evaluate_world_model(vae, rnn, data, device, horizons=args.horizons)
         (eval_dir / "world_model_summary.json").write_text(json.dumps(metrics, indent=2))
         final_eval_step = args.vae_steps + args.rnn_steps + 1
         logger.log(metrics, step=final_eval_step, namespace="wm_evaluation")
+        print("=== World Model phase 5/5: final video ===", flush=True)
         log_world_model_video(logger, args, config, vae, rnn, device, step=final_eval_step)
         logger.log_summary(metrics, namespace="wm_evaluation")
 
     if args.phase in ("policy", "all"):
+        print("=== MARL Evaluation: lightweight policy smoke ===", flush=True)
         policy_metrics = run_vectorized_policy_smoke(args, config, device, model_based=baseline["model_based"])
         policy_step = args.vae_steps + args.rnn_steps + 2 if baseline["model_based"] else 1
         logger.log(policy_metrics, step=policy_step, namespace="marl_evaluation")
@@ -153,7 +168,14 @@ def train_vae(data, args, device, checkpoint_dir: Path, logger):
     )
     iterator = iter(loader)
     start = time.time()
-    for step in range(1, args.vae_steps + 1):
+    progress = tqdm(
+        range(1, args.vae_steps + 1),
+        total=args.vae_steps,
+        desc="World Model VAE",
+        unit="step",
+        dynamic_ncols=True,
+    )
+    for step in progress:
         try:
             batch = next(iterator)
         except StopIteration:
@@ -164,12 +186,19 @@ def train_vae(data, args, device, checkpoint_dir: Path, logger):
         loss, metrics = model.loss(batch)
         loss.backward()
         optimizer.step()
+        if step == 1 or step % 10 == 0:
+            progress.set_postfix({
+                "loss": f"{float(loss.detach().cpu()):.4f}",
+                "samples/s": f"{step * effective_batch_size / max(time.time() - start, 1e-6):.0f}",
+            })
         if step == 1 or step % 100 == 0:
             metrics["vae_samples_per_second"] = step * effective_batch_size / max(time.time() - start, 1e-6)
             logger.log(metrics, step=step, namespace="wm_training")
         if args.eval_every and step % args.eval_every == 0:
+            progress.write(f"[world model] VAE checkpoint step={step} path={checkpoint_dir / f'vae_step_{step}.pt'}")
             torch.save(model.state_dict(), checkpoint_dir / f"vae_step_{step}.pt")
     torch.save(model.state_dict(), checkpoint_dir / "vae.pt")
+    print(f"[world model] saved final VAE checkpoint to {checkpoint_dir / 'vae.pt'}", flush=True)
     return model
 
 
@@ -186,9 +215,18 @@ def encode_dataset(vae, data, device, batch_size):
         drop_last=False,
     )
     chunks = []
-    for batch in loader:
+    progress = tqdm(
+        loader,
+        total=len(loader),
+        desc="World Model encode",
+        unit="batch",
+        dynamic_ncols=True,
+    )
+    for batch in progress:
         chunks.append(vae.encode(batch.to(device, non_blocking=True), sample=False).cpu())
+    progress.close()
     z = torch.cat(chunks, dim=0)
+    print(f"[world model] encoded latent tensor shape={tuple(z.reshape(episodes, steps, agents, -1).shape)}", flush=True)
     return z.reshape(episodes, steps, agents, -1)
 
 
@@ -208,7 +246,14 @@ def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logge
     )
     iterator = iter(loader)
     start = time.time()
-    for step in range(1, args.rnn_steps + 1):
+    progress = tqdm(
+        range(1, args.rnn_steps + 1),
+        total=args.rnn_steps,
+        desc="World Model MDN-RNN",
+        unit="step",
+        dynamic_ncols=True,
+    )
+    for step in progress:
         try:
             z_seq, action, reward, done = next(iterator)
         except StopIteration:
@@ -223,19 +268,32 @@ def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logge
         loss.backward()
         optimizer.step()
         global_step = step_offset + step
+        if step == 1 or step % 10 == 0:
+            progress.set_postfix({
+                "loss": f"{float(loss.detach().cpu()):.4f}",
+                "seq/s": f"{step * effective_batch_size / max(time.time() - start, 1e-6):.0f}",
+            })
         if step == 1 or step % 100 == 0:
             metrics["rnn_sequences_per_second"] = step * effective_batch_size / max(time.time() - start, 1e-6)
             logger.log(metrics, step=global_step, namespace="wm_training")
         if args.eval_every and step % args.eval_every == 0:
             checkpoint = checkpoint_dir / f"rnn_step_{step}.pt"
             torch.save(model.state_dict(), checkpoint)
+            progress.write(f"[world model] evaluating RNN checkpoint step={step} global_step={global_step}")
             metrics = evaluate_world_model(vae, model, data, device, horizons=args.horizons)
             metrics["checkpoint_step"] = step
             (eval_dir / f"world_model_step_{step}.json").write_text(json.dumps(metrics, indent=2))
             logger.log(metrics, step=global_step, namespace="wm_evaluation")
+            progress.write(
+                "[world model] eval "
+                f"step={step} grid_mismatch={metrics.get('grid_mismatch', float('nan')):.4f} "
+                f"self_mse={metrics.get('self_mse', float('nan')):.4f}"
+            )
             if args.video_every and step % args.video_every == 0:
+                progress.write(f"[world model] logging comparison video step={step} global_step={global_step}")
                 log_world_model_video(logger, args, args_to_config(args), vae, model, device, step=global_step)
     torch.save(model.state_dict(), checkpoint_dir / "rnn.pt")
+    print(f"[world model] saved final RNN checkpoint to {checkpoint_dir / 'rnn.pt'}", flush=True)
     return model
 
 
