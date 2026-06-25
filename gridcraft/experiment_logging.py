@@ -83,6 +83,13 @@ class ExperimentLogger:
         return False
       raise
 
+  def log_table(self, name, columns, data, step=None, namespace=None):
+    if self.run is None or self._wandb is None:
+      return False
+    table = self._wandb.Table(columns=list(columns), data=list(data))
+    self._wandb.log(route_metrics({name: table}, namespace=namespace), step=step)
+    return True
+
   def log_info_panels(self):
     if self.run is not None:
       payload = {}

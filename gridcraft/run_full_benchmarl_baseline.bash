@@ -10,8 +10,9 @@ WANDB_FLAG="${WANDB_FLAG---wandb}"
 RUN_NAME="${RUN_NAME:-${BASELINE_ID}_a${NUM_AGENTS}_full_seed${SEED}}"
 WANDB_RUN_ID="${WANDB_RUN_ID:-${RUN_NAME}_$(date +%Y%m%d_%H%M%S)}"
 WANDB_GROUP="${WANDB_GROUP:-${BASELINE_ID}}"
+DRY_RUN="${DRY_RUN:-0}"
 
-# World model + lightweight policy evaluation.
+# World-model phase for model-based baselines; lightweight real policy smoke for B00.
 WM_NUM_ENVS="${WM_NUM_ENVS:-128}"
 WM_EPISODES="${WM_EPISODES:-1000}"
 WM_MAX_STEPS="${WM_MAX_STEPS:-200}"
@@ -24,8 +25,32 @@ WM_VIDEO_EVERY="${WM_VIDEO_EVERY:-$WM_EVAL_EVERY}"
 WM_HORIZONS="${WM_HORIZONS:-1 5 10 25 50}"
 VIDEO_MAX_STEPS="${VIDEO_MAX_STEPS:-100}"
 VIDEO_FPS="${VIDEO_FPS:-10}"
+SHARED_MODEL_DIR="${SHARED_MODEL_DIR:-shared_models}"
+REUSE_VAE_CACHE="${REUSE_VAE_CACHE:-1}"
+FORCE_VAE_RETRAIN="${FORCE_VAE_RETRAIN:-0}"
+REUSE_LATENT_CACHE="${REUSE_LATENT_CACHE:-1}"
+FORCE_LATENT_REENCODE="${FORCE_LATENT_REENCODE:-0}"
 
-# Native BenchMARL MAPPO train/eval.
+VAE_CACHE_ARGS=(--shared-model-dir "$SHARED_MODEL_DIR")
+if [[ "$REUSE_VAE_CACHE" == "1" ]]; then
+  VAE_CACHE_ARGS+=(--reuse-vae-cache)
+else
+  VAE_CACHE_ARGS+=(--no-reuse-vae-cache)
+fi
+if [[ "$FORCE_VAE_RETRAIN" == "1" ]]; then
+  VAE_CACHE_ARGS+=(--force-vae-retrain)
+fi
+if [[ "$REUSE_LATENT_CACHE" == "1" ]]; then
+  VAE_CACHE_ARGS+=(--reuse-latent-cache)
+else
+  VAE_CACHE_ARGS+=(--no-reuse-latent-cache)
+fi
+if [[ "$FORCE_LATENT_REENCODE" == "1" ]]; then
+  VAE_CACHE_ARGS+=(--force-latent-reencode)
+fi
+
+# Downstream MARL train/eval. B00 uses real vGridcraft MAPPO; every
+# model-based baseline uses Dyna MAPPO inside the trained world model.
 MARL_NUM_ENVS="${MARL_NUM_ENVS:-64}"
 MARL_MAX_STEPS="${MARL_MAX_STEPS:-200}"
 MARL_MAX_ITERS="${MARL_MAX_ITERS:-50}"
@@ -37,54 +62,131 @@ MAPPO_EVAL_EPISODES="${MAPPO_EVAL_EPISODES:-4}"
 MAPPO_VIDEO_EVERY_ITERS="${MAPPO_VIDEO_EVERY_ITERS:-250}"
 MAPPO_HIDDEN_SIZE="${MAPPO_HIDDEN_SIZE:-256}"
 MARL_WANDB_STEP_OFFSET="${MARL_WANDB_STEP_OFFSET:-$((VAE_STEPS + RNN_STEPS + 1000))}"
+DYNA_IMAGINED_HORIZON="${DYNA_IMAGINED_HORIZON:-32}"
 
-echo "=== Step 1/2: World Model train/eval + lightweight policy eval (${BASELINE_ID}) ==="
+case "$BASELINE_ID" in
+  B00*|*model-free*)
+    MODEL_BASED=0
+    ;;
+  *)
+    MODEL_BASED=1
+    ;;
+esac
+
+print_cmd() {
+  printf '[dry-run]'
+  for arg in "$@"; do
+    printf ' %q' "$arg"
+  done
+  printf '\n'
+}
+
+if [[ "$MODEL_BASED" == "1" ]]; then
+  echo "=== Step 1/2: World Model train/eval (${BASELINE_ID}) ==="
+else
+  echo "=== Step 1/2: Model-free lightweight real policy smoke (${BASELINE_ID}) ==="
+fi
 echo "W&B run id: ${WANDB_RUN_ID}"
-"$PYTHON_BIN" run_benchmarl_gridcraft.py \
-  --baseline-id "$BASELINE_ID" \
-  --phase all \
-  --seed "$SEED" \
-  --num-envs "$WM_NUM_ENVS" \
-  --num-agents "$NUM_AGENTS" \
-  --episodes "$WM_EPISODES" \
-  --max-steps "$WM_MAX_STEPS" \
-  --vae-steps "$VAE_STEPS" \
-  --rnn-steps "$RNN_STEPS" \
-  --wm-batch-size "$WM_BATCH_SIZE" \
-  --wm-num-workers "$WM_NUM_WORKERS" \
-  --seq-len 32 \
-  --eval-every "$WM_EVAL_EVERY" \
-  --video-every "$WM_VIDEO_EVERY" \
-  --video-max-steps "$VIDEO_MAX_STEPS" \
-  --video-fps "$VIDEO_FPS" \
-  --horizons $WM_HORIZONS \
-  --device "$DEVICE" \
-  --wandb-id "$WANDB_RUN_ID" \
-  --wandb-name "$RUN_NAME" \
-  --wandb-group "$WANDB_GROUP" \
-  $WANDB_FLAG
+WM_PHASE="policy"
+if [[ "$MODEL_BASED" == "1" ]]; then
+  WM_PHASE="world_model"
+fi
 
-echo "=== Step 2/2: Native BenchMARL MAPPO train/eval on vGridcraft ==="
-"$PYTHON_BIN" run_benchmarl_mappo_gridcraft.py \
-  --seed "$SEED" \
-  --num-envs "$MARL_NUM_ENVS" \
-  --num-agents "$NUM_AGENTS" \
-  --max-steps "$MARL_MAX_STEPS" \
-  --max-iters "$MARL_MAX_ITERS" \
-  --frames-per-batch "$MARL_FRAMES_PER_BATCH" \
-  --mappo-minibatch-size "$MAPPO_MINIBATCH_SIZE" \
-  --mappo-minibatch-iters "$MAPPO_MINIBATCH_ITERS" \
-  --mappo-eval-every-iters "$MAPPO_EVAL_EVERY_ITERS" \
-  --mappo-eval-episodes "$MAPPO_EVAL_EPISODES" \
-  --mappo-video-every-iters "$MAPPO_VIDEO_EVERY_ITERS" \
-  --mappo-hidden-size "$MAPPO_HIDDEN_SIZE" \
-  --device "$DEVICE" \
-  --wandb-id "$WANDB_RUN_ID" \
-  --wandb-name "$RUN_NAME" \
-  --wandb-group "$WANDB_GROUP" \
-  --wandb-step-offset "$MARL_WANDB_STEP_OFFSET" \
-  --video-max-steps "$VIDEO_MAX_STEPS" \
-  --video-fps "$VIDEO_FPS" \
-  $WANDB_FLAG
+WM_CMD=(
+  "$PYTHON_BIN" run_benchmarl_gridcraft.py
+  --baseline-id "$BASELINE_ID"
+  --phase "$WM_PHASE"
+  --seed "$SEED"
+  --num-envs "$WM_NUM_ENVS"
+  --num-agents "$NUM_AGENTS"
+  --episodes "$WM_EPISODES"
+  --max-steps "$WM_MAX_STEPS"
+  --vae-steps "$VAE_STEPS"
+  --rnn-steps "$RNN_STEPS"
+  --wm-batch-size "$WM_BATCH_SIZE"
+  --wm-num-workers "$WM_NUM_WORKERS"
+  --seq-len 32
+  --eval-every "$WM_EVAL_EVERY"
+  --video-every "$WM_VIDEO_EVERY"
+  --video-max-steps "$VIDEO_MAX_STEPS"
+  --video-fps "$VIDEO_FPS"
+  --horizons $WM_HORIZONS
+  --device "$DEVICE"
+  --wandb-id "$WANDB_RUN_ID"
+  --wandb-name "$RUN_NAME"
+  --wandb-group "$WANDB_GROUP"
+  "${VAE_CACHE_ARGS[@]}"
+)
+if [[ -n "${WANDB_FLAG}" ]]; then
+  WM_CMD+=($WANDB_FLAG)
+fi
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  print_cmd "${WM_CMD[@]}"
+else
+  "${WM_CMD[@]}"
+fi
+
+if [[ "$MODEL_BASED" == "1" ]]; then
+  echo "=== Step 2/2: Dyna MAPPO train/eval inside the trained World Model ==="
+  MARL_CMD=(
+    "$PYTHON_BIN" run_benchmarl_dyna_gridcraft.py
+    --baseline-id "$BASELINE_ID"
+    --wm-run-dir "runs_benchmarl/${BASELINE_ID}_a${NUM_AGENTS}_seed${SEED}"
+    --seed "$SEED"
+    --num-envs "$MARL_NUM_ENVS"
+    --num-agents "$NUM_AGENTS"
+    --max-steps "$MARL_MAX_STEPS"
+    --max-iters "$MARL_MAX_ITERS"
+    --imagined-horizon "$DYNA_IMAGINED_HORIZON"
+    --mappo-eval-every-iters "$MAPPO_EVAL_EVERY_ITERS"
+    --mappo-eval-episodes "$MAPPO_EVAL_EPISODES"
+    --mappo-video-every-iters "$MAPPO_VIDEO_EVERY_ITERS"
+    --mappo-hidden-size "$MAPPO_HIDDEN_SIZE"
+    --device "$DEVICE"
+    --wandb-id "$WANDB_RUN_ID"
+    --wandb-name "$RUN_NAME"
+    --wandb-group "$WANDB_GROUP"
+    --wandb-step-offset "$MARL_WANDB_STEP_OFFSET"
+    --video-max-steps "$VIDEO_MAX_STEPS"
+    --video-fps "$VIDEO_FPS"
+  )
+  if [[ -n "${WANDB_FLAG}" ]]; then
+    MARL_CMD+=($WANDB_FLAG)
+  fi
+else
+  echo "=== Step 2/2: Native BenchMARL MAPPO train/eval on real vGridcraft (model-free baseline only) ==="
+  MARL_CMD=(
+    "$PYTHON_BIN" run_benchmarl_mappo_gridcraft.py
+    --seed "$SEED"
+    --num-envs "$MARL_NUM_ENVS"
+    --num-agents "$NUM_AGENTS"
+    --max-steps "$MARL_MAX_STEPS"
+    --max-iters "$MARL_MAX_ITERS"
+    --frames-per-batch "$MARL_FRAMES_PER_BATCH"
+    --mappo-minibatch-size "$MAPPO_MINIBATCH_SIZE"
+    --mappo-minibatch-iters "$MAPPO_MINIBATCH_ITERS"
+    --mappo-eval-every-iters "$MAPPO_EVAL_EVERY_ITERS"
+    --mappo-eval-episodes "$MAPPO_EVAL_EPISODES"
+    --mappo-video-every-iters "$MAPPO_VIDEO_EVERY_ITERS"
+    --mappo-hidden-size "$MAPPO_HIDDEN_SIZE"
+    --device "$DEVICE"
+    --wandb-id "$WANDB_RUN_ID"
+    --wandb-name "$RUN_NAME"
+    --wandb-group "$WANDB_GROUP"
+    --wandb-step-offset "$MARL_WANDB_STEP_OFFSET"
+    --video-max-steps "$VIDEO_MAX_STEPS"
+    --video-fps "$VIDEO_FPS"
+  )
+  if [[ -n "${WANDB_FLAG}" ]]; then
+    MARL_CMD+=($WANDB_FLAG)
+  fi
+fi
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  print_cmd "${MARL_CMD[@]}"
+else
+  "${MARL_CMD[@]}"
+fi
 
 echo "=== Completed full baseline pipeline (${BASELINE_ID}) ==="

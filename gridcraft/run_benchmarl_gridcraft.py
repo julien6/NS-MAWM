@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
@@ -16,7 +19,8 @@ sys.path.insert(0, str(ROOT / "vGridcraft"))
 sys.path.insert(0, str(ROOT / "gridcraft"))
 
 from experiment_logging import add_wandb_args, logger_from_args, should_log_wandb_videos
-from wandb_schema import GENERAL, MARL_EVALUATION, MARL_TRAINING, WORLD_MODEL_EVALUATION, WORLD_MODEL_TRAINING
+from ns_symbolic import apply_symbolic_projection, compare_with_symbolic, vector_to_tabular
+from wandb_schema import GENERAL, MARL_EVALUATION, MARL_TRAINING, PSTR_RULES, WORLD_MODEL_EVALUATION, WORLD_MODEL_TRAINING
 from torch_world_model import TorchGridcraftRNN, TorchGridcraftVAE
 from vgridcraft import VGridcraftConfig, VectorizedGridcraftEnv
 from vgridcraft.dataset import RolloutDataset, SequenceDataset, collect_or_load_dataset, observation_shape, observation_vectors
@@ -24,6 +28,7 @@ from vgridcraft.dataset import RolloutDataset, SequenceDataset, collect_or_load_
 
 BASELINES = {
     "B00_model-free-control": {"id": "B00", "variant": "none", "coverage": 0.0, "model_based": False},
+    "B10_neural_k0.0": {"id": "B10", "variant": "neural", "coverage": 0.0, "model_based": True},
     "B25_residual_k0.3": {"id": "B25", "variant": "residual", "coverage": 0.3, "model_based": True},
     "B25_projection_k0.3": {"id": "B25", "variant": "projection", "coverage": 0.3, "model_based": True},
     "B25_regularization_k0.3": {"id": "B25", "variant": "regularization", "coverage": 0.3, "model_based": True},
@@ -56,6 +61,15 @@ def main() -> None:
     parser.add_argument("--video-every", type=int, default=1000)
     parser.add_argument("--horizons", nargs="+", type=int, default=[1, 5, 10])
     parser.add_argument("--learning-rate", type=float, default=1e-3)
+    parser.add_argument("--shared-model-dir", default="shared_models")
+    vae_cache_group = parser.add_mutually_exclusive_group()
+    vae_cache_group.add_argument("--reuse-vae-cache", dest="reuse_vae_cache", action="store_true", default=True)
+    vae_cache_group.add_argument("--no-reuse-vae-cache", dest="reuse_vae_cache", action="store_false")
+    parser.add_argument("--force-vae-retrain", action="store_true")
+    latent_cache_group = parser.add_mutually_exclusive_group()
+    latent_cache_group.add_argument("--reuse-latent-cache", dest="reuse_latent_cache", action="store_true", default=True)
+    latent_cache_group.add_argument("--no-reuse-latent-cache", dest="reuse_latent_cache", action="store_false")
+    parser.add_argument("--force-latent-reencode", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     add_wandb_args(parser)
     args = parser.parse_args()
@@ -128,30 +142,187 @@ def main() -> None:
             step=1,
             namespace="wm_training",
         )
-        print("=== World Model phase 1/5: VAE training ===", flush=True)
-        vae = train_vae(data, args, device, checkpoint_dir, logger)
-        print("=== World Model phase 2/5: latent encoding ===", flush=True)
-        z = encode_dataset(vae, data, device, args.wm_batch_size)
+        print("=== World Model phase 1/5: VAE training/cache ===", flush=True)
+        vae, vae_cache_dir, vae_cache_key = load_or_train_vae(data, args, dataset_file, device, checkpoint_dir, logger)
+        print("=== World Model phase 2/5: latent encoding/cache ===", flush=True)
+        z = load_or_encode_latents(vae, data, args, vae_cache_dir, vae_cache_key, device, logger)
         print("=== World Model phase 3/5: MDN-RNN training and periodic evaluation ===", flush=True)
-        rnn = train_rnn(z, data, args, device, checkpoint_dir, eval_dir, logger, vae, step_offset=args.vae_steps)
+        rnn = train_rnn(z, data, args, device, checkpoint_dir, eval_dir, logger, vae, baseline, step_offset=args.vae_steps)
         print("=== World Model phase 4/5: final evaluation ===", flush=True)
-        metrics = evaluate_world_model(vae, rnn, data, device, horizons=args.horizons)
+        metrics, pstr_rows = evaluate_world_model(vae, rnn, data, device, horizons=args.horizons, baseline=baseline)
         (eval_dir / "world_model_summary.json").write_text(json.dumps(metrics, indent=2))
+        write_pstr_rvr_table(eval_dir / "pstr_rvr_table_final.json", pstr_rows)
         final_eval_step = args.vae_steps + args.rnn_steps + 1
         logger.log(metrics, step=final_eval_step, namespace="wm_evaluation")
+        log_pstr_rvr_table(logger, pstr_rows, step=final_eval_step)
         print("=== World Model phase 5/5: final video ===", flush=True)
         log_world_model_video(logger, args, config, vae, rnn, device, step=final_eval_step)
         logger.log_summary(metrics, namespace="wm_evaluation")
 
-    if args.phase in ("policy", "all"):
+    if args.phase in ("policy", "all") and not baseline["model_based"]:
         print("=== MARL Evaluation: lightweight policy smoke ===", flush=True)
         policy_metrics = run_vectorized_policy_smoke(args, config, device, model_based=baseline["model_based"])
-        policy_step = args.vae_steps + args.rnn_steps + 2 if baseline["model_based"] else 1
+        policy_step = 1
         logger.log(policy_metrics, step=policy_step, namespace="marl_evaluation")
         log_policy_video(logger, args, config, device, step=policy_step)
         logger.log_summary(policy_metrics, namespace="marl_evaluation")
+    elif args.phase in ("policy", "all") and baseline["model_based"]:
+        print(
+            "=== Skipping real-environment policy smoke for model-based baseline; "
+            "downstream MARL must run through Dyna world-model rollouts. ===",
+            flush=True,
+        )
 
     logger.finish()
+
+
+def shared_model_root(args) -> Path:
+    root = Path(args.shared_model_dir)
+    if not root.is_absolute():
+        root = ROOT / "gridcraft" / root
+    return root
+
+
+def vae_cache_payload(args, dataset_file: Path, data) -> dict:
+    probe = TorchGridcraftVAE()
+    return {
+        "cache_version": "vae_cache_v1",
+        "dataset_file": str(Path(dataset_file).resolve()),
+        "dataset_metadata": data.get("metadata", {}),
+        "observation_shape": list(observation_shape(data)),
+        "vae_arch": {
+            "class": "TorchGridcraftVAE",
+            "obs_size": int(probe.obs_size),
+            "z_size": int(probe.z_size),
+            "hidden_size": int(probe.hidden_size),
+            "kl_tolerance": float(probe.kl_tolerance),
+        },
+        "vae_training": {
+            "vae_steps": int(args.vae_steps),
+            "wm_batch_size": int(args.wm_batch_size),
+            "learning_rate": float(args.learning_rate),
+            "seed": int(args.seed),
+        },
+    }
+
+
+def vae_cache_key(payload: dict) -> str:
+    raw = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha1(raw).hexdigest()[:20]
+
+
+def load_json_if_exists(path: Path):
+    if not path.exists():
+        return None
+    with path.open() as f:
+        return json.load(f)
+
+
+def cache_metadata_matches(path: Path, payload: dict, key: str) -> bool:
+    metadata = load_json_if_exists(path)
+    return bool(metadata and metadata.get("cache_key") == key and metadata.get("payload") == payload)
+
+
+def write_cache_metadata(path: Path, payload: dict, key: str, cache_dir: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as f:
+        json.dump(
+            {
+                "cache_key": key,
+                "payload": payload,
+                "vae_path": str(cache_dir / "vae.pt"),
+                "latents_path": str(cache_dir / "latents.pt"),
+                "created_at": int(time.time()),
+            },
+            f,
+            indent=2,
+            sort_keys=True,
+        )
+
+
+def load_or_train_vae(data, args, dataset_file: Path, device, checkpoint_dir: Path, logger):
+    payload = vae_cache_payload(args, dataset_file, data)
+    key = vae_cache_key(payload)
+    cache_dir = shared_model_root(args) / "vae" / key
+    vae_path = cache_dir / "vae.pt"
+    metadata_path = cache_dir / "metadata.json"
+    print(f"[vae-cache] requested key={key} path={cache_dir}", flush=True)
+
+    cache_hit = bool(args.reuse_vae_cache and not args.force_vae_retrain and vae_path.exists() and cache_metadata_matches(metadata_path, payload, key))
+    if cache_hit:
+        print(f"[vae-cache] hit; loading VAE from {vae_path}", flush=True)
+        model = TorchGridcraftVAE().to(device)
+        model.load_state_dict(torch.load(vae_path, map_location=device))
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(vae_path, checkpoint_dir / "vae.pt")
+        logger.log(
+            {
+                "vae_reused": 1,
+                "vae_trained": 0,
+                "vae_cache_key": key,
+                "vae_cache_path": str(cache_dir),
+            },
+            step=1,
+            namespace="wm_training",
+        )
+        return model, cache_dir, key
+
+    reason = "force retrain" if args.force_vae_retrain else "disabled reuse" if not args.reuse_vae_cache else "cache miss"
+    print(f"[vae-cache] miss; training VAE ({reason})", flush=True)
+    model = train_vae(data, args, device, checkpoint_dir, logger)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    torch.save(model.state_dict(), vae_path)
+    write_cache_metadata(metadata_path, payload, key, cache_dir)
+    print(f"[vae-cache] saved VAE to {vae_path}", flush=True)
+    logger.log(
+        {
+            "vae_reused": 0,
+            "vae_trained": 1,
+            "vae_cache_key": key,
+            "vae_cache_path": str(cache_dir),
+        },
+        step=max(1, int(args.vae_steps)),
+        namespace="wm_training",
+    )
+    return model, cache_dir, key
+
+
+@torch.no_grad()
+def load_or_encode_latents(vae, data, args, cache_dir: Path, cache_key: str, device, logger):
+    latent_path = cache_dir / "latents.pt"
+    can_reuse = bool(args.reuse_latent_cache and not args.force_latent_reencode and not args.force_vae_retrain and latent_path.exists())
+    if can_reuse:
+        print(f"[latent-cache] hit; loading latents from {latent_path}", flush=True)
+        z = torch.load(latent_path, map_location="cpu")
+        logger.log(
+            {
+                "latents_reused": 1,
+                "latents_encoded": 0,
+                "vae_cache_key": cache_key,
+                "latent_cache_path": str(latent_path),
+            },
+            step=max(1, int(args.vae_steps)),
+            namespace="wm_training",
+        )
+        return z
+
+    reason = "force reencode" if args.force_latent_reencode or args.force_vae_retrain else "disabled reuse" if not args.reuse_latent_cache else "cache miss"
+    print(f"[latent-cache] miss; encoding dataset ({reason})", flush=True)
+    z = encode_dataset(vae, data, device, args.wm_batch_size)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    torch.save(z, latent_path)
+    print(f"[latent-cache] saved latents to {latent_path}", flush=True)
+    logger.log(
+        {
+            "latents_reused": 0,
+            "latents_encoded": 1,
+            "vae_cache_key": cache_key,
+            "latent_cache_path": str(latent_path),
+        },
+        step=max(1, int(args.vae_steps)),
+        namespace="wm_training",
+    )
+    return z
 
 
 def train_vae(data, args, device, checkpoint_dir: Path, logger):
@@ -230,7 +401,7 @@ def encode_dataset(vae, data, device, batch_size):
     return z.reshape(episodes, steps, agents, -1)
 
 
-def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logger, vae, step_offset: int = 0):
+def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logger, vae, baseline, step_offset: int = 0):
     model = TorchGridcraftRNN().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     z_seq, actions, rewards, dones = flatten_agent_sequences(z, data["action"], data["reward"], data["done"])
@@ -280,14 +451,17 @@ def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logge
             checkpoint = checkpoint_dir / f"rnn_step_{step}.pt"
             torch.save(model.state_dict(), checkpoint)
             progress.write(f"[world model] evaluating RNN checkpoint step={step} global_step={global_step}")
-            metrics = evaluate_world_model(vae, model, data, device, horizons=args.horizons)
+            metrics, pstr_rows = evaluate_world_model(vae, model, data, device, horizons=args.horizons, baseline=baseline)
             metrics["checkpoint_step"] = step
             (eval_dir / f"world_model_step_{step}.json").write_text(json.dumps(metrics, indent=2))
+            write_pstr_rvr_table(eval_dir / f"pstr_rvr_table_step_{step}.json", pstr_rows)
             logger.log(metrics, step=global_step, namespace="wm_evaluation")
+            log_pstr_rvr_table(logger, pstr_rows, step=global_step)
             progress.write(
                 "[world model] eval "
                 f"step={step} grid_mismatch={metrics.get('grid_mismatch', float('nan')):.4f} "
-                f"self_mse={metrics.get('self_mse', float('nan')):.4f}"
+                f"self_mse={metrics.get('self_mse', float('nan')):.4f} "
+                f"rvr={metrics.get('rvr_global', float('nan')):.4f}"
             )
             if args.video_every and step % args.video_every == 0:
                 progress.write(f"[world model] logging comparison video step={step} global_step={global_step}")
@@ -298,13 +472,14 @@ def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logge
 
 
 @torch.no_grad()
-def evaluate_world_model(vae, rnn, data, device, horizons):
+def evaluate_world_model(vae, rnn, data, device, horizons, baseline=None):
     episodes, _, _ = observation_shape(data)
-    obs = observation_vectors(data, episode_limit=min(128, episodes))
-    action_data = data["action"][: obs.shape[0]]
-    obs = flatten_obs_agents(obs).to(device)
-    actions = flatten_action_agents(action_data).to(device)
-    z = vae.encode(obs.reshape(-1, obs.shape[-1]), sample=False).reshape(obs.shape[0], obs.shape[1], -1)
+    raw_obs = all_agent_obs(observation_vectors(data, episode_limit=min(128, episodes))).to(device)
+    action_data = data["action"][: raw_obs.shape[0]]
+    raw_actions = normalize_action_tensor(action_data).to(device)
+    flat_obs = flatten_obs_agents(raw_obs)
+    actions = flatten_action_agents(raw_actions)
+    z = vae.encode(flat_obs.reshape(-1, flat_obs.shape[-1]), sample=False).reshape(flat_obs.shape[0], flat_obs.shape[1], -1)
     result = {}
     for horizon in horizons:
         h = min(int(horizon), z.shape[1] - 1)
@@ -314,13 +489,24 @@ def evaluate_world_model(vae, rnn, data, device, horizons):
         for t in range(h):
             pred_z, _, _, state = rnn.step(pred_z, actions[:, t], state, deterministic=True)
         decoded = vae.decode(pred_z)
-        target = obs[:, h]
+        target = flat_obs[:, h]
         result[f"compounding_grid_mismatch_h{h}"] = float(grid_mismatch(decoded, target).cpu())
         result[f"compounding_self_mse_h{h}"] = float(torch.mean((decoded[:, -11:] - target[:, -11:]) ** 2).cpu())
-    decoded_one = vae.decode(z[:, 1])
-    result["grid_mismatch"] = float(grid_mismatch(decoded_one, obs[:, 1]).cpu())
-    result["self_mse"] = float(torch.mean((decoded_one[:, -11:] - obs[:, 1, -11:]) ** 2).cpu())
-    return result
+    pred_one, _, _, _ = rnn.step(z[:, 0], actions[:, 0], None, deterministic=True)
+    decoded_one = vae.decode(pred_one)
+    result["grid_mismatch"] = float(grid_mismatch(decoded_one, flat_obs[:, 1]).cpu())
+    result["self_mse"] = float(torch.mean((decoded_one[:, -11:] - flat_obs[:, 1, -11:]) ** 2).cpu())
+    symbolic_metrics, pstr_rows = evaluate_symbolic_rvr(
+        vae=vae,
+        rnn=rnn,
+        z=z,
+        raw_actions=raw_actions,
+        raw_obs=raw_obs,
+        baseline=baseline or {},
+        device=device,
+    )
+    result.update(symbolic_metrics)
+    return result, pstr_rows
 
 
 def all_agent_obs(obs: torch.Tensor) -> torch.Tensor:
@@ -345,6 +531,16 @@ def flatten_action_agents(actions: torch.Tensor) -> torch.Tensor:
         return actions.permute(0, 2, 1).reshape(episodes * agents, steps)
     if actions.ndim == 4 and actions.shape[-1] == 1:
         return flatten_action_agents(actions.squeeze(-1))
+    raise ValueError(f"unsupported action tensor shape: {tuple(actions.shape)}")
+
+
+def normalize_action_tensor(actions: torch.Tensor) -> torch.Tensor:
+    if actions.ndim == 2:
+        return actions.unsqueeze(2)
+    if actions.ndim == 3:
+        return actions
+    if actions.ndim == 4 and actions.shape[-1] == 1:
+        return normalize_action_tensor(actions.squeeze(-1))
     raise ValueError(f"unsupported action tensor shape: {tuple(actions.shape)}")
 
 
@@ -389,6 +585,142 @@ def flatten_agent_sequences(z: torch.Tensor, actions: torch.Tensor, rewards: tor
     )
 
 
+@torch.no_grad()
+def evaluate_symbolic_rvr(vae, rnn, z, raw_actions, raw_obs, baseline, device):
+    episodes, steps, agents, obs_size = raw_obs.shape
+    if steps < 2:
+        return empty_symbolic_metrics(), pstr_rvr_rows({})
+    pred_one, _, _, _ = rnn.step(z[:, 0], flatten_action_agents(raw_actions)[:, 0], None, deterministic=True)
+    pred_tabular = decode_flat_tabular(vae, pred_one, episodes, agents)
+    current_tabular = vectors_to_joint_tabular(raw_obs[:, 0])
+    joint_actions = actions_to_joint(raw_actions[:, 0])
+    row_metrics = []
+    for episode_idx in range(episodes):
+        row_metrics.append(compare_with_symbolic(
+            pred_tabular[episode_idx],
+            current_tabular[episode_idx],
+            joint_actions[episode_idx],
+            coverage=1.0,
+        ))
+    metrics = average_numeric_metrics(row_metrics)
+    metrics.setdefault("rvr_global", metrics.get("rvr", 0.0))
+    metrics.setdefault("rvr_individual", 0.0)
+    metrics.setdefault("rvr_joint", 0.0)
+    pstr_values = {key[len("rvr/"):]: value for key, value in metrics.items() if key.startswith("rvr/")}
+    variant = str(baseline.get("variant", "neural"))
+    coverage = float(baseline.get("coverage", 0.0))
+    if variant in ("projection", "residual"):
+        post_rows = []
+        for episode_idx in range(episodes):
+            projected, _ = apply_symbolic_projection(
+                pred_tabular[episode_idx],
+                current_tabular[episode_idx],
+                joint_actions[episode_idx],
+                variant,
+                coverage=coverage,
+            )
+            post_rows.append(compare_with_symbolic(
+                projected,
+                current_tabular[episode_idx],
+                joint_actions[episode_idx],
+                coverage=coverage,
+            ))
+        post = average_numeric_metrics(post_rows)
+        if "rvr_global" in post:
+            metrics["rvr_post_global"] = post["rvr_global"]
+        elif "rvr" in post:
+            metrics["rvr_post_global"] = post["rvr"]
+    return metrics, pstr_rvr_rows(pstr_values)
+
+
+def empty_symbolic_metrics():
+    return {
+        "rvr_global": 0.0,
+        "rvr_individual": 0.0,
+        "rvr_joint": 0.0,
+        "determinable_count": 0.0,
+        "determinable_count_individual": 0.0,
+        "determinable_count_joint": 0.0,
+        "map_coverage_ratio": 0.0,
+        "relative_alignment_count": 0.0,
+    }
+
+
+def average_numeric_metrics(rows):
+    if not rows:
+        return empty_symbolic_metrics()
+    keys = sorted({key for row in rows for key in row})
+    result = {}
+    for key in keys:
+        values = [float(row[key]) for row in rows if key in row and isinstance(row[key], (int, float, np.integer, np.floating))]
+        if values:
+            result[key] = float(np.mean(values))
+    return result
+
+
+@torch.no_grad()
+def decode_flat_tabular(vae, z, episodes, agents):
+    decoded = vae.decode_tabular(z)
+    grids = decoded["grid"].detach().cpu().numpy().astype("int8")
+    selves = decoded["self"].detach().cpu().numpy().astype("int16")
+    result = []
+    cursor = 0
+    for _ in range(episodes):
+        row = {}
+        for agent_idx in range(agents):
+            row[f"agent_{agent_idx}"] = {"grid": grids[cursor], "self": selves[cursor]}
+            cursor += 1
+        result.append(row)
+    return result
+
+
+def vectors_to_joint_tabular(obs):
+    obs_np = obs.detach().cpu().numpy()
+    episodes, agents = obs_np.shape[:2]
+    result = []
+    for episode_idx in range(episodes):
+        row = {}
+        for agent_idx in range(agents):
+            row[f"agent_{agent_idx}"] = vector_to_tabular(obs_np[episode_idx, agent_idx])
+        result.append(row)
+    return result
+
+
+def actions_to_joint(actions):
+    actions_np = actions.detach().cpu().long().numpy()
+    episodes, agents = actions_np.shape[:2]
+    result = []
+    for episode_idx in range(episodes):
+        result.append({f"agent_{agent_idx}": int(actions_np[episode_idx, agent_idx]) for agent_idx in range(agents)})
+    return result
+
+
+def pstr_rvr_rows(pstr_values):
+    rows = []
+    for rule in PSTR_RULES:
+        rule_id = rule["id"]
+        value = pstr_values.get(rule_id)
+        rows.append({"PSTR id": rule_id, "RVR": "n/a" if value is None else float(value)})
+    return rows
+
+
+def write_pstr_rvr_table(path: Path, rows):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as f:
+        json.dump(rows, f, indent=2)
+
+
+def log_pstr_rvr_table(logger, rows, step=None):
+    table_rows = [[row["PSTR id"], format_pstr_rvr_value(row["RVR"])] for row in rows]
+    logger.log_table("PSTR RVR table", ["PSTR id", "RVR"], table_rows, step=step, namespace="wm_evaluation")
+
+
+def format_pstr_rvr_value(value):
+    if value == "n/a" or value is None:
+        return "n/a"
+    return f"{float(value):.6f}"
+
+
 def grid_mismatch(decoded, target):
     cursor = 0
     mismatches = []
@@ -415,12 +747,14 @@ def run_vectorized_policy_smoke(args, config, device, model_based: bool):
         if bool((done | truncated).all()):
             break
     prefix = "imagined" if model_based else "real"
-    return {
+    metrics = {
         f"eval_{prefix}_reward": float(returns.mean().cpu()),
-        "eval_real_reward": float(returns.mean().cpu()) if not model_based else 0.0,
         "episode_length": float(lengths.mean().cpu()),
         "policy_backend": "vectorized_random_smoke",
     }
+    if not model_based:
+        metrics["eval_real_reward"] = float(returns.mean().cpu())
+    return metrics
 
 
 def args_to_config(args):

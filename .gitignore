@@ -46,6 +46,7 @@ gridcraft/log/
 gridcraft/trainlog/
 gridcraft/runs_benchmarl/
 gridcraft/datasets/
+gridcraft/shared_models/
 gridcraft/*.npz
 gridcraft/*.npy
 
