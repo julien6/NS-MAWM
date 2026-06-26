@@ -214,7 +214,13 @@ class VectorizedGridcraftEnv:
         numeric[..., 2:] = self_vec[..., 2:].float().clamp(0, 10) / 10.0
         return torch.cat([terrain, blocks, entities, numeric], dim=-1)
 
-    def render(self, env_index: int = 0, mode: str = "rgb_array", tabular_observations: object | None = None):
+    def render(
+        self,
+        env_index: int = 0,
+        mode: str = "rgb_array",
+        tabular_observations: object | None = None,
+        overlay_info: object | None = None,
+    ):
         """Render one environment from the batch with Gridcraft's PygameRenderer.
 
         Args:
@@ -226,7 +232,7 @@ class VectorizedGridcraftEnv:
         """
         renderer, render_config = self._ensure_renderer()
         world = self.to_gridcraft_world(env_index=env_index, render_config=render_config)
-        return renderer.render(world, mode, tabular_observations=tabular_observations)
+        return renderer.render(world, mode, tabular_observations=tabular_observations, overlay_info=overlay_info)
 
     def close(self) -> None:
         if self._renderer is not None:

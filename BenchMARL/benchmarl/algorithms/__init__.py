@@ -12,6 +12,8 @@ from .iql import Iql, IqlConfig
 from .isac import Isac, IsacConfig
 from .maddpg import Maddpg, MaddpgConfig
 from .mappo import Mappo, MappoConfig
+from .mambpo import Mambpo, MambpoConfig
+from .mb_mappo import MBMappo, MBMappoConfig
 from .masac import Masac, MasacConfig
 from .qmix import Qmix, QmixConfig
 from .vdn import Vdn, VdnConfig
@@ -29,6 +31,10 @@ classes = [
     "MaddpgConfig",
     "Mappo",
     "MappoConfig",
+    "Mambpo",
+    "MambpoConfig",
+    "MBMappo",
+    "MBMappoConfig",
     "Masac",
     "MasacConfig",
     "Qmix",
@@ -41,6 +47,8 @@ classes = [
 # This is used to aid loading of algorithms from yaml
 algorithm_config_registry = {
     "mappo": MappoConfig,
+    "mambpo": MambpoConfig,
+    "mb_mappo": MBMappoConfig,
     "ippo": IppoConfig,
     "maddpg": MaddpgConfig,
     "iddpg": IddpgConfig,

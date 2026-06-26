@@ -272,6 +272,9 @@ class Logger:
                     logger.log_scalar(key.replace("/", "_"), value, step=step)
 
     def finish(self):
+        import os
+        if os.environ.get("NS_MAWM_KEEP_WANDB_OPEN") == "1":
+            return
         for logger in self.loggers:
             if isinstance(logger, WandbLogger):
                 import wandb

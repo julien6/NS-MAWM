@@ -735,6 +735,16 @@ class Experiment(CallbackNotifier):
                     self.config.train_device
                 )
                 group_batch = self.algorithm.process_batch(group, group_batch)
+                if getattr(self.algorithm, "latest_metrics", None):
+                    self.logger.log(
+                        {
+                            key: value.mean().item()
+                            if hasattr(value, "mean")
+                            else value
+                            for key, value in self.algorithm.latest_metrics.items()
+                        },
+                        step=self.n_iters_performed,
+                    )
                 if not self.algorithm.has_rnn:
                     group_batch = group_batch.reshape(-1)
 
@@ -962,6 +972,9 @@ class Experiment(CallbackNotifier):
         )
         state_dict = OrderedDict(
             state=state,
+            algorithm_state=self.algorithm.state_dict()
+            if hasattr(self.algorithm, "state_dict")
+            else None,
             **{f"loss_{k}": item.state_dict() for k, item in self.losses.items()},
             **{
                 f"buffer_{k}": item.state_dict()
@@ -994,6 +1007,12 @@ class Experiment(CallbackNotifier):
         self.total_frames = state_dict["state"]["total_frames"]
         self.n_iters_performed = state_dict["state"]["n_iters_performed"]
         self.mean_return = state_dict["state"]["mean_return"]
+        if (
+            "algorithm_state" in state_dict
+            and state_dict["algorithm_state"] is not None
+            and hasattr(self.algorithm, "load_state_dict")
+        ):
+            self.algorithm.load_state_dict(state_dict["algorithm_state"])
         self._on_load_state_dict(state_dict)
 
     def _save_experiment(self) -> None:

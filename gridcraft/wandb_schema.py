@@ -52,10 +52,23 @@ WM_EVALUATION_KEYS = {
 MARL_TRAINING_KEYS = {
   "training_real_reward",
   "training_imagined_reward",
+  "training_imagined_reward_mean_step",
+  "training_sampled_imagined_reward",
   "policy_loss",
   "value_loss",
   "entropy",
   "policy_total_loss",
+  "imagination_world_model_loss",
+  "imagination_world_model_obs_loss",
+  "imagination_world_model_reward_loss",
+  "imagination_world_model_done_loss",
+  "real_ratio",
+  "imagined_ratio",
+  "model_rollout_length",
+  "model_buffer_size",
+  "model_batch_size",
+  "real_batch_size",
+  "imagined_batch_size",
   "step_time_ms",
 }
 

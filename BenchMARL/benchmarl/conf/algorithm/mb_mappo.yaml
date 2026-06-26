@@ -1,0 +1,38 @@
+defaults:
+  - mb_mappo_config
+  - _self_
+
+
+share_param_critic: True
+clip_epsilon: 0.2
+entropy_coef: 0.0
+critic_coef: 1.0
+loss_critic_type: "l2"
+lmbda: 0.9
+scale_mapping: "biased_softplus_1.0"
+use_tanh_normal: True
+minibatch_advantage: False
+
+world_model:
+  enabled: true
+  hidden_sizes: [256, 256]
+  lr: 0.0003
+  train_epochs: 5
+  batch_size: 256
+  predict_delta_obs: true
+  predict_done: false
+  external_model_type: "mlp"
+  external_checkpoint_dir: null
+  external_ns_variant: "neural"
+  external_ns_coverage: 0.0
+  external_num_agents: 1
+
+imagined_rollouts:
+  enabled: true
+  horizon: 3
+  num_branches: 4
+  use_for_actor: false
+  use_for_critic: true
+  value_mixing: "lambda"
+  lambda_imagined: 0.5
+  model_uncertainty_penalty: 0.0

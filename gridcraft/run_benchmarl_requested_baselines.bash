@@ -10,8 +10,8 @@ cd "$(dirname "$0")"
 #
 # Each baseline delegates to run_full_benchmarl_baseline.bash, which produces one
 # W&B run per baseline/seed and runs phases sequentially:
-# B00 uses native BenchMARL MAPPO on real vGridcraft; model-based baselines train
-# their world model, then use Dyna MAPPO inside that trained world model.
+# B00 uses native BenchMARL MASAC on real vGridcraft; model-based baselines train
+# their world model and use MAMBPO by default for downstream MARL.
 
 PYTHON_BIN="${PYTHON_BIN:-../.venv/bin/python}"
 DEVICE="${DEVICE:-cuda}"
@@ -40,9 +40,10 @@ FORCE_VAE_RETRAIN="${FORCE_VAE_RETRAIN:-0}"
 REUSE_LATENT_CACHE="${REUSE_LATENT_CACHE:-1}"
 FORCE_LATENT_REENCODE="${FORCE_LATENT_REENCODE:-0}"
 
-# Downstream MARL defaults. B00 uses these values for native BenchMARL MAPPO on
-# real vGridcraft; model-based baselines use them for Dyna MAPPO world-model
-# rollouts where applicable.
+# Downstream MARL defaults. B00 uses MASAC on real vGridcraft; model-based
+# baselines use MAMBPO unless explicitly overridden.
+MODEL_FREE_DOWNSTREAM_ALGO="${MODEL_FREE_DOWNSTREAM_ALGO:-masac}"
+MODEL_BASED_DOWNSTREAM_ALGO="${MODEL_BASED_DOWNSTREAM_ALGO:-mambpo}"
 MARL_NUM_ENVS="${MARL_NUM_ENVS:-256}"
 MARL_MAX_STEPS="${MARL_MAX_STEPS:-500}"
 MARL_MAX_ITERS="${MARL_MAX_ITERS:-2000}"
@@ -53,6 +54,16 @@ MAPPO_EVAL_EVERY_ITERS="${MAPPO_EVAL_EVERY_ITERS:-25}"
 MAPPO_EVAL_EPISODES="${MAPPO_EVAL_EPISODES:-4}"
 MAPPO_VIDEO_EVERY_ITERS="${MAPPO_VIDEO_EVERY_ITERS:-250}"
 MAPPO_HIDDEN_SIZE="${MAPPO_HIDDEN_SIZE:-256}"
+MB_WORLD_MODEL_TRAIN_EPOCHS="${MB_WORLD_MODEL_TRAIN_EPOCHS:-5}"
+MB_WORLD_MODEL_BATCH_SIZE="${MB_WORLD_MODEL_BATCH_SIZE:-256}"
+MB_WORLD_MODEL_HIDDEN_SIZE="${MB_WORLD_MODEL_HIDDEN_SIZE:-256}"
+MB_IMAGINED_HORIZON="${MB_IMAGINED_HORIZON:-3}"
+MB_IMAGINED_BRANCHES="${MB_IMAGINED_BRANCHES:-4}"
+MB_LAMBDA_IMAGINED="${MB_LAMBDA_IMAGINED:-0.5}"
+MPC_PLANNING_HORIZON="${MPC_PLANNING_HORIZON:-15}"
+MPC_CEM_SAMPLES="${MPC_CEM_SAMPLES:-128}"
+MPC_CEM_ITERS="${MPC_CEM_ITERS:-3}"
+MPC_CEM_ELITE_FRAC="${MPC_CEM_ELITE_FRAC:-0.2}"
 DYNA_IMAGINED_HORIZON="${DYNA_IMAGINED_HORIZON:-32}"
 
 # Evaluation media.
@@ -71,8 +82,13 @@ echo "Device: ${DEVICE}"
 echo "Agents: ${NUM_AGENTS}"
 echo "World model: num_envs=${WM_NUM_ENVS}, episodes=${WM_EPISODES}, max_steps=${WM_MAX_STEPS}, vae_steps=${VAE_STEPS}, rnn_steps=${RNN_STEPS}, batch=${WM_BATCH_SIZE}, eval_every=${WM_EVAL_EVERY}"
 echo "World model cache: shared_model_dir=${SHARED_MODEL_DIR}, reuse_vae=${REUSE_VAE_CACHE}, force_vae_retrain=${FORCE_VAE_RETRAIN}, reuse_latents=${REUSE_LATENT_CACHE}, force_latent_reencode=${FORCE_LATENT_REENCODE}"
-echo "MARL: num_envs=${MARL_NUM_ENVS}, max_steps=${MARL_MAX_STEPS}, max_iters=${MARL_MAX_ITERS}, frames_per_batch=${MARL_FRAMES_PER_BATCH}, minibatch=${MAPPO_MINIBATCH_SIZE}, minibatch_iters=${MAPPO_MINIBATCH_ITERS}, eval_every_iters=${MAPPO_EVAL_EVERY_ITERS}, video_every_iters=${MAPPO_VIDEO_EVERY_ITERS}, dyna_horizon=${DYNA_IMAGINED_HORIZON}"
-echo "MARL routing: B00/model-free uses real vGridcraft MAPPO; all model-based baselines use Dyna MAPPO inside the trained world model."
+echo "MARL: num_envs=${MARL_NUM_ENVS}, max_steps=${MARL_MAX_STEPS}, max_iters=${MARL_MAX_ITERS}, frames_per_batch=${MARL_FRAMES_PER_BATCH}, minibatch=${MAPPO_MINIBATCH_SIZE}, minibatch_iters=${MAPPO_MINIBATCH_ITERS}, eval_every_iters=${MAPPO_EVAL_EVERY_ITERS}, video_every_iters=${MAPPO_VIDEO_EVERY_ITERS}, model_free_downstream=${MODEL_FREE_DOWNSTREAM_ALGO}, model_based_downstream=${MODEL_BASED_DOWNSTREAM_ALGO}"
+echo "MAMBPO/legacy MB-MAPPO params: wm_train_steps=${MB_WORLD_MODEL_TRAIN_EPOCHS}, wm_batch=${MB_WORLD_MODEL_BATCH_SIZE}, imagined_horizon=${MB_IMAGINED_HORIZON}, branches=${MB_IMAGINED_BRANCHES}, lambda_or_imagined_ratio=${MB_LAMBDA_IMAGINED}"
+echo "MPC-CEM: horizon=${MPC_PLANNING_HORIZON}, samples=${MPC_CEM_SAMPLES}, iters=${MPC_CEM_ITERS}, elite_frac=${MPC_CEM_ELITE_FRAC}"
+echo "MARL routing: B00/model-free uses real vGridcraft ${MODEL_FREE_DOWNSTREAM_ALGO}; model-based baselines use MODEL_BASED_DOWNSTREAM_ALGO=${MODEL_BASED_DOWNSTREAM_ALGO}."
+if [[ "$MODEL_BASED_DOWNSTREAM_ALGO" == "imagined_mappo" ]]; then
+  echo "Note: imagined_mappo now runs native BenchMARL MAPPO inside GridcraftDreamTorchRLEnv."
+fi
 echo "Videos: wm_every=${WM_VIDEO_EVERY}, marl_every_iters=${MAPPO_VIDEO_EVERY_ITERS}, max_steps=${VIDEO_MAX_STEPS}, fps=${VIDEO_FPS}"
 
 for seed in $SEEDS; do
@@ -104,6 +120,8 @@ for seed in $SEEDS; do
     FORCE_VAE_RETRAIN="$FORCE_VAE_RETRAIN" \
     REUSE_LATENT_CACHE="$REUSE_LATENT_CACHE" \
     FORCE_LATENT_REENCODE="$FORCE_LATENT_REENCODE" \
+    MODEL_BASED_DOWNSTREAM_ALGO="$MODEL_BASED_DOWNSTREAM_ALGO" \
+    MODEL_FREE_DOWNSTREAM_ALGO="$MODEL_FREE_DOWNSTREAM_ALGO" \
     MARL_NUM_ENVS="$MARL_NUM_ENVS" \
     MARL_MAX_STEPS="$MARL_MAX_STEPS" \
     MARL_MAX_ITERS="$MARL_MAX_ITERS" \
@@ -114,6 +132,16 @@ for seed in $SEEDS; do
     MAPPO_EVAL_EPISODES="$MAPPO_EVAL_EPISODES" \
     MAPPO_VIDEO_EVERY_ITERS="$MAPPO_VIDEO_EVERY_ITERS" \
     MAPPO_HIDDEN_SIZE="$MAPPO_HIDDEN_SIZE" \
+    MB_WORLD_MODEL_TRAIN_EPOCHS="$MB_WORLD_MODEL_TRAIN_EPOCHS" \
+    MB_WORLD_MODEL_BATCH_SIZE="$MB_WORLD_MODEL_BATCH_SIZE" \
+    MB_WORLD_MODEL_HIDDEN_SIZE="$MB_WORLD_MODEL_HIDDEN_SIZE" \
+    MB_IMAGINED_HORIZON="$MB_IMAGINED_HORIZON" \
+    MB_IMAGINED_BRANCHES="$MB_IMAGINED_BRANCHES" \
+    MB_LAMBDA_IMAGINED="$MB_LAMBDA_IMAGINED" \
+    MPC_PLANNING_HORIZON="$MPC_PLANNING_HORIZON" \
+    MPC_CEM_SAMPLES="$MPC_CEM_SAMPLES" \
+    MPC_CEM_ITERS="$MPC_CEM_ITERS" \
+    MPC_CEM_ELITE_FRAC="$MPC_CEM_ELITE_FRAC" \
     DYNA_IMAGINED_HORIZON="$DYNA_IMAGINED_HORIZON" \
     VIDEO_MAX_STEPS="$VIDEO_MAX_STEPS" \
     VIDEO_FPS="$VIDEO_FPS" \

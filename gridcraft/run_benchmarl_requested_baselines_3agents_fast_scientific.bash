@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 #
 # This profile keeps the same seven baselines as the long 3-agent campaign but
 # targets roughly two hours per baseline on Spark. It is calibrated from an
-# observed 3-agent B00 run where 600 MAPPO iterations with 2 PPO passes took
+# observed 3-agent B00 run where 600 policy iterations took
 # around 10-12 minutes. The defaults below do about 10x that policy work while
 # keeping vectorization, larger minibatches, periodic evaluation, and shorter
 # videos. Override any variable from the shell for runtime probes.
@@ -26,7 +26,9 @@ export WM_EVAL_EVERY="${WM_EVAL_EVERY:-2500}"
 export WM_VIDEO_EVERY="${WM_VIDEO_EVERY:-5000}"
 export WM_HORIZONS="${WM_HORIZONS:-1 5 10 25 50 100}"
 
-# Native BenchMARL MAPPO.
+# Native BenchMARL MASAC/MAMBPO.
+export MODEL_FREE_DOWNSTREAM_ALGO="${MODEL_FREE_DOWNSTREAM_ALGO:-masac}"
+export MODEL_BASED_DOWNSTREAM_ALGO="${MODEL_BASED_DOWNSTREAM_ALGO:-mambpo}"
 export MARL_NUM_ENVS="${MARL_NUM_ENVS:-512}"
 export MARL_MAX_STEPS="${MARL_MAX_STEPS:-500}"
 export MARL_MAX_ITERS="${MARL_MAX_ITERS:-3000}"

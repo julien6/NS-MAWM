@@ -19,7 +19,15 @@ sys.path.insert(0, str(ROOT / "vGridcraft"))
 sys.path.insert(0, str(ROOT / "gridcraft"))
 
 from experiment_logging import add_wandb_args, logger_from_args, should_log_wandb_videos
-from ns_symbolic import apply_symbolic_projection, compare_with_symbolic, vector_to_tabular
+from ns_symbolic import (
+    apply_symbolic_projection,
+    compare_joint_with_symbolic,
+    symbolic_batch_targets,
+    symbolic_joint_transition,
+    tabular_mask_to_vector_mask,
+    tabular_to_vector,
+    vector_to_tabular,
+)
 from wandb_schema import GENERAL, MARL_EVALUATION, MARL_TRAINING, PSTR_RULES, WORLD_MODEL_EVALUATION, WORLD_MODEL_TRAINING
 from torch_world_model import TorchGridcraftRNN, TorchGridcraftVAE
 from vgridcraft import VGridcraftConfig, VectorizedGridcraftEnv
@@ -61,6 +69,12 @@ def main() -> None:
     parser.add_argument("--video-every", type=int, default=1000)
     parser.add_argument("--horizons", nargs="+", type=int, default=[1, 5, 10])
     parser.add_argument("--learning-rate", type=float, default=1e-3)
+    parser.add_argument("--lambda-sym", type=float, default=1.0)
+    parser.add_argument("--lambda-residual", type=float, default=0.25)
+    parser.add_argument("--symbolic-train-samples", type=int, default=512)
+    parser.add_argument("--joint-symbolic-train-episodes", type=int, default=8)
+    parser.add_argument("--joint-symbolic-train-steps", type=int, default=8)
+    parser.add_argument("--rvr-eval-steps", type=int, default=50)
     parser.add_argument("--shared-model-dir", default="shared_models")
     vae_cache_group = parser.add_mutually_exclusive_group()
     vae_cache_group.add_argument("--reuse-vae-cache", dest="reuse_vae_cache", action="store_true", default=True)
@@ -129,6 +143,7 @@ def main() -> None:
             reuse=args.reuse_dataset,
             force_recollect=args.force_recollect,
         )
+        attach_symbolic_dataset_targets(data, coverage=float(baseline.get("coverage", 0.0)))
         logger.log(
             {
                 "dataset_reused": float(reused),
@@ -137,6 +152,12 @@ def main() -> None:
                 "dataset_steps": observation_shape(data)[1],
                 "dataset_agents": observation_shape(data)[2],
                 "dataset_agent_steps": int(observation_shape(data)[0] * observation_shape(data)[1] * observation_shape(data)[2]),
+                "dataset_valid_transition_count": int(data.get("metadata", {}).get("valid_transition_count", 0)),
+                "dataset_invalid_padded_transition_count": int(data.get("metadata", {}).get("invalid_padded_transition_count", 0)),
+                "dataset_mean_episode_length": float(data.get("metadata", {}).get("mean_episode_length", 0.0)),
+                "dataset_truncation_or_done_rate": float(data.get("metadata", {}).get("truncation_or_done_rate", 0.0)),
+                "symbolic_target_cached": int("symbolic_target" in data),
+                "symbolic_memory_mean_map_coverage": float(data.get("symbolic_metadata", {}).get("mean_map_coverage_ratio", 0.0)),
                 "dataset_path": str(dataset_file),
             },
             step=1,
@@ -149,7 +170,7 @@ def main() -> None:
         print("=== World Model phase 3/5: MDN-RNN training and periodic evaluation ===", flush=True)
         rnn = train_rnn(z, data, args, device, checkpoint_dir, eval_dir, logger, vae, baseline, step_offset=args.vae_steps)
         print("=== World Model phase 4/5: final evaluation ===", flush=True)
-        metrics, pstr_rows = evaluate_world_model(vae, rnn, data, device, horizons=args.horizons, baseline=baseline)
+        metrics, pstr_rows = evaluate_world_model(vae, rnn, data, device, horizons=args.horizons, baseline=baseline, args=args)
         (eval_dir / "world_model_summary.json").write_text(json.dumps(metrics, indent=2))
         write_pstr_rvr_table(eval_dir / "pstr_rvr_table_final.json", pstr_rows)
         final_eval_step = args.vae_steps + args.rnn_steps + 1
@@ -401,11 +422,78 @@ def encode_dataset(vae, data, device, batch_size):
     return z.reshape(episodes, steps, agents, -1)
 
 
+def attach_symbolic_dataset_targets(data, coverage: float) -> None:
+    if "symbolic_target" in data and "symbolic_mask" in data:
+        return
+    obs = all_agent_obs(observation_vectors(data))
+    actions = normalize_action_tensor(data["action"])
+    episodes, steps, agents, obs_size = obs.shape
+    targets = torch.zeros((episodes, steps, agents, obs_size), dtype=torch.float32)
+    masks = torch.zeros_like(targets, dtype=torch.float32)
+    map_coverages = []
+    alignment_counts = []
+    obs_np = obs.detach().cpu().numpy()
+    actions_np = actions.detach().cpu().long().numpy()
+    print(
+        f"[ns-mawm] precomputing joint symbolic targets episodes={episodes} steps={steps} agents={agents} coverage={coverage}",
+        flush=True,
+    )
+    for episode_idx in range(episodes):
+        memory = None
+        for t in range(max(0, steps - 1)):
+            current_joint = {
+                f"agent_{agent_idx}": vector_to_tabular(obs_np[episode_idx, t, agent_idx])
+                for agent_idx in range(agents)
+            }
+            joint_action = {
+                f"agent_{agent_idx}": int(actions_np[episode_idx, t, agent_idx])
+                for agent_idx in range(agents)
+            }
+            symbolic, mask, memory, report = symbolic_joint_transition(
+                current_joint,
+                joint_action,
+                memory=memory,
+                coverage=coverage,
+            )
+            map_coverages.append(float(report.get("map_coverage_ratio", 0.0)))
+            alignment_counts.append(float(report.get("relative_alignment_count", 0.0)))
+            for agent_idx in range(agents):
+                agent_id = f"agent_{agent_idx}"
+                targets[episode_idx, t, agent_idx] = torch.as_tensor(tabular_to_vector(symbolic[agent_id]))
+                masks[episode_idx, t, agent_idx] = torch.as_tensor(tabular_mask_to_vector_mask(mask[agent_id]).astype(np.float32))
+        if episode_idx == 0 or (episode_idx + 1) % max(1, episodes // 10) == 0:
+            print(f"[ns-mawm] symbolic targets {episode_idx + 1}/{episodes}", flush=True)
+    data["symbolic_target"] = targets
+    data["symbolic_mask"] = masks
+    data["symbolic_metadata"] = {
+        "coverage": float(coverage),
+        "mean_map_coverage_ratio": float(np.mean(map_coverages)) if map_coverages else 0.0,
+        "mean_relative_alignment_count": float(np.mean(alignment_counts)) if alignment_counts else 0.0,
+    }
+
+
 def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logger, vae, baseline, step_offset: int = 0):
     model = TorchGridcraftRNN().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     z_seq, actions, rewards, dones = flatten_agent_sequences(z, data["action"], data["reward"], data["done"])
-    dataset = SequenceDataset(z_seq, actions, rewards, dones, seq_len=min(args.seq_len, z_seq.shape[1] - 1))
+    valid = flatten_valid_agents(data.get("transition_valid"), z.shape[2] if z.ndim == 4 else 1)
+    raw_obs_joint = all_agent_obs(observation_vectors(data))
+    raw_actions_joint = normalize_action_tensor(data["action"])
+    obs_seq = flatten_obs_agents(raw_obs_joint)
+    dataset = SequenceDataset(
+        z_seq,
+        actions,
+        rewards,
+        dones,
+        seq_len=min(args.seq_len, z_seq.shape[1] - 1),
+        valid=valid,
+        obs=obs_seq,
+    )
+    if len(dataset) <= 0:
+        raise RuntimeError("no valid RNN training sequences were available after terminal masking")
+    for param in vae.parameters():
+        param.requires_grad_(False)
+    vae.eval()
     effective_batch_size = min(args.wm_batch_size, len(dataset))
     loader = DataLoader(
         dataset,
@@ -426,16 +514,57 @@ def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logge
     )
     for step in progress:
         try:
-            z_seq, action, reward, done = next(iterator)
+            batch = next(iterator)
         except StopIteration:
             iterator = iter(loader)
-            z_seq, action, reward, done = next(iterator)
+            batch = next(iterator)
+        z_seq, action, reward, done, obs_window = batch
         z_seq = z_seq.to(device, non_blocking=True)
         action = action.to(device, non_blocking=True)
         reward = reward.to(device, non_blocking=True)
         done = done.to(device, non_blocking=True)
+        obs_window = obs_window.to(device, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
         loss, metrics = model.loss(z_seq, action, reward, done)
+        ns_loss, ns_metrics = symbolic_training_loss(
+            vae=vae,
+            rnn=model,
+            z_seq=z_seq,
+            action=action,
+            obs_window=obs_window,
+            baseline=baseline,
+            args=args,
+            device=device,
+        )
+        joint_ns_loss, joint_ns_metrics = joint_symbolic_training_loss(
+            vae=vae,
+            rnn=model,
+            z=z,
+            raw_actions=raw_actions_joint,
+            raw_obs=raw_obs_joint,
+            symbolic_target=data.get("symbolic_target"),
+            symbolic_mask=data.get("symbolic_mask"),
+            baseline=baseline,
+            args=args,
+            device=device,
+            step=step,
+        )
+        if ns_loss is not None:
+            loss = loss + ns_loss
+            metrics.update(ns_metrics)
+        if joint_ns_loss is not None:
+            loss = loss + joint_ns_loss
+            metrics.update(joint_ns_metrics)
+        if ns_loss is not None or joint_ns_loss is not None:
+            metrics["training_symbolic_loss"] = (
+                float(metrics.get("training_symbolic_loss_individual", 0.0))
+                + float(metrics.get("training_symbolic_loss_joint", 0.0))
+            )
+            metrics["training_residual_loss"] = (
+                float(metrics.get("training_residual_loss_individual", 0.0))
+                + float(metrics.get("training_residual_loss_joint", 0.0))
+            )
+            metrics["training_wm_total_loss"] = float(loss.detach().cpu())
         loss.backward()
         optimizer.step()
         global_step = step_offset + step
@@ -451,7 +580,7 @@ def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logge
             checkpoint = checkpoint_dir / f"rnn_step_{step}.pt"
             torch.save(model.state_dict(), checkpoint)
             progress.write(f"[world model] evaluating RNN checkpoint step={step} global_step={global_step}")
-            metrics, pstr_rows = evaluate_world_model(vae, model, data, device, horizons=args.horizons, baseline=baseline)
+            metrics, pstr_rows = evaluate_world_model(vae, model, data, device, horizons=args.horizons, baseline=baseline, args=args)
             metrics["checkpoint_step"] = step
             (eval_dir / f"world_model_step_{step}.json").write_text(json.dumps(metrics, indent=2))
             write_pstr_rvr_table(eval_dir / f"pstr_rvr_table_step_{step}.json", pstr_rows)
@@ -472,7 +601,7 @@ def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logge
 
 
 @torch.no_grad()
-def evaluate_world_model(vae, rnn, data, device, horizons, baseline=None):
+def evaluate_world_model(vae, rnn, data, device, horizons, baseline=None, args=None):
     episodes, _, _ = observation_shape(data)
     raw_obs = all_agent_obs(observation_vectors(data, episode_limit=min(128, episodes))).to(device)
     action_data = data["action"][: raw_obs.shape[0]]
@@ -504,6 +633,7 @@ def evaluate_world_model(vae, rnn, data, device, horizons, baseline=None):
         raw_obs=raw_obs,
         baseline=baseline or {},
         device=device,
+        max_eval_steps=getattr(args, "rvr_eval_steps", 50) if args is not None else 50,
     )
     result.update(symbolic_metrics)
     return result, pstr_rows
@@ -585,46 +715,204 @@ def flatten_agent_sequences(z: torch.Tensor, actions: torch.Tensor, rewards: tor
     )
 
 
+def flatten_valid_agents(valid: torch.Tensor | None, num_agents: int) -> torch.Tensor | None:
+    if valid is None:
+        return None
+    if valid.ndim == 2:
+        episodes, steps = valid.shape
+        return valid[:, None, :].expand(episodes, num_agents, steps).reshape(episodes * num_agents, steps)
+    if valid.ndim == 3:
+        episodes, steps, agents = valid.shape
+        return valid.permute(0, 2, 1).reshape(episodes * agents, steps)
+    if valid.ndim == 4 and valid.shape[-1] == 1:
+        return flatten_valid_agents(valid.squeeze(-1), num_agents)
+    raise ValueError(f"unsupported valid tensor shape: {tuple(valid.shape)}")
+
+
+def symbolic_training_loss(vae, rnn, z_seq, action, obs_window, baseline, args, device):
+    variant = str(baseline.get("variant", "neural"))
+    if variant not in ("regularization", "residual"):
+        return None, {}
+    coverage = float(baseline.get("coverage", 0.0))
+    if coverage <= 0.0:
+        return None, {
+            "training_symbolic_loss": 0.0,
+            "training_residual_loss": 0.0,
+            "training_symbolic_loss_individual": 0.0,
+            "training_residual_loss_individual": 0.0,
+            "training_symbolic_mask_count_individual": 0.0,
+        }
+    limit = min(int(args.symbolic_train_samples), z_seq.shape[0])
+    if limit <= 0:
+        return None, {}
+    pred_input = z_seq[:limit, :-1]
+    actions = action[:limit]
+    (logmix, mean, _logstd, _reward_pred, _done_logit), _ = rnn.forward(pred_input, actions)
+    expected_z = (logmix.exp() * mean).sum(dim=-1)
+    decoded = vae.decode(expected_z.reshape(-1, expected_z.shape[-1])).reshape(limit, actions.shape[1], -1)
+    obs_np = obs_window[:limit, :-1].detach().cpu().numpy()
+    action_np = actions.detach().cpu().numpy()
+    target_np, mask_np = symbolic_batch_targets(obs_np, action_np, coverage=coverage)
+    target = torch.as_tensor(target_np, dtype=torch.float32, device=device)
+    mask = torch.as_tensor(mask_np, dtype=torch.float32, device=device)
+    mask_count = mask.sum().clamp_min(1.0)
+    symbolic_loss = (((decoded - target) ** 2) * mask).sum() / mask_count
+    residual_mask = 1.0 - mask
+    residual_target = obs_window[:limit, 1:].detach()
+    residual_count = residual_mask.sum().clamp_min(1.0)
+    residual_loss = (((decoded - residual_target) ** 2) * residual_mask).sum() / residual_count
+    if variant == "regularization":
+        total = float(args.lambda_sym) * symbolic_loss
+    else:
+        total = float(args.lambda_residual) * residual_loss
+    return total, {
+        "training_symbolic_loss_individual": float(symbolic_loss.detach().cpu()),
+        "training_residual_loss_individual": float(residual_loss.detach().cpu()),
+        "training_symbolic_mask_count_individual": float(mask.sum().detach().cpu()),
+    }
+
+
+def joint_symbolic_training_loss(vae, rnn, z, raw_actions, raw_obs, symbolic_target, symbolic_mask, baseline, args, device, step):
+    variant = str(baseline.get("variant", "neural"))
+    if variant not in ("regularization", "residual"):
+        return None, {}
+    coverage = float(baseline.get("coverage", 0.0))
+    if coverage <= 0.0:
+        return None, {
+            "training_symbolic_loss_joint": 0.0,
+            "training_residual_loss_joint": 0.0,
+            "training_symbolic_mask_count_joint": 0.0,
+        }
+    episodes, steps, agents, obs_size = raw_obs.shape
+    seq_len = min(int(args.joint_symbolic_train_steps), steps - 1)
+    batch_episodes = min(int(args.joint_symbolic_train_episodes), episodes)
+    if seq_len <= 0 or batch_episodes <= 0:
+        return None, {}
+
+    max_start = max(1, episodes - batch_episodes + 1)
+    start = ((int(step) - 1) * batch_episodes) % max_start
+    idx = torch.arange(start, start + batch_episodes, dtype=torch.long) % episodes
+    z_window = z[idx, :seq_len].to(device, non_blocking=True)
+    action_window = raw_actions[idx, :seq_len].to(device, non_blocking=True)
+    next_obs_window = raw_obs[idx, 1 : seq_len + 1].to(device, non_blocking=True)
+    if symbolic_target is not None and symbolic_mask is not None:
+        target_window = symbolic_target[idx, :seq_len].to(device, non_blocking=True)
+        mask_window = symbolic_mask[idx, :seq_len].to(device, non_blocking=True)
+    else:
+        target_window = None
+        mask_window = None
+        obs_np = raw_obs[idx, :seq_len].detach().cpu().numpy()
+        action_np = raw_actions[idx, :seq_len].detach().cpu().long().numpy()
+
+    memories = [None for _ in range(batch_episodes)]
+    state = None
+    symbolic_losses = []
+    residual_losses = []
+    mask_counts = []
+    for t in range(seq_len):
+        z_t = z_window[:, t].reshape(batch_episodes * agents, -1)
+        actions_t = action_window[:, t].reshape(batch_episodes * agents)
+        pred_z, _, _, state = rnn.step(z_t, actions_t, state, deterministic=True)
+        decoded = vae.decode(pred_z).reshape(batch_episodes, agents, obs_size)
+        if target_window is not None and mask_window is not None:
+            target = target_window[:, t]
+            mask = mask_window[:, t]
+        else:
+            target_rows = []
+            mask_rows = []
+            for episode_idx in range(batch_episodes):
+                current_joint = {
+                    f"agent_{agent_idx}": vector_to_tabular(obs_np[episode_idx, t, agent_idx])
+                    for agent_idx in range(agents)
+                }
+                joint_action = {
+                    f"agent_{agent_idx}": int(action_np[episode_idx, t, agent_idx])
+                    for agent_idx in range(agents)
+                }
+                symbolic, mask, memories[episode_idx], _report = symbolic_joint_transition(
+                    current_joint,
+                    joint_action,
+                    memory=memories[episode_idx],
+                    coverage=coverage,
+                )
+                for agent_idx in range(agents):
+                    agent_id = f"agent_{agent_idx}"
+                    target_rows.append(tabular_to_vector(symbolic[agent_id]))
+                    mask_rows.append(tabular_mask_to_vector_mask(mask[agent_id]).astype(np.float32))
+            target = torch.as_tensor(np.stack(target_rows), dtype=torch.float32, device=device).reshape(batch_episodes, agents, obs_size)
+            mask = torch.as_tensor(np.stack(mask_rows), dtype=torch.float32, device=device).reshape(batch_episodes, agents, obs_size)
+        mask_count = mask.sum().clamp_min(1.0)
+        symbolic_loss = (((decoded - target) ** 2) * mask).sum() / mask_count
+        residual_mask = 1.0 - mask
+        residual_target = next_obs_window[:, t]
+        residual_count = residual_mask.sum().clamp_min(1.0)
+        residual_loss = (((decoded - residual_target) ** 2) * residual_mask).sum() / residual_count
+        symbolic_losses.append(symbolic_loss)
+        residual_losses.append(residual_loss)
+        mask_counts.append(mask.sum())
+
+    symbolic_loss = torch.stack(symbolic_losses).mean()
+    residual_loss = torch.stack(residual_losses).mean()
+    if variant == "regularization":
+        total = float(args.lambda_sym) * symbolic_loss
+    else:
+        total = float(args.lambda_residual) * residual_loss
+    return total, {
+        "training_symbolic_loss_joint": float(symbolic_loss.detach().cpu()),
+        "training_residual_loss_joint": float(residual_loss.detach().cpu()),
+        "training_symbolic_mask_count_joint": float(torch.stack(mask_counts).sum().detach().cpu()),
+    }
+
+
 @torch.no_grad()
-def evaluate_symbolic_rvr(vae, rnn, z, raw_actions, raw_obs, baseline, device):
+def evaluate_symbolic_rvr(vae, rnn, z, raw_actions, raw_obs, baseline, device, max_eval_steps=50):
     episodes, steps, agents, obs_size = raw_obs.shape
     if steps < 2:
         return empty_symbolic_metrics(), pstr_rvr_rows({})
-    pred_one, _, _, _ = rnn.step(z[:, 0], flatten_action_agents(raw_actions)[:, 0], None, deterministic=True)
-    pred_tabular = decode_flat_tabular(vae, pred_one, episodes, agents)
-    current_tabular = vectors_to_joint_tabular(raw_obs[:, 0])
-    joint_actions = actions_to_joint(raw_actions[:, 0])
+    flat_actions = flatten_action_agents(raw_actions)
+    eval_steps = min(int(max_eval_steps), steps - 1)
+    memories = [None for _ in range(episodes)]
+    post_memories = [None for _ in range(episodes)]
     row_metrics = []
-    for episode_idx in range(episodes):
-        row_metrics.append(compare_with_symbolic(
-            pred_tabular[episode_idx],
-            current_tabular[episode_idx],
-            joint_actions[episode_idx],
-            coverage=1.0,
-        ))
+    post_rows = []
+    state = None
+    variant = str(baseline.get("variant", "neural"))
+    coverage = float(baseline.get("coverage", 0.0))
+    for t in range(eval_steps):
+        pred_z, _, _, state = rnn.step(z[:, t], flat_actions[:, t], state, deterministic=True)
+        pred_tabular = decode_flat_tabular(vae, pred_z, episodes, agents)
+        current_tabular = vectors_to_joint_tabular(raw_obs[:, t])
+        joint_actions = actions_to_joint(raw_actions[:, t])
+        for episode_idx in range(episodes):
+            symbolic, mask, updated_memory, report = symbolic_joint_transition(
+                current_tabular[episode_idx],
+                joint_actions[episode_idx],
+                memory=memories[episode_idx],
+                coverage=1.0,
+            )
+            memories[episode_idx] = updated_memory
+            row_metrics.append(compare_joint_with_symbolic(pred_tabular[episode_idx], symbolic, mask, report))
+            if variant in ("projection", "residual"):
+                projected, symbolic_info = apply_symbolic_projection(
+                    pred_tabular[episode_idx],
+                    current_tabular[episode_idx],
+                    joint_actions[episode_idx],
+                    variant,
+                    coverage=coverage,
+                    memory=post_memories[episode_idx],
+                )
+                if symbolic_info is not None and len(symbolic_info) >= 3:
+                    post_memories[episode_idx] = symbolic_info[2]
+                if symbolic_info is not None and len(symbolic_info) >= 4:
+                    symbolic, mask, _updated_memory, report = symbolic_info
+                    post_rows.append(compare_joint_with_symbolic(projected, symbolic, mask, report))
     metrics = average_numeric_metrics(row_metrics)
     metrics.setdefault("rvr_global", metrics.get("rvr", 0.0))
     metrics.setdefault("rvr_individual", 0.0)
     metrics.setdefault("rvr_joint", 0.0)
+    metrics["rvr_eval_steps"] = float(eval_steps)
     pstr_values = {key[len("rvr/"):]: value for key, value in metrics.items() if key.startswith("rvr/")}
-    variant = str(baseline.get("variant", "neural"))
-    coverage = float(baseline.get("coverage", 0.0))
-    if variant in ("projection", "residual"):
-        post_rows = []
-        for episode_idx in range(episodes):
-            projected, _ = apply_symbolic_projection(
-                pred_tabular[episode_idx],
-                current_tabular[episode_idx],
-                joint_actions[episode_idx],
-                variant,
-                coverage=coverage,
-            )
-            post_rows.append(compare_with_symbolic(
-                projected,
-                current_tabular[episode_idx],
-                joint_actions[episode_idx],
-                coverage=coverage,
-            ))
+    if post_rows:
         post = average_numeric_metrics(post_rows)
         if "rvr_global" in post:
             metrics["rvr_post_global"] = post["rvr_global"]
@@ -803,8 +1091,13 @@ def record_world_model_video(args, config, vae, rnn, device):
     obs = env.reset()
     z = vae.encode(obs["vector"][0].to(device), sample=False)
     state = None
+    baseline = BASELINES.get(getattr(args, "baseline_id", ""), {})
+    ns_variant = str(baseline.get("variant", "neural"))
+    ns_coverage = float(baseline.get("coverage", 0.0))
+    ns_memory = None
     max_steps = max(1, int(args.video_max_steps))
     for _ in range(max_steps):
+        current_tabular = observation_to_joint_tabular(obs["vector"][0])
         action = torch.randint(0, config.action_size, (1, config.num_agents), generator=generator, device=device)
         obs, reward, done, truncated, _ = env.step(action)
         pred_z, _, _, state = rnn.step(z, action[0], state, deterministic=True)
@@ -815,13 +1108,37 @@ def record_world_model_video(args, config, vae, rnn, device):
                 "grid": imagined["grid"][agent_idx].detach().cpu().numpy().astype("int8"),
                 "self": imagined["self"][agent_idx].detach().cpu().numpy().astype("int16"),
             }
+        if ns_variant in ("projection", "residual"):
+            joint_action = {f"agent_{agent_idx}": int(action[0, agent_idx].detach().cpu()) for agent_idx in range(config.num_agents)}
+            tabular, symbolic_info = apply_symbolic_projection(
+                tabular,
+                current_tabular,
+                joint_action,
+                ns_variant,
+                coverage=ns_coverage,
+                memory=ns_memory,
+            )
+            if symbolic_info is not None and len(symbolic_info) >= 3:
+                ns_memory = symbolic_info[2]
         frame = env.render(env_index=0, mode="rgb_array", tabular_observations=tabular)
         frames.append(frame[:, :, :3] if frame.shape[-1] == 4 else frame)
-        z = vae.encode(obs["vector"][0].to(device), sample=False)
+        if ns_variant in ("projection", "residual"):
+            projected = torch.as_tensor(
+                np.asarray([tabular_to_vector(tabular[f"agent_{idx}"]) for idx in range(config.num_agents)], dtype=np.float32),
+                device=device,
+            )
+            z = vae.encode(projected, sample=False)
+        else:
+            z = vae.encode(obs["vector"][0].to(device), sample=False)
         if bool((done | truncated).all()):
             break
     env.close()
     return frames
+
+
+def observation_to_joint_tabular(agent_vectors: torch.Tensor):
+    vectors = agent_vectors.detach().cpu().numpy()
+    return {f"agent_{idx}": vector_to_tabular(vectors[idx]) for idx in range(vectors.shape[0])}
 
 
 @torch.no_grad()

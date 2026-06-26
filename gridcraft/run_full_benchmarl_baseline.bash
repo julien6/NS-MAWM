@@ -23,6 +23,8 @@ WM_NUM_WORKERS="${WM_NUM_WORKERS:-4}"
 WM_EVAL_EVERY="${WM_EVAL_EVERY:-500}"
 WM_VIDEO_EVERY="${WM_VIDEO_EVERY:-$WM_EVAL_EVERY}"
 WM_HORIZONS="${WM_HORIZONS:-1 5 10 25 50}"
+JOINT_SYMBOLIC_TRAIN_EPISODES="${JOINT_SYMBOLIC_TRAIN_EPISODES:-8}"
+JOINT_SYMBOLIC_TRAIN_STEPS="${JOINT_SYMBOLIC_TRAIN_STEPS:-8}"
 VIDEO_MAX_STEPS="${VIDEO_MAX_STEPS:-100}"
 VIDEO_FPS="${VIDEO_FPS:-10}"
 SHARED_MODEL_DIR="${SHARED_MODEL_DIR:-shared_models}"
@@ -49,8 +51,27 @@ if [[ "$FORCE_LATENT_REENCODE" == "1" ]]; then
   VAE_CACHE_ARGS+=(--force-latent-reencode)
 fi
 
-# Downstream MARL train/eval. B00 uses real vGridcraft MAPPO; every
-# model-based baseline uses Dyna MAPPO inside the trained world model.
+# Downstream MARL train/eval. B00 uses real vGridcraft MASAC; every
+# model-based baseline uses MAMBPO by default to expose the contribution of a
+# learned world model during off-policy MARL.
+MODEL_FREE_DOWNSTREAM_ALGO="${MODEL_FREE_DOWNSTREAM_ALGO:-masac}"
+MODEL_BASED_DOWNSTREAM_ALGO="${MODEL_BASED_DOWNSTREAM_ALGO:-mambpo}"
+case "$MODEL_BASED_DOWNSTREAM_ALGO" in
+  mambpo|mb_mappo|mpc_cem|dyna_actor_critic|imagined_mappo)
+    ;;
+  *)
+    echo "Unsupported MODEL_BASED_DOWNSTREAM_ALGO=${MODEL_BASED_DOWNSTREAM_ALGO}; expected mambpo, mb_mappo, mpc_cem, dyna_actor_critic, or imagined_mappo" >&2
+    exit 2
+    ;;
+esac
+case "$MODEL_FREE_DOWNSTREAM_ALGO" in
+  masac|mappo)
+    ;;
+  *)
+    echo "Unsupported MODEL_FREE_DOWNSTREAM_ALGO=${MODEL_FREE_DOWNSTREAM_ALGO}; expected masac or mappo" >&2
+    exit 2
+    ;;
+esac
 MARL_NUM_ENVS="${MARL_NUM_ENVS:-64}"
 MARL_MAX_STEPS="${MARL_MAX_STEPS:-200}"
 MARL_MAX_ITERS="${MARL_MAX_ITERS:-50}"
@@ -61,6 +82,16 @@ MAPPO_EVAL_EVERY_ITERS="${MAPPO_EVAL_EVERY_ITERS:-25}"
 MAPPO_EVAL_EPISODES="${MAPPO_EVAL_EPISODES:-4}"
 MAPPO_VIDEO_EVERY_ITERS="${MAPPO_VIDEO_EVERY_ITERS:-250}"
 MAPPO_HIDDEN_SIZE="${MAPPO_HIDDEN_SIZE:-256}"
+MB_WORLD_MODEL_TRAIN_EPOCHS="${MB_WORLD_MODEL_TRAIN_EPOCHS:-5}"
+MB_WORLD_MODEL_BATCH_SIZE="${MB_WORLD_MODEL_BATCH_SIZE:-256}"
+MB_WORLD_MODEL_HIDDEN_SIZE="${MB_WORLD_MODEL_HIDDEN_SIZE:-256}"
+MB_IMAGINED_HORIZON="${MB_IMAGINED_HORIZON:-3}"
+MB_IMAGINED_BRANCHES="${MB_IMAGINED_BRANCHES:-4}"
+MB_LAMBDA_IMAGINED="${MB_LAMBDA_IMAGINED:-0.5}"
+MPC_PLANNING_HORIZON="${MPC_PLANNING_HORIZON:-15}"
+MPC_CEM_SAMPLES="${MPC_CEM_SAMPLES:-128}"
+MPC_CEM_ITERS="${MPC_CEM_ITERS:-3}"
+MPC_CEM_ELITE_FRAC="${MPC_CEM_ELITE_FRAC:-0.2}"
 MARL_WANDB_STEP_OFFSET="${MARL_WANDB_STEP_OFFSET:-$((VAE_STEPS + RNN_STEPS + 1000))}"
 DYNA_IMAGINED_HORIZON="${DYNA_IMAGINED_HORIZON:-32}"
 
@@ -111,6 +142,8 @@ WM_CMD=(
   --video-max-steps "$VIDEO_MAX_STEPS"
   --video-fps "$VIDEO_FPS"
   --horizons $WM_HORIZONS
+  --joint-symbolic-train-episodes "$JOINT_SYMBOLIC_TRAIN_EPISODES"
+  --joint-symbolic-train-steps "$JOINT_SYMBOLIC_TRAIN_STEPS"
   --device "$DEVICE"
   --wandb-id "$WANDB_RUN_ID"
   --wandb-name "$RUN_NAME"
@@ -128,36 +161,153 @@ else
 fi
 
 if [[ "$MODEL_BASED" == "1" ]]; then
-  echo "=== Step 2/2: Dyna MAPPO train/eval inside the trained World Model ==="
-  MARL_CMD=(
-    "$PYTHON_BIN" run_benchmarl_dyna_gridcraft.py
-    --baseline-id "$BASELINE_ID"
-    --wm-run-dir "runs_benchmarl/${BASELINE_ID}_a${NUM_AGENTS}_seed${SEED}"
-    --seed "$SEED"
-    --num-envs "$MARL_NUM_ENVS"
-    --num-agents "$NUM_AGENTS"
-    --max-steps "$MARL_MAX_STEPS"
-    --max-iters "$MARL_MAX_ITERS"
-    --imagined-horizon "$DYNA_IMAGINED_HORIZON"
-    --mappo-eval-every-iters "$MAPPO_EVAL_EVERY_ITERS"
-    --mappo-eval-episodes "$MAPPO_EVAL_EPISODES"
-    --mappo-video-every-iters "$MAPPO_VIDEO_EVERY_ITERS"
-    --mappo-hidden-size "$MAPPO_HIDDEN_SIZE"
-    --device "$DEVICE"
-    --wandb-id "$WANDB_RUN_ID"
-    --wandb-name "$RUN_NAME"
-    --wandb-group "$WANDB_GROUP"
-    --wandb-step-offset "$MARL_WANDB_STEP_OFFSET"
-    --video-max-steps "$VIDEO_MAX_STEPS"
-    --video-fps "$VIDEO_FPS"
-  )
+  if [[ "$MODEL_BASED_DOWNSTREAM_ALGO" == "mambpo" ]]; then
+    echo "=== Step 2/2: MAMBPO train/eval on real vGridcraft with generated model rollouts ==="
+    MARL_CMD=(
+      "$PYTHON_BIN" run_benchmarl_mappo_gridcraft.py
+      --algorithm mambpo
+      --baseline-id "$BASELINE_ID"
+      --wm-run-dir "runs_benchmarl/${BASELINE_ID}_a${NUM_AGENTS}_seed${SEED}"
+      --seed "$SEED"
+      --num-envs "$MARL_NUM_ENVS"
+      --num-agents "$NUM_AGENTS"
+      --max-steps "$MARL_MAX_STEPS"
+      --max-iters "$MARL_MAX_ITERS"
+      --frames-per-batch "$MARL_FRAMES_PER_BATCH"
+      --mappo-minibatch-size "$MAPPO_MINIBATCH_SIZE"
+      --mappo-minibatch-iters "$MAPPO_MINIBATCH_ITERS"
+      --mappo-eval-every-iters "$MAPPO_EVAL_EVERY_ITERS"
+      --mappo-eval-episodes "$MAPPO_EVAL_EPISODES"
+      --mappo-video-every-iters "$MAPPO_VIDEO_EVERY_ITERS"
+      --mappo-hidden-size "$MAPPO_HIDDEN_SIZE"
+      --mb-world-model-train-epochs "$MB_WORLD_MODEL_TRAIN_EPOCHS"
+      --mb-world-model-batch-size "$MB_WORLD_MODEL_BATCH_SIZE"
+      --mb-world-model-hidden-size "$MB_WORLD_MODEL_HIDDEN_SIZE"
+      --mb-imagined-horizon "$MB_IMAGINED_HORIZON"
+      --mb-imagined-branches "$MB_IMAGINED_BRANCHES"
+      --mb-lambda-imagined "$MB_LAMBDA_IMAGINED"
+      --device "$DEVICE"
+      --wandb-id "$WANDB_RUN_ID"
+      --wandb-name "$RUN_NAME"
+      --wandb-group "$WANDB_GROUP"
+      --wandb-step-offset "$MARL_WANDB_STEP_OFFSET"
+      --video-max-steps "$VIDEO_MAX_STEPS"
+      --video-fps "$VIDEO_FPS"
+    )
+  elif [[ "$MODEL_BASED_DOWNSTREAM_ALGO" == "mb_mappo" ]]; then
+    echo "=== Step 2/2: Legacy MB-MAPPO train/eval on real vGridcraft with model-based critic targets ==="
+    MARL_CMD=(
+      "$PYTHON_BIN" run_benchmarl_mappo_gridcraft.py
+      --algorithm mb_mappo
+      --baseline-id "$BASELINE_ID"
+      --wm-run-dir "runs_benchmarl/${BASELINE_ID}_a${NUM_AGENTS}_seed${SEED}"
+      --seed "$SEED"
+      --num-envs "$MARL_NUM_ENVS"
+      --num-agents "$NUM_AGENTS"
+      --max-steps "$MARL_MAX_STEPS"
+      --max-iters "$MARL_MAX_ITERS"
+      --frames-per-batch "$MARL_FRAMES_PER_BATCH"
+      --mappo-minibatch-size "$MAPPO_MINIBATCH_SIZE"
+      --mappo-minibatch-iters "$MAPPO_MINIBATCH_ITERS"
+      --mappo-eval-every-iters "$MAPPO_EVAL_EVERY_ITERS"
+      --mappo-eval-episodes "$MAPPO_EVAL_EPISODES"
+      --mappo-video-every-iters "$MAPPO_VIDEO_EVERY_ITERS"
+      --mappo-hidden-size "$MAPPO_HIDDEN_SIZE"
+      --mb-world-model-train-epochs "$MB_WORLD_MODEL_TRAIN_EPOCHS"
+      --mb-world-model-batch-size "$MB_WORLD_MODEL_BATCH_SIZE"
+      --mb-world-model-hidden-size "$MB_WORLD_MODEL_HIDDEN_SIZE"
+      --mb-imagined-horizon "$MB_IMAGINED_HORIZON"
+      --mb-imagined-branches "$MB_IMAGINED_BRANCHES"
+      --mb-lambda-imagined "$MB_LAMBDA_IMAGINED"
+      --device "$DEVICE"
+      --wandb-id "$WANDB_RUN_ID"
+      --wandb-name "$RUN_NAME"
+      --wandb-group "$WANDB_GROUP"
+      --wandb-step-offset "$MARL_WANDB_STEP_OFFSET"
+      --video-max-steps "$VIDEO_MAX_STEPS"
+      --video-fps "$VIDEO_FPS"
+    )
+  elif [[ "$MODEL_BASED_DOWNSTREAM_ALGO" == "mpc_cem" ]]; then
+    echo "=== Step 2/2: MPC-CEM evaluation in real vGridcraft using the trained World Model ==="
+    MARL_CMD=(
+      "$PYTHON_BIN" run_benchmarl_mpc_cem_gridcraft.py
+      --baseline-id "$BASELINE_ID"
+      --wm-run-dir "runs_benchmarl/${BASELINE_ID}_a${NUM_AGENTS}_seed${SEED}"
+      --seed "$SEED"
+      --num-envs "$MARL_NUM_ENVS"
+      --num-agents "$NUM_AGENTS"
+      --max-steps "$MARL_MAX_STEPS"
+      --planning-horizon "$MPC_PLANNING_HORIZON"
+      --cem-samples "$MPC_CEM_SAMPLES"
+      --cem-iters "$MPC_CEM_ITERS"
+      --cem-elite-frac "$MPC_CEM_ELITE_FRAC"
+      --device "$DEVICE"
+      --wandb-id "$WANDB_RUN_ID"
+      --wandb-name "$RUN_NAME"
+      --wandb-group "$WANDB_GROUP"
+      --wandb-step-offset "$MARL_WANDB_STEP_OFFSET"
+      --video-max-steps "$VIDEO_MAX_STEPS"
+      --video-fps "$VIDEO_FPS"
+    )
+  elif [[ "$MODEL_BASED_DOWNSTREAM_ALGO" == "imagined_mappo" ]]; then
+    echo "=== Step 2/2: Legacy native BenchMARL MAPPO train/eval inside the trained World Model ==="
+    MARL_CMD=(
+      "$PYTHON_BIN" run_benchmarl_imagined_mappo_gridcraft.py
+      --baseline-id "$BASELINE_ID"
+      --wm-run-dir "runs_benchmarl/${BASELINE_ID}_a${NUM_AGENTS}_seed${SEED}"
+      --seed "$SEED"
+      --num-envs "$MARL_NUM_ENVS"
+      --num-agents "$NUM_AGENTS"
+      --max-steps "$MARL_MAX_STEPS"
+      --max-iters "$MARL_MAX_ITERS"
+      --frames-per-batch "$MARL_FRAMES_PER_BATCH"
+      --mappo-minibatch-size "$MAPPO_MINIBATCH_SIZE"
+      --mappo-minibatch-iters "$MAPPO_MINIBATCH_ITERS"
+      --mappo-eval-every-iters "$MAPPO_EVAL_EVERY_ITERS"
+      --mappo-eval-episodes "$MAPPO_EVAL_EPISODES"
+      --mappo-video-every-iters "$MAPPO_VIDEO_EVERY_ITERS"
+      --mappo-hidden-size "$MAPPO_HIDDEN_SIZE"
+      --device "$DEVICE"
+      --wandb-id "$WANDB_RUN_ID"
+      --wandb-name "$RUN_NAME"
+      --wandb-group "$WANDB_GROUP"
+      --wandb-step-offset "$MARL_WANDB_STEP_OFFSET"
+      --video-max-steps "$VIDEO_MAX_STEPS"
+      --video-fps "$VIDEO_FPS"
+    )
+  else
+    echo "=== Step 2/2: Dyna actor-critic train/eval inside the trained World Model only ==="
+    MARL_CMD=(
+      "$PYTHON_BIN" run_benchmarl_dyna_gridcraft.py
+      --baseline-id "$BASELINE_ID"
+      --wm-run-dir "runs_benchmarl/${BASELINE_ID}_a${NUM_AGENTS}_seed${SEED}"
+      --seed "$SEED"
+      --num-envs "$MARL_NUM_ENVS"
+      --num-agents "$NUM_AGENTS"
+      --max-steps "$MARL_MAX_STEPS"
+      --max-iters "$MARL_MAX_ITERS"
+      --imagined-horizon "$DYNA_IMAGINED_HORIZON"
+      --mappo-hidden-size "$MAPPO_HIDDEN_SIZE"
+      --mappo-eval-every-iters "$MAPPO_EVAL_EVERY_ITERS"
+      --mappo-eval-episodes "$MAPPO_EVAL_EPISODES"
+      --mappo-video-every-iters "$MAPPO_VIDEO_EVERY_ITERS"
+      --device "$DEVICE"
+      --wandb-id "$WANDB_RUN_ID"
+      --wandb-name "$RUN_NAME"
+      --wandb-group "$WANDB_GROUP"
+      --wandb-step-offset "$MARL_WANDB_STEP_OFFSET"
+      --video-max-steps "$VIDEO_MAX_STEPS"
+      --video-fps "$VIDEO_FPS"
+    )
+  fi
   if [[ -n "${WANDB_FLAG}" ]]; then
     MARL_CMD+=($WANDB_FLAG)
   fi
 else
-  echo "=== Step 2/2: Native BenchMARL MAPPO train/eval on real vGridcraft (model-free baseline only) ==="
+  echo "=== Step 2/2: Native BenchMARL ${MODEL_FREE_DOWNSTREAM_ALGO^^} train/eval on real vGridcraft (model-free baseline only) ==="
   MARL_CMD=(
     "$PYTHON_BIN" run_benchmarl_mappo_gridcraft.py
+    --algorithm "$MODEL_FREE_DOWNSTREAM_ALGO"
     --seed "$SEED"
     --num-envs "$MARL_NUM_ENVS"
     --num-agents "$NUM_AGENTS"

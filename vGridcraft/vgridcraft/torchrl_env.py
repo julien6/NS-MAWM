@@ -74,7 +74,27 @@ class GridcraftTorchRLEnv(EnvBase):
         )
 
     def _reset(self, tensordict=None):
-        obs = self.v_env.reset()
+        env_ids = None
+        if tensordict is not None:
+            reset_mask = None
+            for key in ("_reset", "done", "terminated", "truncated"):
+                try:
+                    if key in tensordict.keys():
+                        value = tensordict.get(key)
+                        reset_mask = value if reset_mask is None else (reset_mask | value)
+                except Exception:
+                    continue
+            if reset_mask is not None:
+                reset_mask = reset_mask.reshape(*self.batch_size, -1).any(dim=-1)
+                if not bool(reset_mask.any()):
+                    obs = self.v_env.observation()
+                    return self._make_reset_tensordict(obs)
+                if bool(reset_mask.any()) and not bool(reset_mask.all()):
+                    env_ids = torch.nonzero(reset_mask, as_tuple=False).flatten().to(self.device)
+        obs = self.v_env.reset(env_ids=env_ids)
+        return self._make_reset_tensordict(obs)
+
+    def _make_reset_tensordict(self, obs):
         return TensorDict(
             {
                 "agents": TensorDict(

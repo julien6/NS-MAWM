@@ -108,6 +108,8 @@ class ExperimentLogger:
       self._wandb.save(path, base_path=os.path.dirname(path) or ".")
 
   def finish(self):
+    if os.environ.get("NS_MAWM_KEEP_WANDB_OPEN") == "1":
+      return
     if self.run is not None:
       self._wandb.finish()
 

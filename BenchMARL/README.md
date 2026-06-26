@@ -14,6 +14,20 @@
 python benchmarl/run.py algorithm=mappo task=vmas/balance
 ```
 
+Experimental model-based algorithms are also available. `mambpo` implements a
+BenchMARL-native version of Model-Based Multi-Agent Soft Actor-Critic: it trains
+an ensemble dynamics model on real replay data, generates short imagined
+rollouts, and updates MASAC from a controlled mixture of real and imagined
+transitions.
+
+```bash
+python benchmarl/run.py algorithm=mambpo task=vmas/balance
+python benchmarl/run.py algorithm=mambpo task=vmas/balance algorithm.imagined_rollouts.rollout_length=3
+```
+
+This implementation is experimental. The learned model is supervised, rollouts
+are intentionally short, and the original `masac` algorithm remains unchanged.
+
 
 [![Examples](https://img.shields.io/badge/Examples-blue.svg)](examples) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/facebookresearch/BenchMARL/blob/main/notebooks/run.ipynb)
 [![Static Badge](https://img.shields.io/badge/Benchmarks-Wandb-yellow)](https://wandb.ai/matteobettini/benchmarl-public/reportlist)

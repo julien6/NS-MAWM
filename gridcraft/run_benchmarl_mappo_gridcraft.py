@@ -18,13 +18,14 @@ from vgridcraft import VGridcraftConfig, VectorizedGridcraftEnv
 from benchmarl.experiment.callback import Callback
 
 
-class MappoEvaluationVideoCallback(Callback):
+class MarlEvaluationVideoCallback(Callback):
     def __init__(self, args):
         super().__init__()
         self.args = args
 
     def on_evaluation_end(self, rollouts):
         iteration = int(self.experiment.n_iters_performed)
+        log_mambpo_imagined_evaluation(self.args, self.experiment, rollouts, iteration)
         if iteration <= 0:
             return
         if int(self.args.mappo_video_every_iters) <= 0:
@@ -49,7 +50,7 @@ def main() -> None:
     parser.add_argument("--mappo-hidden-size", type=int, default=256)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=1)
-    parser.add_argument("--save-folder", default="runs_benchmarl/native_mappo")
+    parser.add_argument("--save-folder", default="runs_benchmarl/native_marl")
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--wandb-id", default=os.environ.get("WANDB_RUN_ID"))
     parser.add_argument("--wandb-name", default=None)
@@ -60,10 +61,19 @@ def main() -> None:
     parser.add_argument("--no-wandb-videos", dest="wandb_videos", action="store_false")
     parser.add_argument("--video-max-steps", type=int, default=100)
     parser.add_argument("--video-fps", type=int, default=10)
+    parser.add_argument("--algorithm", choices=["mappo", "mb_mappo", "masac", "mambpo"], default="masac")
+    parser.add_argument("--baseline-id", default="")
+    parser.add_argument("--wm-run-dir", default=None)
+    parser.add_argument("--mb-world-model-train-epochs", type=int, default=5)
+    parser.add_argument("--mb-world-model-batch-size", type=int, default=256)
+    parser.add_argument("--mb-world-model-hidden-size", type=int, default=256)
+    parser.add_argument("--mb-imagined-horizon", type=int, default=3)
+    parser.add_argument("--mb-imagined-branches", type=int, default=4)
+    parser.add_argument("--mb-lambda-imagined", type=float, default=0.5)
     args = parser.parse_args()
 
     try:
-        from benchmarl.algorithms import MappoConfig
+        from benchmarl.algorithms import MambpoConfig, MappoConfig, MasacConfig, MBMappoConfig
         from benchmarl.environments import GridcraftTask
         from benchmarl.experiment import Experiment, ExperimentConfig
         from benchmarl.experiment.logger import Logger as BenchmarlLogger
@@ -82,7 +92,47 @@ def main() -> None:
         "max_steps": args.max_steps,
         "seed": args.seed,
     })
-    algorithm_config = MappoConfig.get_from_yaml()
+    if args.algorithm == "mb_mappo":
+        algorithm_config = MBMappoConfig.get_from_yaml()
+        algorithm_config.world_model.train_epochs = args.mb_world_model_train_epochs
+        algorithm_config.world_model.batch_size = args.mb_world_model_batch_size
+        algorithm_config.world_model.hidden_sizes = [
+            args.mb_world_model_hidden_size,
+            args.mb_world_model_hidden_size,
+        ]
+        algorithm_config.imagined_rollouts.horizon = args.mb_imagined_horizon
+        algorithm_config.imagined_rollouts.num_branches = args.mb_imagined_branches
+        algorithm_config.imagined_rollouts.lambda_imagined = args.mb_lambda_imagined
+        algorithm_config.imagined_rollouts.use_for_actor = False
+        if args.wm_run_dir:
+            ns_variant, ns_coverage = infer_ns_settings(args.baseline_id)
+            algorithm_config.world_model.external_model_type = "gridcraft_vae_mdn_rnn"
+            algorithm_config.world_model.external_checkpoint_dir = str(Path(args.wm_run_dir) / "checkpoints")
+            algorithm_config.world_model.external_ns_variant = ns_variant
+            algorithm_config.world_model.external_ns_coverage = ns_coverage
+            algorithm_config.world_model.external_num_agents = args.num_agents
+            algorithm_config.world_model.train_epochs = 0
+            algorithm_config.world_model.predict_done = True
+    elif args.algorithm == "mambpo":
+        algorithm_config = MambpoConfig.get_from_yaml()
+        algorithm_config.world_model.train_steps = args.mb_world_model_train_epochs
+        algorithm_config.world_model.batch_size = args.mb_world_model_batch_size
+        algorithm_config.world_model.hidden_sizes = [
+            args.mb_world_model_hidden_size,
+            args.mb_world_model_hidden_size,
+        ]
+        algorithm_config.imagined_rollouts.rollout_length = args.mb_imagined_horizon
+        algorithm_config.imagined_rollouts.model_batch_size = (
+            args.mb_imagined_branches * args.mb_world_model_batch_size
+        )
+        algorithm_config.imagined_rollouts.real_ratio = max(
+            0.0, min(1.0, 1.0 - args.mb_lambda_imagined)
+        )
+    elif args.algorithm == "masac":
+        algorithm_config = MasacConfig.get_from_yaml()
+    else:
+        algorithm_config = MappoConfig.get_from_yaml()
+    on_policy = algorithm_config.on_policy()
     experiment_config = ExperimentConfig.get_from_yaml()
     experiment_config.sampling_device = args.device
     experiment_config.train_device = args.device
@@ -90,10 +140,16 @@ def main() -> None:
     experiment_config.prefer_continuous_actions = False
     experiment_config.max_n_iters = args.max_iters
     experiment_config.max_n_frames = None
-    experiment_config.on_policy_collected_frames_per_batch = args.frames_per_batch
-    experiment_config.on_policy_n_envs_per_worker = args.num_envs
-    experiment_config.on_policy_minibatch_size = min(args.mappo_minibatch_size, args.frames_per_batch)
-    experiment_config.on_policy_n_minibatch_iters = args.mappo_minibatch_iters
+    if on_policy:
+        experiment_config.on_policy_collected_frames_per_batch = args.frames_per_batch
+        experiment_config.on_policy_n_envs_per_worker = args.num_envs
+        experiment_config.on_policy_minibatch_size = min(args.mappo_minibatch_size, args.frames_per_batch)
+        experiment_config.on_policy_n_minibatch_iters = args.mappo_minibatch_iters
+    else:
+        experiment_config.off_policy_collected_frames_per_batch = args.frames_per_batch
+        experiment_config.off_policy_n_envs_per_worker = args.num_envs
+        experiment_config.off_policy_train_batch_size = min(args.mappo_minibatch_size, args.frames_per_batch)
+        experiment_config.off_policy_n_optimizer_steps = args.mappo_minibatch_iters
     experiment_config.evaluation_interval = args.frames_per_batch * max(1, args.mappo_eval_every_iters)
     experiment_config.evaluation_episodes = min(args.mappo_eval_episodes, args.num_envs)
     experiment_config.render = False
@@ -105,6 +161,7 @@ def main() -> None:
             **({"id": args.wandb_id, "resume": "allow"} if args.wandb_id else {}),
             **({"name": args.wandb_name} if args.wandb_name else {}),
             **({"group": args.wandb_group} if args.wandb_group else {}),
+            "tags": ["gridcraft", args.algorithm, "real-vgridcraft", args.baseline_id or "baseline-unknown"],
         }
     save_folder = (ROOT / "gridcraft" / args.save_folder).resolve()
     save_folder.mkdir(parents=True, exist_ok=True)
@@ -118,10 +175,16 @@ def main() -> None:
         critic_model_config=critic_model_config,
         seed=args.seed,
         config=experiment_config,
-        callbacks=[MappoEvaluationVideoCallback(args)] if args.wandb and args.wandb_videos else None,
+        callbacks=[MarlEvaluationVideoCallback(args)] if args.wandb and args.wandb_videos else None,
     )
+    if args.wandb and os.environ.get("WANDB_MODE") == "offline":
+        print(
+            "[wandb] offline mode may create one local directory per process even when "
+            "the same wandb id is reused. Online sync/resume merges them under the "
+            "single configured run id.",
+            flush=True,
+        )
     experiment.run()
-    log_marl_evaluation_video(args, policy=experiment.policy)
 
 
 def patch_benchmarl_wandb_sections(logger_class, step_offset=0):
@@ -144,7 +207,9 @@ def route_benchmarl_metrics(metrics):
     routed = {}
     for key, value in metrics.items():
         key = str(key)
-        if key.startswith("train/"):
+        if key.startswith("mambpo/"):
+            routed[f"MARL Training/{canonical_mambpo_key(key)}"] = value
+        elif key.startswith("train/"):
             routed[f"MARL Training/{canonical_benchmarl_key(key)}"] = value
         elif key.startswith("collection/"):
             routed[f"MARL Training/{canonical_benchmarl_key(key)}"] = value
@@ -161,8 +226,91 @@ def route_benchmarl_metrics(metrics):
     return routed
 
 
+def canonical_mambpo_key(key):
+    name = key.split("/", 1)[1]
+    mapping = {
+        "world_model_loss": "imagination_world_model_loss",
+        "world_model_obs_loss": "imagination_world_model_obs_loss",
+        "world_model_reward_loss": "imagination_world_model_reward_loss",
+        "world_model_done_loss": "imagination_world_model_done_loss",
+        "training_imagined_reward": "training_imagined_reward",
+        "training_imagined_reward_mean_step": "training_imagined_reward_mean_step",
+        "training_sampled_imagined_reward": "training_sampled_imagined_reward",
+        "real_ratio": "real_ratio",
+        "imagined_ratio": "imagined_ratio",
+        "model_rollout_length": "model_rollout_length",
+        "model_buffer_size": "model_buffer_size",
+        "model_batch_size": "model_batch_size",
+        "real_batch_size": "real_batch_size",
+        "imagined_batch_size": "imagined_batch_size",
+    }
+    return mapping.get(name, f"imagination_{canonical_benchmarl_key(name)}")
+
+
 def canonical_benchmarl_key(key):
     return key.replace("/", "_").replace(" ", "_")
+
+
+def log_mambpo_imagined_evaluation(args, experiment, rollouts, iteration):
+    algorithm = getattr(experiment, "algorithm", None)
+    if not hasattr(algorithm, "evaluate_imagined_rollouts"):
+        return
+    if not args.wandb:
+        return
+    try:
+        import wandb
+    except ImportError:
+        return
+    if not rollouts:
+        return
+    metrics = {}
+    for group in getattr(experiment, "train_group_map", {}).keys():
+        try:
+            group_metrics = algorithm.evaluate_imagined_rollouts(group, rollouts[0])
+        except Exception as exc:
+            group_metrics = {
+                "mambpo/eval_imagined_generation_failed": torch.tensor(
+                    1.0, device=algorithm.device
+                ),
+                "mambpo/eval_imagined_error_hash": torch.tensor(
+                    float(abs(hash(str(exc))) % 1000000), device=algorithm.device
+                ),
+            }
+        for key, value in group_metrics.items():
+            value = value.mean().item() if hasattr(value, "mean") else value
+            metrics[f"MARL Evaluation/{canonical_mambpo_eval_key(key)}"] = value
+    if not metrics:
+        return
+    step = int(args.wandb_step_offset) + int(iteration)
+    wandb.log(metrics, step=step, commit=False)
+
+
+def canonical_mambpo_eval_key(key):
+    name = str(key).split("/", 1)[1]
+    mapping = {
+        "eval_imagined_reward": "eval_imagined_reward",
+        "eval_imagined_episode_length": "eval_imagined_episode_length",
+        "real_imagined_reward_gap": "real_imagined_reward_gap",
+        "eval_imagined_generation_failed": "eval_imagined_generation_failed",
+        "eval_imagined_error_hash": "eval_imagined_error_hash",
+    }
+    return mapping.get(name, f"imagination_{canonical_benchmarl_key(name)}")
+
+
+def infer_ns_settings(baseline_id: str) -> tuple[str, float]:
+    text = str(baseline_id)
+    variant = "neural"
+    for candidate in ("neural", "regularization", "projection", "residual"):
+        if candidate in text:
+            variant = candidate
+            break
+    coverage = 0.0
+    if "_k" in text:
+        try:
+            coverage = float(text.rsplit("_k", 1)[1])
+        except ValueError:
+            coverage = 0.0
+    return variant, coverage
 
 
 def log_marl_evaluation_video(args, policy=None, iteration=None):
