@@ -868,7 +868,7 @@ def joint_symbolic_training_loss(vae, rnn, z, raw_actions, raw_obs, symbolic_tar
 def evaluate_symbolic_rvr(vae, rnn, z, raw_actions, raw_obs, baseline, device, max_eval_steps=50):
     episodes, steps, agents, obs_size = raw_obs.shape
     if steps < 2:
-        return empty_symbolic_metrics(), pstr_rvr_rows({})
+        return empty_symbolic_metrics(), pstr_rvr_rows({}, baseline)
     flat_actions = flatten_action_agents(raw_actions)
     eval_steps = min(int(max_eval_steps), steps - 1)
     memories = [None for _ in range(episodes)]
@@ -918,7 +918,7 @@ def evaluate_symbolic_rvr(vae, rnn, z, raw_actions, raw_obs, baseline, device, m
             metrics["rvr_post_global"] = post["rvr_global"]
         elif "rvr" in post:
             metrics["rvr_post_global"] = post["rvr"]
-    return metrics, pstr_rvr_rows(pstr_values)
+    return metrics, pstr_rvr_rows(pstr_values, baseline)
 
 
 def empty_symbolic_metrics():
@@ -983,12 +983,19 @@ def actions_to_joint(actions):
     return result
 
 
-def pstr_rvr_rows(pstr_values):
+def pstr_rvr_rows(pstr_values, baseline=None):
+    variant = str((baseline or {}).get("variant", "neural"))
+    force_na = variant in ("projection", "residual")
     rows = []
     for rule in PSTR_RULES:
         rule_id = rule["id"]
         value = pstr_values.get(rule_id)
-        rows.append({"PSTR id": rule_id, "RVR": "n/a" if value is None else float(value)})
+        rows.append(
+            {
+                "PSTR id": rule_id,
+                "RVR": "n/a" if force_na or value is None else float(value),
+            }
+        )
     return rows
 
 
