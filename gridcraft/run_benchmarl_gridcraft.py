@@ -31,7 +31,7 @@ from ns_symbolic import (
 from wandb_schema import GENERAL, MARL_EVALUATION, MARL_TRAINING, PSTR_RULES, WORLD_MODEL_EVALUATION, WORLD_MODEL_TRAINING
 from torch_world_model import TorchGridcraftRNN, TorchGridcraftVAE
 from vgridcraft import VGridcraftConfig, VectorizedGridcraftEnv
-from vgridcraft.dataset import RolloutDataset, SequenceDataset, collect_or_load_dataset, observation_shape, observation_vectors
+from vgridcraft.dataset import RolloutDataset, SequenceDataset, collect_or_load_dataset, observation_shape, observation_vectors, has_compact_observations, vector_from_tabular
 
 
 BASELINES = {
@@ -143,7 +143,7 @@ def main() -> None:
             reuse=args.reuse_dataset,
             force_recollect=args.force_recollect,
         )
-        attach_symbolic_dataset_targets(data, coverage=float(baseline.get("coverage", 0.0)))
+        maybe_attach_symbolic_dataset_targets(data, baseline, args)
         logger.log(
             {
                 "dataset_reused": float(reused),
@@ -397,50 +397,85 @@ def train_vae(data, args, device, checkpoint_dir: Path, logger):
 @torch.no_grad()
 def encode_dataset(vae, data, device, batch_size):
     episodes, steps, agents = observation_shape(data)
-    dataset = RolloutDataset(data)
-    loader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=0,
-        pin_memory=device.type == "cuda",
-        drop_last=False,
-    )
-    chunks = []
-    progress = tqdm(
-        loader,
-        total=len(loader),
-        desc="World Model encode",
-        unit="batch",
-        dynamic_ncols=True,
-    )
-    for batch in progress:
-        chunks.append(vae.encode(batch.to(device, non_blocking=True), sample=False).cpu())
-    progress.close()
-    z = torch.cat(chunks, dim=0)
-    print(f"[world model] encoded latent tensor shape={tuple(z.reshape(episodes, steps, agents, -1).shape)}", flush=True)
-    return z.reshape(episodes, steps, agents, -1)
+    z_size = int(getattr(vae, "z_size", 64))
+    z = torch.empty((episodes * steps * agents, z_size), dtype=torch.float32)
+    if has_compact_observations(data):
+        flat_grid = data["obs_grid"].reshape(episodes * steps * agents, *data["obs_grid"].shape[3:])
+        flat_self = data["obs_self"].reshape(episodes * steps * agents, data["obs_self"].shape[-1])
+        total = flat_grid.shape[0]
+        progress = tqdm(
+            range(0, total, batch_size),
+            total=(total + batch_size - 1) // batch_size,
+            desc="World Model encode",
+            unit="batch",
+            dynamic_ncols=True,
+        )
+        for start in progress:
+            end = min(start + batch_size, total)
+            batch = vector_from_tabular(flat_grid[start:end], flat_self[start:end])
+            z[start:end] = vae.encode(batch.to(device, non_blocking=True), sample=False).cpu()
+    else:
+        obs = data["obs"]
+        if obs.ndim == 3:
+            obs = obs.unsqueeze(2)
+        flat_obs = obs.reshape(episodes * steps * agents, obs.shape[-1]).float()
+        total = flat_obs.shape[0]
+        progress = tqdm(
+            range(0, total, batch_size),
+            total=(total + batch_size - 1) // batch_size,
+            desc="World Model encode",
+            unit="batch",
+            dynamic_ncols=True,
+        )
+        for start in progress:
+            end = min(start + batch_size, total)
+            z[start:end] = vae.encode(flat_obs[start:end].to(device, non_blocking=True), sample=False).cpu()
+    encoded = z.reshape(episodes, steps, agents, z_size)
+    print(f"[world model] encoded latent tensor shape={tuple(encoded.shape)}", flush=True)
+    return encoded
 
 
-def attach_symbolic_dataset_targets(data, coverage: float) -> None:
+def maybe_attach_symbolic_dataset_targets(data, baseline, args) -> None:
+    variant = str(baseline.get("variant", "neural"))
+    coverage = float(baseline.get("coverage", 0.0))
+    if variant not in ("regularization", "residual") or coverage <= 0.0:
+        print(
+            f"[ns-mawm] symbolic training target cache skipped for variant={variant} coverage={coverage}",
+            flush=True,
+        )
+        return
+    attach_symbolic_dataset_targets(
+        data,
+        coverage=coverage,
+        episode_limit=max(0, int(args.joint_symbolic_train_episodes)),
+        step_limit=max(0, int(args.joint_symbolic_train_steps)),
+    )
+
+
+def attach_symbolic_dataset_targets(data, coverage: float, episode_limit: int | None = None, step_limit: int | None = None) -> None:
     if "symbolic_target" in data and "symbolic_mask" in data:
         return
-    obs = all_agent_obs(observation_vectors(data))
+    obs = all_agent_obs(observation_vectors(data, episode_limit=episode_limit))
     actions = normalize_action_tensor(data["action"])
     episodes, steps, agents, obs_size = obs.shape
-    targets = torch.zeros((episodes, steps, agents, obs_size), dtype=torch.float32)
+    target_episodes = min(episodes, int(episode_limit)) if episode_limit else episodes
+    target_steps = min(steps, int(step_limit)) if step_limit else steps
+    if target_episodes <= 0 or target_steps <= 1:
+        print("[ns-mawm] symbolic training target cache skipped because target limit is empty", flush=True)
+        return
+    targets = torch.zeros((target_episodes, target_steps, agents, obs_size), dtype=torch.float32)
     masks = torch.zeros_like(targets, dtype=torch.float32)
     map_coverages = []
     alignment_counts = []
     obs_np = obs.detach().cpu().numpy()
     actions_np = actions.detach().cpu().long().numpy()
     print(
-        f"[ns-mawm] precomputing joint symbolic targets episodes={episodes} steps={steps} agents={agents} coverage={coverage}",
+        f"[ns-mawm] precomputing joint symbolic targets episodes={target_episodes}/{episodes} steps={target_steps}/{steps} agents={agents} coverage={coverage}",
         flush=True,
     )
-    for episode_idx in range(episodes):
+    for episode_idx in range(target_episodes):
         memory = None
-        for t in range(max(0, steps - 1)):
+        for t in range(max(0, target_steps - 1)):
             current_joint = {
                 f"agent_{agent_idx}": vector_to_tabular(obs_np[episode_idx, t, agent_idx])
                 for agent_idx in range(agents)
@@ -461,8 +496,8 @@ def attach_symbolic_dataset_targets(data, coverage: float) -> None:
                 agent_id = f"agent_{agent_idx}"
                 targets[episode_idx, t, agent_idx] = torch.as_tensor(tabular_to_vector(symbolic[agent_id]))
                 masks[episode_idx, t, agent_idx] = torch.as_tensor(tabular_mask_to_vector_mask(mask[agent_id]).astype(np.float32))
-        if episode_idx == 0 or (episode_idx + 1) % max(1, episodes // 10) == 0:
-            print(f"[ns-mawm] symbolic targets {episode_idx + 1}/{episodes}", flush=True)
+        if episode_idx == 0 or (episode_idx + 1) % max(1, target_episodes // 10) == 0:
+            print(f"[ns-mawm] symbolic targets {episode_idx + 1}/{target_episodes}", flush=True)
     data["symbolic_target"] = targets
     data["symbolic_mask"] = masks
     data["symbolic_metadata"] = {
@@ -477,9 +512,13 @@ def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logge
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     z_seq, actions, rewards, dones = flatten_agent_sequences(z, data["action"], data["reward"], data["done"])
     valid = flatten_valid_agents(data.get("transition_valid"), z.shape[2] if z.ndim == 4 else 1)
-    raw_obs_joint = all_agent_obs(observation_vectors(data))
-    raw_actions_joint = normalize_action_tensor(data["action"])
-    obs_seq = flatten_obs_agents(raw_obs_joint)
+    symbolic_variant = str(baseline.get("variant", "neural")) in ("regularization", "residual") and float(baseline.get("coverage", 0.0)) > 0.0
+    raw_obs_joint = None
+    raw_actions_joint = None
+    if symbolic_variant:
+        symbolic_episode_limit = min(observation_shape(data)[0], max(1, int(args.joint_symbolic_train_episodes)))
+        raw_obs_joint = all_agent_obs(observation_vectors(data, episode_limit=symbolic_episode_limit))
+        raw_actions_joint = normalize_action_tensor(data["action"][:symbolic_episode_limit])
     dataset = SequenceDataset(
         z_seq,
         actions,
@@ -487,7 +526,7 @@ def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logge
         dones,
         seq_len=min(args.seq_len, z_seq.shape[1] - 1),
         valid=valid,
-        obs=obs_seq,
+        obs=None,
     )
     if len(dataset) <= 0:
         raise RuntimeError("no valid RNN training sequences were available after terminal masking")
@@ -518,12 +557,17 @@ def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logge
         except StopIteration:
             iterator = iter(loader)
             batch = next(iterator)
-        z_seq, action, reward, done, obs_window = batch
+        if len(batch) == 5:
+            z_seq, action, reward, done, obs_window = batch
+        else:
+            z_seq, action, reward, done = batch
+            obs_window = None
         z_seq = z_seq.to(device, non_blocking=True)
         action = action.to(device, non_blocking=True)
         reward = reward.to(device, non_blocking=True)
         done = done.to(device, non_blocking=True)
-        obs_window = obs_window.to(device, non_blocking=True)
+        if obs_window is not None:
+            obs_window = obs_window.to(device, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
         loss, metrics = model.loss(z_seq, action, reward, done)
         ns_loss, ns_metrics = symbolic_training_loss(
@@ -732,6 +776,8 @@ def flatten_valid_agents(valid: torch.Tensor | None, num_agents: int) -> torch.T
 def symbolic_training_loss(vae, rnn, z_seq, action, obs_window, baseline, args, device):
     variant = str(baseline.get("variant", "neural"))
     if variant not in ("regularization", "residual"):
+        return None, {}
+    if obs_window is None:
         return None, {}
     coverage = float(baseline.get("coverage", 0.0))
     if coverage <= 0.0:

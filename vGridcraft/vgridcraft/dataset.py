@@ -82,89 +82,92 @@ def collect_dataset(
 ) -> dict[str, torch.Tensor]:
     config = config or VGridcraftConfig(max_steps=max_steps, seed=seed)
     env = VectorizedGridcraftEnv(num_envs=num_envs, num_agents=config.num_agents, device=device, seed=seed, config=config)
-    obs_grid_records = []
-    obs_self_records = []
-    action_records = []
-    reward_records = []
-    done_records = []
-    valid_records = []
-    episode_lengths = []
-    completed = 0
-    generator = torch.Generator(device=env.device)
-    generator.manual_seed(seed + 991)
-    print(
-        "[dataset] collection started "
-        f"episodes={episodes} max_steps={max_steps} num_envs={num_envs} "
-        f"num_agents={config.num_agents} device={env.device}",
-        flush=True,
-    )
-    obs = env.reset()
-    per_env = [new_episode_buffers() for _ in range(num_envs)]
-    while completed < episodes:
-        actions = torch.randint(0, config.action_size, (num_envs, config.num_agents), generator=generator, device=env.device)
-        next_obs, rewards, done, truncated, _ = env.step(actions)
-        terminal = done | truncated
-        full_length = torch.tensor(
-            [len(buffers["actions"]) + 1 >= max_steps for buffers in per_env],
-            dtype=torch.bool,
-            device=env.device,
+    try:
+        obs_grid_records = []
+        obs_self_records = []
+        action_records = []
+        reward_records = []
+        done_records = []
+        valid_records = []
+        episode_lengths = []
+        completed = 0
+        generator = torch.Generator(device=env.device)
+        generator.manual_seed(seed + 991)
+        print(
+            "[dataset] collection started "
+            f"episodes={episodes} max_steps={max_steps} num_envs={num_envs} "
+            f"num_agents={config.num_agents} device={env.device}",
+            flush=True,
         )
-        terminal = terminal | full_length
+        obs = env.reset()
+        per_env = [new_episode_buffers() for _ in range(num_envs)]
+        while completed < episodes:
+            actions = torch.randint(0, config.action_size, (num_envs, config.num_agents), generator=generator, device=env.device)
+            next_obs, rewards, done, truncated, _ = env.step(actions)
+            terminal = done | truncated
+            full_length = torch.tensor(
+                [len(buffers["actions"]) + 1 >= max_steps for buffers in per_env],
+                dtype=torch.bool,
+                device=env.device,
+            )
+            terminal = terminal | full_length
 
-        for env_idx in range(num_envs):
-            buffers = per_env[env_idx]
-            buffers["obs_grid"].append(obs["grid"][env_idx].detach().to(torch.int8).cpu())
-            buffers["obs_self"].append(obs["self"][env_idx].detach().to(torch.int16).cpu())
-            buffers["actions"].append(actions[env_idx].detach().cpu())
-            buffers["rewards"].append(rewards[env_idx].detach().cpu())
-            buffers["done"].append(bool(terminal[env_idx].detach().cpu()))
+            for env_idx in range(num_envs):
+                buffers = per_env[env_idx]
+                buffers["obs_grid"].append(obs["grid"][env_idx].detach().to(torch.int8).cpu())
+                buffers["obs_self"].append(obs["self"][env_idx].detach().to(torch.int16).cpu())
+                buffers["actions"].append(actions[env_idx].detach().cpu())
+                buffers["rewards"].append(rewards[env_idx].detach().cpu())
+                buffers["done"].append(bool(terminal[env_idx].detach().cpu()))
 
-        finished = torch.nonzero(terminal, as_tuple=False).flatten()
-        if finished.numel() > 0:
-            for env_idx in finished.detach().cpu().tolist():
-                if completed >= episodes:
-                    break
-                finalized = finalize_episode(per_env[env_idx], max_steps=max_steps, config=config)
-                obs_grid_records.append(finalized["obs_grid"])
-                obs_self_records.append(finalized["obs_self"])
-                action_records.append(finalized["action"])
-                reward_records.append(finalized["reward"])
-                done_records.append(finalized["done"])
-                valid_records.append(finalized["transition_valid"])
-                episode_lengths.append(finalized["episode_length"])
-                per_env[env_idx] = new_episode_buffers()
-                completed += 1
-                if completed == episodes or completed % max(num_envs * 10, 1) == 0:
-                    print(f"[dataset] collected {completed}/{episodes} episodes", flush=True)
-            reset_ids = finished[: max(0, min(finished.numel(), num_envs))]
-            if reset_ids.numel() > 0:
-                env.reset(env_ids=reset_ids)
-                next_obs = env.observation()
-        obs = next_obs
+            finished = torch.nonzero(terminal, as_tuple=False).flatten()
+            if finished.numel() > 0:
+                for env_idx in finished.detach().cpu().tolist():
+                    if completed >= episodes:
+                        break
+                    finalized = finalize_episode(per_env[env_idx], max_steps=max_steps, config=config)
+                    obs_grid_records.append(finalized["obs_grid"])
+                    obs_self_records.append(finalized["obs_self"])
+                    action_records.append(finalized["action"])
+                    reward_records.append(finalized["reward"])
+                    done_records.append(finalized["done"])
+                    valid_records.append(finalized["transition_valid"])
+                    episode_lengths.append(finalized["episode_length"])
+                    per_env[env_idx] = new_episode_buffers()
+                    completed += 1
+                    if completed == episodes or completed % max(num_envs * 10, 1) == 0:
+                        print(f"[dataset] collected {completed}/{episodes} episodes", flush=True)
+                reset_ids = finished[: max(0, min(finished.numel(), num_envs))]
+                if reset_ids.numel() > 0:
+                    env.reset(env_ids=reset_ids)
+                    next_obs = env.observation()
+            obs = next_obs
 
-    lengths = torch.as_tensor(episode_lengths, dtype=torch.long)
-    skipped = int(episodes * max_steps - int(torch.stack(valid_records, dim=0).sum().item()))
-    return {
-        "obs_grid": torch.stack(obs_grid_records, dim=0).to(torch.int8),
-        "obs_self": torch.stack(obs_self_records, dim=0).to(torch.int16),
-        "action": torch.stack(action_records, dim=0).long(),
-        "reward": torch.stack(reward_records, dim=0).float(),
-        "done": torch.stack(done_records, dim=0).bool(),
-        "transition_valid": torch.stack(valid_records, dim=0).bool(),
-        "episode_length": lengths,
-        "metadata": {
-            "episodes": int(episodes),
-            "max_steps": int(max_steps),
-            "num_envs": int(num_envs),
-            "seed": int(seed),
-            "config": asdict(config),
-            "storage": "tabular_compact_v3",
-            "valid_transition_count": int(torch.stack(valid_records, dim=0).sum().item()),
-            "invalid_padded_transition_count": skipped,
-            "mean_episode_length": float(lengths.float().mean().item()) if lengths.numel() else 0.0,
-            "truncation_or_done_rate": float((lengths.float() < float(max_steps)).float().mean().item()) if lengths.numel() else 0.0,
-        },
-    }
+        lengths = torch.as_tensor(episode_lengths, dtype=torch.long)
+        skipped = int(episodes * max_steps - int(torch.stack(valid_records, dim=0).sum().item()))
+        return {
+            "obs_grid": torch.stack(obs_grid_records, dim=0).to(torch.int8),
+            "obs_self": torch.stack(obs_self_records, dim=0).to(torch.int16),
+            "action": torch.stack(action_records, dim=0).long(),
+            "reward": torch.stack(reward_records, dim=0).float(),
+            "done": torch.stack(done_records, dim=0).bool(),
+            "transition_valid": torch.stack(valid_records, dim=0).bool(),
+            "episode_length": lengths,
+            "metadata": {
+                "episodes": int(episodes),
+                "max_steps": int(max_steps),
+                "num_envs": int(num_envs),
+                "seed": int(seed),
+                "config": asdict(config),
+                "storage": "tabular_compact_v3",
+                "valid_transition_count": int(torch.stack(valid_records, dim=0).sum().item()),
+                "invalid_padded_transition_count": skipped,
+                "mean_episode_length": float(lengths.float().mean().item()) if lengths.numel() else 0.0,
+                "truncation_or_done_rate": float((lengths.float() < float(max_steps)).float().mean().item()) if lengths.numel() else 0.0,
+            },
+        }
+    finally:
+        env.close()
 
 
 def new_episode_buffers() -> dict[str, list[Any]]:
