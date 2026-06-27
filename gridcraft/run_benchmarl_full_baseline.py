@@ -23,12 +23,12 @@ def main() -> None:
     parser.add_argument("--marl-num-envs", type=int, default=64)
     parser.add_argument("--marl-max-iters", type=int, default=50)
     parser.add_argument("--frames-per-batch", type=int, default=2048)
-    parser.add_argument("--mappo-minibatch-size", type=int, default=1024)
-    parser.add_argument("--mappo-minibatch-iters", type=int, default=2)
-    parser.add_argument("--mappo-eval-every-iters", type=int, default=25)
-    parser.add_argument("--mappo-eval-episodes", type=int, default=4)
-    parser.add_argument("--mappo-video-every-iters", type=int, default=250)
-    parser.add_argument("--mappo-hidden-size", type=int, default=256)
+    parser.add_argument("--marl-train-batch-size", "--mappo-minibatch-size", dest="marl_train_batch_size", type=int, default=1024)
+    parser.add_argument("--marl-optimizer-steps", "--mappo-minibatch-iters", dest="marl_optimizer_steps", type=int, default=2)
+    parser.add_argument("--marl-eval-every-iters", "--mappo-eval-every-iters", dest="marl_eval_every_iters", type=int, default=25)
+    parser.add_argument("--marl-eval-episodes", "--mappo-eval-episodes", dest="marl_eval_episodes", type=int, default=4)
+    parser.add_argument("--marl-video-every-iters", "--mappo-video-every-iters", dest="marl_video_every_iters", type=int, default=250)
+    parser.add_argument("--marl-hidden-size", "--mappo-hidden-size", dest="marl_hidden_size", type=int, default=256)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--wandb", action="store_true")
@@ -115,7 +115,7 @@ def run_world_model(args, wandb_id, run_name) -> None:
     ])
 
 
-def common_mappo_args(args, wandb_id, run_name, wm_run_dir) -> list[str]:
+def common_marl_args(args, wandb_id, run_name, wm_run_dir) -> list[str]:
     return [
         "--baseline-id", args.baseline_id,
         "--wm-run-dir", str(wm_run_dir),
@@ -124,12 +124,12 @@ def common_mappo_args(args, wandb_id, run_name, wm_run_dir) -> list[str]:
         "--max-steps", str(args.max_steps),
         "--max-iters", str(args.marl_max_iters),
         "--frames-per-batch", str(args.frames_per_batch),
-        "--mappo-minibatch-size", str(args.mappo_minibatch_size),
-        "--mappo-minibatch-iters", str(args.mappo_minibatch_iters),
-        "--mappo-eval-every-iters", str(args.mappo_eval_every_iters),
-        "--mappo-eval-episodes", str(args.mappo_eval_episodes),
-        "--mappo-video-every-iters", str(args.mappo_video_every_iters),
-        "--mappo-hidden-size", str(args.mappo_hidden_size),
+        "--marl-train-batch-size", str(args.marl_train_batch_size),
+        "--marl-optimizer-steps", str(args.marl_optimizer_steps),
+        "--marl-eval-every-iters", str(args.marl_eval_every_iters),
+        "--marl-eval-episodes", str(args.marl_eval_episodes),
+        "--marl-video-every-iters", str(args.marl_video_every_iters),
+        "--marl-hidden-size", str(args.marl_hidden_size),
         "--device", args.device,
         "--seed", str(args.seed),
         "--wandb-step-offset", str(args.vae_steps + args.rnn_steps + 1000),
@@ -140,21 +140,21 @@ def common_mappo_args(args, wandb_id, run_name, wm_run_dir) -> list[str]:
 
 
 def run_mambpo(args, wandb_id, run_name, wm_run_dir) -> None:
-    invoke("run_benchmarl_mappo_gridcraft", [
+    invoke("run_benchmarl_marl_gridcraft", [
         "--algorithm", "mambpo",
-        *common_mappo_args(args, wandb_id, run_name, wm_run_dir),
+        *common_marl_args(args, wandb_id, run_name, wm_run_dir),
     ])
 
 
 def run_mb_mappo(args, wandb_id, run_name, wm_run_dir) -> None:
-    invoke("run_benchmarl_mappo_gridcraft", [
+    invoke("run_benchmarl_marl_gridcraft", [
         "--algorithm", "mb_mappo",
-        *common_mappo_args(args, wandb_id, run_name, wm_run_dir),
+        *common_marl_args(args, wandb_id, run_name, wm_run_dir),
     ])
 
 
 def run_imagined_mappo(args, wandb_id, run_name, wm_run_dir) -> None:
-    invoke("run_benchmarl_imagined_mappo_gridcraft", common_mappo_args(args, wandb_id, run_name, wm_run_dir))
+    invoke("run_benchmarl_imagined_mappo_gridcraft", common_marl_args(args, wandb_id, run_name, wm_run_dir))
 
 
 def run_dyna_actor_critic(args, wandb_id, run_name, wm_run_dir) -> None:
@@ -167,6 +167,10 @@ def run_dyna_actor_critic(args, wandb_id, run_name, wm_run_dir) -> None:
         "--max-iters", str(args.marl_max_iters),
         "--device", args.device,
         "--seed", str(args.seed),
+        "--marl-hidden-size", str(args.marl_hidden_size),
+        "--marl-eval-every-iters", str(args.marl_eval_every_iters),
+        "--marl-eval-episodes", str(args.marl_eval_episodes),
+        "--marl-video-every-iters", str(args.marl_video_every_iters),
         "--wandb-step-offset", str(args.vae_steps + args.rnn_steps + 1000),
         "--video-max-steps", str(args.video_max_steps),
         "--video-fps", str(args.video_fps),

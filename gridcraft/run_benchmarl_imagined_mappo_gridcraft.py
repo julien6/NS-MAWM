@@ -14,8 +14,8 @@ sys.path.insert(0, str(BENCHMARL_DIR))
 sys.path.insert(0, str(ROOT / "vGridcraft"))
 sys.path.insert(0, str(ROOT / "gridcraft"))
 
-from run_benchmarl_mappo_gridcraft import (
-    MappoEvaluationVideoCallback,
+from run_benchmarl_marl_gridcraft import (
+    MarlEvaluationVideoCallback,
     infer_ns_settings,
     patch_benchmarl_wandb_sections,
 )
@@ -30,12 +30,12 @@ def main() -> None:
     parser.add_argument("--max-steps", type=int, default=500)
     parser.add_argument("--max-iters", type=int, default=50)
     parser.add_argument("--frames-per-batch", type=int, default=2048)
-    parser.add_argument("--mappo-minibatch-size", type=int, default=1024)
-    parser.add_argument("--mappo-minibatch-iters", type=int, default=2)
-    parser.add_argument("--mappo-eval-every-iters", type=int, default=25)
-    parser.add_argument("--mappo-eval-episodes", type=int, default=4)
-    parser.add_argument("--mappo-video-every-iters", type=int, default=250)
-    parser.add_argument("--mappo-hidden-size", type=int, default=256)
+    parser.add_argument("--marl-train-batch-size", "--mappo-minibatch-size", dest="marl_train_batch_size", type=int, default=1024)
+    parser.add_argument("--marl-optimizer-steps", "--mappo-minibatch-iters", dest="marl_optimizer_steps", type=int, default=2)
+    parser.add_argument("--marl-eval-every-iters", "--mappo-eval-every-iters", dest="marl_eval_every_iters", type=int, default=25)
+    parser.add_argument("--marl-eval-episodes", "--mappo-eval-episodes", dest="marl_eval_episodes", type=int, default=4)
+    parser.add_argument("--marl-video-every-iters", "--mappo-video-every-iters", dest="marl_video_every_iters", type=int, default=250)
+    parser.add_argument("--marl-hidden-size", "--mappo-hidden-size", dest="marl_hidden_size", type=int, default=256)
     parser.add_argument("--dream-start-noise", type=float, default=1.0)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=1)
@@ -90,10 +90,10 @@ def main() -> None:
     experiment_config.max_n_frames = None
     experiment_config.on_policy_collected_frames_per_batch = args.frames_per_batch
     experiment_config.on_policy_n_envs_per_worker = args.num_envs
-    experiment_config.on_policy_minibatch_size = min(args.mappo_minibatch_size, args.frames_per_batch)
-    experiment_config.on_policy_n_minibatch_iters = args.mappo_minibatch_iters
-    experiment_config.evaluation_interval = args.frames_per_batch * max(1, args.mappo_eval_every_iters)
-    experiment_config.evaluation_episodes = min(args.mappo_eval_episodes, args.num_envs)
+    experiment_config.on_policy_minibatch_size = min(args.marl_train_batch_size, args.frames_per_batch)
+    experiment_config.on_policy_n_minibatch_iters = args.marl_optimizer_steps
+    experiment_config.evaluation_interval = args.frames_per_batch * max(1, args.marl_eval_every_iters)
+    experiment_config.evaluation_episodes = min(args.marl_eval_episodes, args.num_envs)
     experiment_config.render = False
     experiment_config.loggers = ["csv", "wandb"] if args.wandb else ["csv"]
     experiment_config.project_name = args.wandb_project
@@ -109,8 +109,8 @@ def main() -> None:
     save_folder = (ROOT / "gridcraft" / args.save_folder).resolve()
     save_folder.mkdir(parents=True, exist_ok=True)
     experiment_config.save_folder = str(save_folder)
-    model_config = MlpConfig(num_cells=[args.mappo_hidden_size, args.mappo_hidden_size], activation_class=nn.Tanh, layer_class=nn.Linear)
-    critic_model_config = MlpConfig(num_cells=[args.mappo_hidden_size, args.mappo_hidden_size], activation_class=nn.Tanh, layer_class=nn.Linear)
+    model_config = MlpConfig(num_cells=[args.marl_hidden_size, args.marl_hidden_size], activation_class=nn.Tanh, layer_class=nn.Linear)
+    critic_model_config = MlpConfig(num_cells=[args.marl_hidden_size, args.marl_hidden_size], activation_class=nn.Tanh, layer_class=nn.Linear)
     experiment = Experiment(
         task=task,
         algorithm_config=algorithm_config,
@@ -118,7 +118,7 @@ def main() -> None:
         critic_model_config=critic_model_config,
         seed=args.seed,
         config=experiment_config,
-        callbacks=[MappoEvaluationVideoCallback(args)] if args.wandb and args.wandb_videos else None,
+        callbacks=[MarlEvaluationVideoCallback(args)] if args.wandb and args.wandb_videos else None,
     )
     print(
         f"=== BenchMARL MAPPO-in-WM ({args.baseline_id}) envs={args.num_envs} "

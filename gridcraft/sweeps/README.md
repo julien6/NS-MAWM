@@ -58,13 +58,13 @@ wandb agent ENTITY/ns-mawm-gridcraft/SWEEP_ID
 This grid compares downstream-control baselines with one W&B run per baseline:
 
 ```text
-B00 real_mappo
-B24 imagined_mappo + mpc_cem
-B25 imagined_mappo + mpc_cem
-B26 imagined_mappo + mpc_cem
-B27 imagined_mappo + mpc_cem
-B28 imagined_mappo + mpc_cem
-B29 imagined_mappo + mpc_cem
+B00 model-free MASAC in real vGridcraft
+B24 model-based MAMBPO + optional MPC-CEM
+B25 model-based MAMBPO + optional MPC-CEM
+B26 model-based MAMBPO + optional MPC-CEM
+B27 model-based MAMBPO + optional MPC-CEM
+B28 model-based MAMBPO + optional MPC-CEM
+B29 model-based MAMBPO + optional MPC-CEM
 ```
 
 The objective is:

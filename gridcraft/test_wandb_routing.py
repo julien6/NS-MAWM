@@ -1,4 +1,4 @@
-from run_benchmarl_mappo_gridcraft import route_benchmarl_metrics
+from run_benchmarl_marl_gridcraft import route_benchmarl_metrics
 
 
 def test_mambpo_imagination_metrics_route_to_marl_training():

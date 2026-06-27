@@ -370,9 +370,11 @@ def architecture_config_table(wandb, config):
 def _algorithm_description(config):
   policy = config.get("policy_baseline")
   if policy == "real_mappo":
-    return "Model-free mono-agent actor-critic runner with MAPPO-compatible logging, trained directly in real Gridcraft."
+    return "Legacy model-free mono-agent actor-critic runner trained directly in real Gridcraft."
   if policy == "imagined_mappo":
-    return "Mono-agent actor-critic runner trained only in the Gridcraft dream environment and periodically evaluated in real Gridcraft."
+    return "Legacy MAPPO-in-WM runner trained only in the Gridcraft dream environment and periodically evaluated in real Gridcraft."
+  if config.get("downstream_policy_backend") == "dyna_actor_critic_world_model_only":
+    return "Diagnostic dyna_actor_critic runner trained only from world-model rollouts."
   if policy == "mpc_cem":
     return "MPC-CEM planner acting in real Gridcraft by evaluating candidate action sequences inside the learned world model."
   if config.get("phase") == "world_model":

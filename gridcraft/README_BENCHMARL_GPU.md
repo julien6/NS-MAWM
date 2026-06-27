@@ -35,8 +35,9 @@ Recommended serious command on a CUDA machine:
 
 Datasets are cached under `datasets/gridcraft/` using a deterministic key from the environment config, number of episodes, max steps, and seed. Use `--force-recollect` to rebuild the dataset.
 
-Single-command pipeline: World Model train/eval first, then native BenchMARL
-MAPPO train/eval:
+Single-command pipeline: World Model train/eval first, then downstream MARL
+train/eval. By default, `B00` uses MASAC in real vGridcraft and model-based
+baselines use MAMBPO:
 
 ```bash
 cd gridcraft

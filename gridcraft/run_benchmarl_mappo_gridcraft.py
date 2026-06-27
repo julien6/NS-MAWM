@@ -28,9 +28,9 @@ class MarlEvaluationVideoCallback(Callback):
         log_mambpo_imagined_evaluation(self.args, self.experiment, rollouts, iteration)
         if iteration <= 0:
             return
-        if int(self.args.mappo_video_every_iters) <= 0:
+        if int(self.args.marl_video_every_iters) <= 0:
             return
-        if iteration % int(self.args.mappo_video_every_iters) != 0:
+        if iteration % int(self.args.marl_video_every_iters) != 0:
             return
         log_marl_evaluation_video(self.args, policy=self.experiment.policy, iteration=iteration)
 
@@ -42,12 +42,12 @@ def main() -> None:
     parser.add_argument("--max-steps", type=int, default=200)
     parser.add_argument("--max-iters", type=int, default=2)
     parser.add_argument("--frames-per-batch", type=int, default=256)
-    parser.add_argument("--mappo-minibatch-size", type=int, default=1024)
-    parser.add_argument("--mappo-minibatch-iters", type=int, default=2)
-    parser.add_argument("--mappo-eval-every-iters", type=int, default=25)
-    parser.add_argument("--mappo-eval-episodes", type=int, default=4)
-    parser.add_argument("--mappo-video-every-iters", type=int, default=250)
-    parser.add_argument("--mappo-hidden-size", type=int, default=256)
+    parser.add_argument("--marl-train-batch-size", "--mappo-minibatch-size", dest="marl_train_batch_size", type=int, default=1024)
+    parser.add_argument("--marl-optimizer-steps", "--mappo-minibatch-iters", dest="marl_optimizer_steps", type=int, default=2)
+    parser.add_argument("--marl-eval-every-iters", "--mappo-eval-every-iters", dest="marl_eval_every_iters", type=int, default=25)
+    parser.add_argument("--marl-eval-episodes", "--mappo-eval-episodes", dest="marl_eval_episodes", type=int, default=4)
+    parser.add_argument("--marl-video-every-iters", "--mappo-video-every-iters", dest="marl_video_every_iters", type=int, default=250)
+    parser.add_argument("--marl-hidden-size", "--mappo-hidden-size", dest="marl_hidden_size", type=int, default=256)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--save-folder", default="runs_benchmarl/native_marl")
@@ -71,6 +71,7 @@ def main() -> None:
     parser.add_argument("--mb-imagined-branches", type=int, default=4)
     parser.add_argument("--mb-lambda-imagined", type=float, default=0.5)
     args = parser.parse_args()
+    warn_legacy_marl_names(args.algorithm)
 
     try:
         from benchmarl.algorithms import MambpoConfig, MappoConfig, MasacConfig, MBMappoConfig
@@ -143,15 +144,15 @@ def main() -> None:
     if on_policy:
         experiment_config.on_policy_collected_frames_per_batch = args.frames_per_batch
         experiment_config.on_policy_n_envs_per_worker = args.num_envs
-        experiment_config.on_policy_minibatch_size = min(args.mappo_minibatch_size, args.frames_per_batch)
-        experiment_config.on_policy_n_minibatch_iters = args.mappo_minibatch_iters
+        experiment_config.on_policy_minibatch_size = min(args.marl_train_batch_size, args.frames_per_batch)
+        experiment_config.on_policy_n_minibatch_iters = args.marl_optimizer_steps
     else:
         experiment_config.off_policy_collected_frames_per_batch = args.frames_per_batch
         experiment_config.off_policy_n_envs_per_worker = args.num_envs
-        experiment_config.off_policy_train_batch_size = min(args.mappo_minibatch_size, args.frames_per_batch)
-        experiment_config.off_policy_n_optimizer_steps = args.mappo_minibatch_iters
-    experiment_config.evaluation_interval = args.frames_per_batch * max(1, args.mappo_eval_every_iters)
-    experiment_config.evaluation_episodes = min(args.mappo_eval_episodes, args.num_envs)
+        experiment_config.off_policy_train_batch_size = min(args.marl_train_batch_size, args.frames_per_batch)
+        experiment_config.off_policy_n_optimizer_steps = args.marl_optimizer_steps
+    experiment_config.evaluation_interval = args.frames_per_batch * max(1, args.marl_eval_every_iters)
+    experiment_config.evaluation_episodes = min(args.marl_eval_episodes, args.num_envs)
     experiment_config.render = False
     experiment_config.loggers = ["csv", "wandb"] if args.wandb else ["csv"]
     experiment_config.project_name = args.wandb_project
@@ -166,8 +167,8 @@ def main() -> None:
     save_folder = (ROOT / "gridcraft" / args.save_folder).resolve()
     save_folder.mkdir(parents=True, exist_ok=True)
     experiment_config.save_folder = str(save_folder)
-    model_config = MlpConfig(num_cells=[args.mappo_hidden_size, args.mappo_hidden_size], activation_class=nn.Tanh, layer_class=nn.Linear)
-    critic_model_config = MlpConfig(num_cells=[args.mappo_hidden_size, args.mappo_hidden_size], activation_class=nn.Tanh, layer_class=nn.Linear)
+    model_config = MlpConfig(num_cells=[args.marl_hidden_size, args.marl_hidden_size], activation_class=nn.Tanh, layer_class=nn.Linear)
+    critic_model_config = MlpConfig(num_cells=[args.marl_hidden_size, args.marl_hidden_size], activation_class=nn.Tanh, layer_class=nn.Linear)
     experiment = Experiment(
         task=task,
         algorithm_config=algorithm_config,
@@ -185,6 +186,32 @@ def main() -> None:
             flush=True,
         )
     experiment.run()
+
+
+def warn_legacy_marl_names(algorithm: str) -> None:
+    legacy_flags = [
+        flag for flag in sys.argv[1:]
+        if flag.startswith("--mappo-")
+    ]
+    legacy_env = [
+        name for name in (
+            "MAPPO_MINIBATCH_SIZE",
+            "MAPPO_MINIBATCH_ITERS",
+            "MAPPO_EVAL_EVERY_ITERS",
+            "MAPPO_EVAL_EPISODES",
+            "MAPPO_VIDEO_EVERY_ITERS",
+            "MAPPO_HIDDEN_SIZE",
+        )
+        if name in os.environ
+    ]
+    if algorithm in {"masac", "mambpo"} and (legacy_flags or legacy_env):
+        details = ", ".join(legacy_flags + legacy_env)
+        print(
+            "[naming] Deprecated MAPPO_* nomenclature used for a generic MARL "
+            f"runner ({algorithm}): {details}. Prefer MARL_* env vars and "
+            "--marl-* CLI flags.",
+            flush=True,
+        )
 
 
 def patch_benchmarl_wandb_sections(logger_class, step_offset=0):

@@ -53,10 +53,10 @@ def main() -> None:
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--entropy-coef", type=float, default=0.01)
     parser.add_argument("--value-coef", type=float, default=0.5)
-    parser.add_argument("--mappo-hidden-size", type=int, default=256)
-    parser.add_argument("--mappo-eval-every-iters", type=int, default=25)
-    parser.add_argument("--mappo-eval-episodes", type=int, default=4)
-    parser.add_argument("--mappo-video-every-iters", type=int, default=250)
+    parser.add_argument("--marl-hidden-size", "--mappo-hidden-size", dest="marl_hidden_size", type=int, default=256)
+    parser.add_argument("--marl-eval-every-iters", "--mappo-eval-every-iters", dest="marl_eval_every_iters", type=int, default=25)
+    parser.add_argument("--marl-eval-episodes", "--mappo-eval-episodes", dest="marl_eval_episodes", type=int, default=4)
+    parser.add_argument("--marl-video-every-iters", "--mappo-video-every-iters", dest="marl_video_every_iters", type=int, default=250)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--wandb-step-offset", type=int, default=int(os.environ.get("WANDB_STEP_OFFSET", "0")))
@@ -74,7 +74,7 @@ def main() -> None:
         args,
         config={
             **vars(args),
-            "downstream_policy_backend": "dyna_mappo_world_model_only",
+            "downstream_policy_backend": "dyna_actor_critic_world_model_only",
             "downstream_uses_real_environment": False,
             "downstream_real_interaction_ratio": 0.0,
             "downstream_imagined_ratio": 1.0,
@@ -85,7 +85,7 @@ def main() -> None:
         },
         default_group=args.baseline_id,
         default_name=f"{args.baseline_id}_a{args.num_agents}_dyna_seed{args.seed}",
-        tags=["gridcraft", "dyna-mappo", "world-model-policy", args.baseline_id],
+        tags=["gridcraft", "dyna-actor-critic", "world-model-policy", args.baseline_id],
         info_sections=[GENERAL, MARL_TRAINING, MARL_EVALUATION],
         out_dir=str(run_dir / "dyna_policy"),
     )
@@ -105,14 +105,14 @@ def main() -> None:
     for param in rnn.parameters():
         param.requires_grad_(False)
 
-    policy = SharedActorCritic(hidden_size=args.mappo_hidden_size).to(device)
+    policy = SharedActorCritic(hidden_size=args.marl_hidden_size).to(device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=args.learning_rate)
     batch = args.num_envs * args.num_agents
     z = torch.randn(batch, vae.z_size, device=device) * float(args.imagined_start_noise)
     rnn_state = None
     ns_memory = [None for _ in range(args.num_envs)]
 
-    print(f"=== Dyna MAPPO downstream training in world model ({args.baseline_id}) ===", flush=True)
+    print(f"=== dyna_actor_critic downstream training in world model ({args.baseline_id}) ===", flush=True)
     print(
         f"Dyna config: envs={args.num_envs}, agents={args.num_agents}, "
         f"iters={args.max_iters}, imagined_horizon={args.imagined_horizon}, "
@@ -135,9 +135,9 @@ def main() -> None:
         )
         step = int(args.wandb_step_offset) + iteration
         logger.log(metrics, step=step, namespace="marl_training")
-        if iteration == 1 or iteration % max(1, int(args.mappo_eval_every_iters)) == 0:
+        if iteration == 1 or iteration % max(1, int(args.marl_eval_every_iters)) == 0:
             eval_metrics = evaluate_imagined_policy(vae, rnn, policy, args, device, ns_variant, ns_coverage)
-            eval_metrics["policy_backend"] = "dyna_mappo_world_model_only"
+            eval_metrics["policy_backend"] = "dyna_actor_critic_world_model_only"
             logger.log(eval_metrics, step=step, namespace="marl_evaluation")
             print(
                 "[dyna] "
@@ -147,12 +147,12 @@ def main() -> None:
                 f"policy_loss={metrics['policy_loss']:.4f}",
                 flush=True,
             )
-        if should_log_wandb_videos(args) and int(args.mappo_video_every_iters) > 0 and iteration % int(args.mappo_video_every_iters) == 0:
+        if should_log_wandb_videos(args) and int(args.marl_video_every_iters) > 0 and iteration % int(args.marl_video_every_iters) == 0:
             log_imagined_policy_video(logger, vae, rnn, policy, args, config, device, ns_variant, ns_coverage, step=step)
 
     final_step = int(args.wandb_step_offset) + int(args.max_iters) + 1
     final_metrics = evaluate_imagined_policy(vae, rnn, policy, args, device, ns_variant, ns_coverage)
-    final_metrics["policy_backend"] = "dyna_mappo_world_model_only"
+    final_metrics["policy_backend"] = "dyna_actor_critic_world_model_only"
     logger.log(final_metrics, step=final_step, namespace="marl_evaluation")
     log_imagined_policy_video(logger, vae, rnn, policy, args, config, device, ns_variant, ns_coverage, step=final_step)
     torch.save(policy.state_dict(), run_dir / "dyna_policy" / "policy.pt")
@@ -234,7 +234,7 @@ def detach_rnn_state(state):
 
 @torch.no_grad()
 def evaluate_imagined_policy(vae, rnn, policy, args, device, ns_variant, ns_coverage):
-    episodes = max(1, int(args.mappo_eval_episodes))
+    episodes = max(1, int(args.marl_eval_episodes))
     batch = episodes * int(args.num_agents)
     z = torch.randn(batch, vae.z_size, device=device) * float(args.imagined_start_noise)
     state = None
