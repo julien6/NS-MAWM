@@ -184,7 +184,7 @@ def _action_panel(action_text: str, height: int) -> Image.Image:
   font_path = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
   font = ImageFont.truetype(str(font_path), 22) if font_path.exists() else ImageFont.load_default()
   arrow_font = ImageFont.truetype(str(font_path), 42) if font_path.exists() else ImageFont.load_default()
-  lines = [action_text, "=>"]
+  lines = [action_text, "\u27f9"]
   probe = Image.new("RGB", (1, 1), (245, 245, 245))
   draw = ImageDraw.Draw(probe)
   width = 220
