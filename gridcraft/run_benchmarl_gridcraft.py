@@ -45,6 +45,24 @@ BASELINES = {
     "B26_regularization_k0.6": {"id": "B26", "variant": "regularization", "coverage": 0.6, "model_based": True},
 }
 
+ACTION_NAMES = [
+    "stay",
+    "move_n",
+    "move_s",
+    "move_w",
+    "move_e",
+    "harvest",
+    "pickup",
+    "attack",
+    "eat",
+    "craft_plank",
+    "craft_stick",
+    "craft_wood_sword",
+    "craft_stone_sword",
+    "craft_wood_pickaxe",
+    "craft_stone_pickaxe",
+]
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -1226,28 +1244,41 @@ def record_world_model_video(args, config, vae, rnn, device):
     obs = env.reset()
     z = vae.encode(obs["vector"][0].to(device), sample=False)
     state = None
+    imagined_tabular = observation_to_joint_tabular(obs["vector"][0])
     baseline = BASELINES.get(getattr(args, "baseline_id", ""), {})
     ns_variant = str(baseline.get("variant", "neural"))
     ns_coverage = float(baseline.get("coverage", 0.0))
     ns_memory = None
+    cumulative_reward = 0.0
     max_steps = max(1, int(args.video_max_steps))
-    for _ in range(max_steps):
-        current_tabular = observation_to_joint_tabular(obs["vector"][0])
+    initial_frame = env.render(
+        env_index=0,
+        mode="rgb_array",
+        tabular_observations=imagined_tabular,
+        overlay_info={
+            "step": 0,
+            "action": "initial",
+            "reward": 0.0,
+            "cumulative_reward": 0.0,
+            "done": False,
+        },
+    )
+    frames.append(initial_frame[:, :, :3] if initial_frame.shape[-1] == 4 else initial_frame)
+    for step_index in range(max_steps):
+        previous_imagined_tabular = imagined_tabular
         action = torch.randint(0, config.action_size, (1, config.num_agents), generator=generator, device=device)
-        obs, reward, done, truncated, _ = env.step(action)
         pred_z, _, _, state = rnn.step(z, action[0], state, deterministic=True)
+        obs, reward, done, truncated, _ = env.step(action)
         imagined = vae.decode_tabular(pred_z)
-        tabular = {}
-        for agent_idx in range(config.num_agents):
-            tabular[f"agent_{agent_idx}"] = {
-                "grid": imagined["grid"][agent_idx].detach().cpu().numpy().astype("int8"),
-                "self": imagined["self"][agent_idx].detach().cpu().numpy().astype("int16"),
-            }
+        imagined_tabular = decoded_to_joint_tabular(imagined, config.num_agents)
+        joint_action = {
+            f"agent_{agent_idx}": int(action[0, agent_idx].detach().cpu())
+            for agent_idx in range(config.num_agents)
+        }
         if ns_variant in ("projection", "residual"):
-            joint_action = {f"agent_{agent_idx}": int(action[0, agent_idx].detach().cpu()) for agent_idx in range(config.num_agents)}
-            tabular, symbolic_info = apply_symbolic_projection(
-                tabular,
-                current_tabular,
+            imagined_tabular, symbolic_info = apply_symbolic_projection(
+                imagined_tabular,
+                previous_imagined_tabular,
                 joint_action,
                 ns_variant,
                 coverage=ns_coverage,
@@ -1255,17 +1286,31 @@ def record_world_model_video(args, config, vae, rnn, device):
             )
             if symbolic_info is not None and len(symbolic_info) >= 3:
                 ns_memory = symbolic_info[2]
-        frame = env.render(env_index=0, mode="rgb_array", tabular_observations=tabular)
+        reward_value = float(reward.mean().detach().cpu())
+        cumulative_reward += reward_value
+        episode_done = bool((done | truncated).all())
+        frame = env.render(
+            env_index=0,
+            mode="rgb_array",
+            tabular_observations=imagined_tabular,
+            overlay_info={
+                "step": step_index + 1,
+                "action": format_joint_action(joint_action),
+                "reward": reward_value,
+                "cumulative_reward": cumulative_reward,
+                "done": episode_done,
+            },
+        )
         frames.append(frame[:, :, :3] if frame.shape[-1] == 4 else frame)
         if ns_variant in ("projection", "residual"):
             projected = torch.as_tensor(
-                np.asarray([tabular_to_vector(tabular[f"agent_{idx}"]) for idx in range(config.num_agents)], dtype=np.float32),
+                np.asarray([tabular_to_vector(imagined_tabular[f"agent_{idx}"]) for idx in range(config.num_agents)], dtype=np.float32),
                 device=device,
             )
             z = vae.encode(projected, sample=False)
         else:
-            z = vae.encode(obs["vector"][0].to(device), sample=False)
-        if bool((done | truncated).all()):
+            z = pred_z
+        if episode_done:
             break
     env.close()
     return frames
@@ -1274,6 +1319,23 @@ def record_world_model_video(args, config, vae, rnn, device):
 def observation_to_joint_tabular(agent_vectors: torch.Tensor):
     vectors = agent_vectors.detach().cpu().numpy()
     return {f"agent_{idx}": vector_to_tabular(vectors[idx]) for idx in range(vectors.shape[0])}
+
+
+def decoded_to_joint_tabular(decoded: dict[str, torch.Tensor], num_agents: int):
+    return {
+        f"agent_{agent_idx}": {
+            "grid": decoded["grid"][agent_idx].detach().cpu().numpy().astype("int8"),
+            "self": decoded["self"][agent_idx].detach().cpu().numpy().astype("int16"),
+        }
+        for agent_idx in range(num_agents)
+    }
+
+
+def format_joint_action(joint_action: dict[str, int]) -> dict[str, str]:
+    return {
+        agent_id: ACTION_NAMES[action] if 0 <= int(action) < len(ACTION_NAMES) else str(int(action))
+        for agent_id, action in joint_action.items()
+    }
 
 
 @torch.no_grad()
@@ -1316,13 +1378,43 @@ def record_real_policy_video(args, config, device):
     generator.manual_seed(args.seed + 9101)
     frames = []
     env.reset()
+    cumulative_reward = 0.0
+    initial_frame = env.render(
+        env_index=0,
+        mode="rgb_array",
+        overlay_info={
+            "step": 0,
+            "action": "initial",
+            "reward": 0.0,
+            "cumulative_reward": 0.0,
+            "done": False,
+        },
+    )
+    frames.append(initial_frame[:, :, :3] if initial_frame.shape[-1] == 4 else initial_frame)
     max_steps = max(1, int(args.video_max_steps))
-    for _ in range(max_steps):
+    for step_index in range(max_steps):
         action = torch.randint(0, config.action_size, (1, config.num_agents), generator=generator, device=device)
-        _, _, done, truncated, _ = env.step(action)
-        frame = env.render(env_index=0, mode="rgb_array")
+        _, reward, done, truncated, _ = env.step(action)
+        reward_value = float(reward.mean().detach().cpu())
+        cumulative_reward += reward_value
+        joint_action = {
+            f"agent_{agent_idx}": int(action[0, agent_idx].detach().cpu())
+            for agent_idx in range(config.num_agents)
+        }
+        episode_done = bool((done | truncated).all())
+        frame = env.render(
+            env_index=0,
+            mode="rgb_array",
+            overlay_info={
+                "step": step_index + 1,
+                "action": format_joint_action(joint_action),
+                "reward": reward_value,
+                "cumulative_reward": cumulative_reward,
+                "done": episode_done,
+            },
+        )
         frames.append(frame[:, :, :3] if frame.shape[-1] == 4 else frame)
-        if bool((done | truncated).all()):
+        if episode_done:
             break
     env.close()
     return frames

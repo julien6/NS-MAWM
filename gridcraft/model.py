@@ -12,9 +12,27 @@ import numpy as np
 from dream_env import make_env as make_dream_env
 from env import make_env
 from exp_config import ACTION_SIZE, CONTROLLER_INPUT_SIZE
-from ns_symbolic import NS_VARIANTS, apply_symbolic_projection, compare_with_symbolic
+from ns_symbolic import NS_VARIANTS, apply_symbolic_projection, compare_with_symbolic, tabular_to_vector
 from rnn.rnn import GridcraftRNN, rnn_init_state, rnn_next_state, rnn_output
 from vae.vae import GridcraftVAE
+
+ACTION_NAMES = [
+  "stay",
+  "move_n",
+  "move_s",
+  "move_w",
+  "move_e",
+  "harvest",
+  "pickup",
+  "attack",
+  "eat",
+  "craft_plank",
+  "craft_stick",
+  "craft_wood_sword",
+  "craft_stone_sword",
+  "craft_wood_pickaxe",
+  "craft_stone_pickaxe",
+]
 
 
 class TabularRenderWorker:
@@ -28,8 +46,13 @@ class TabularRenderWorker:
       stderr=subprocess.DEVNULL,
     )
 
-  def render(self, observation, world=None):
-    self._write({"cmd": "render_human" if self.display else "render", "observation": observation, "world": world})
+  def render(self, observation, world=None, overlay_info=None):
+    self._write({
+      "cmd": "render_human" if self.display else "render",
+      "observation": observation,
+      "world": world,
+      "overlay_info": overlay_info,
+    })
     return self._read()
 
   def poll_action(self, seconds):
@@ -136,6 +159,11 @@ def decode_tabular_observation(controller, z):
   return {"agent_0": controller.vae.decode_tabular(z)}
 
 
+def _action_name(action):
+  action = int(action)
+  return ACTION_NAMES[action] if 0 <= action < len(ACTION_NAMES) else str(action)
+
+
 def world_snapshot(env):
   world = env.env.world
   agents = {}
@@ -220,11 +248,24 @@ def compare_world_model_random(controller, render_mode=False, episodes=1, seed=1
     controller.reset()
     total_reward = 0.0
     episode_mismatches = []
-    imagined_obs = decode_tabular_observation(controller, controller.encode_obs(obs))["agent_0"]
+    z = controller.encode_obs(obs)
+    imagined_obs = {
+      "grid": np.asarray(env.last_obs["grid"], dtype=np.int8).copy(),
+      "self": np.asarray(env.last_obs["self"], dtype=np.int16).copy(),
+    }
+    if render_mode:
+      renderer.render(
+        {"agent_0": imagined_obs},
+        world=world_snapshot(env),
+        overlay_info={
+          "step": 0,
+          "action": "initial",
+          "reward": 0.0,
+          "cumulative_reward": 0.0,
+          "done": False,
+        },
+      )
     for t in range(max_steps):
-      z = controller.encode_obs(obs)
-      if render_mode:
-        renderer.render({"agent_0": imagined_obs}, world=world_snapshot(env))
       if policy == "manual":
         response = renderer.poll_action(render_delay)
         if response.get("closed"):
@@ -236,18 +277,35 @@ def compare_world_model_random(controller, render_mode=False, episodes=1, seed=1
         action = int(rng.integers(0, ACTION_SIZE))
         if render_mode and render_delay > 0:
           time.sleep(render_delay)
-      current_obs = env.last_obs
+      current_imagined_obs = imagined_obs
       imagined_z = predict_rnn_next_z(controller, z, action, rng=rng, mode=imagination_mode)
       next_obs, reward, done, info = env.step(action)
       imagined_obs = decode_tabular_observation(controller, imagined_z)["agent_0"]
-      imagined_obs, _ = apply_symbolic_projection(imagined_obs, current_obs, action, ns_variant, coverage=symbolic_coverage)
+      imagined_obs, _ = apply_symbolic_projection(imagined_obs, current_imagined_obs, action, ns_variant, coverage=symbolic_coverage)
+      if ns_variant in ("projection", "residual"):
+        mu, _ = controller.vae.encode_mu_logvar(tabular_to_vector(imagined_obs).reshape(1, -1))
+        z = mu[0]
+      else:
+        z = imagined_z
       real_obs = env.last_obs
       grid_mismatch = float(np.mean(real_obs["grid"] != imagined_obs["grid"]))
       self_mse = float(np.mean((np.asarray(real_obs["self"], dtype=np.float32) - np.asarray(imagined_obs["self"], dtype=np.float32)) ** 2))
-      symbolic_metrics = compare_with_symbolic(imagined_obs, current_obs, action, coverage=symbolic_coverage)
+      symbolic_metrics = compare_with_symbolic(imagined_obs, current_imagined_obs, action, coverage=symbolic_coverage)
       episode_mismatches.append((grid_mismatch, self_mse, symbolic_metrics["rvr"]))
       total_reward += reward
       obs = next_obs
+      if render_mode:
+        renderer.render(
+          {"agent_0": imagined_obs},
+          world=world_snapshot(env),
+          overlay_info={
+            "step": t + 1,
+            "action": _action_name(action),
+            "reward": float(reward),
+            "cumulative_reward": float(total_reward),
+            "done": bool(done),
+          },
+        )
       if done:
         break
     env.close()

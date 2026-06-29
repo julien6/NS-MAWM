@@ -17,6 +17,24 @@ sys.path.insert(0, str(ROOT / "vGridcraft"))
 from vgridcraft import VGridcraftConfig, VectorizedGridcraftEnv
 from benchmarl.experiment.callback import Callback
 
+ACTION_NAMES = [
+    "stay",
+    "move_n",
+    "move_s",
+    "move_w",
+    "move_e",
+    "harvest",
+    "pickup",
+    "attack",
+    "eat",
+    "craft_plank",
+    "craft_stick",
+    "craft_wood_sword",
+    "craft_stone_sword",
+    "craft_wood_pickaxe",
+    "craft_stone_pickaxe",
+]
+
 
 class MarlEvaluationVideoCallback(Callback):
     def __init__(self, args):
@@ -440,9 +458,22 @@ def record_real_policy_video(args, policy=None):
     generator.manual_seed(args.seed + 9201)
     frames = []
     obs = env.reset()
+    cumulative_reward = 0.0
+    initial_frame = env.render(
+        env_index=0,
+        mode="rgb_array",
+        overlay_info={
+            "step": 0,
+            "action": "initial",
+            "reward": 0.0,
+            "cumulative_reward": 0.0,
+            "done": False,
+        },
+    )
+    frames.append(initial_frame[:, :, :3] if initial_frame.shape[-1] == 4 else initial_frame)
     try:
         with set_exploration_type(ExplorationType.DETERMINISTIC):
-            for _ in range(max(1, int(args.video_max_steps))):
+            for step_index in range(max(1, int(args.video_max_steps))):
                 if policy is None:
                     action = torch.randint(0, config.action_size, (1, args.num_agents), generator=generator, device=device)
                 else:
@@ -461,14 +492,38 @@ def record_real_policy_video(args, policy=None):
                     action = out.get(("agents", "action")).long()
                     if action.ndim == 3 and action.shape[-1] == 1:
                         action = action.squeeze(-1)
-                obs, _, done, truncated, _ = env.step(action)
-                frame = env.render(env_index=0, mode="rgb_array")
+                obs, reward, done, truncated, _ = env.step(action)
+                reward_value = float(reward.mean().detach().cpu())
+                cumulative_reward += reward_value
+                joint_action = {
+                    f"agent_{agent_idx}": int(action[0, agent_idx].detach().cpu())
+                    for agent_idx in range(args.num_agents)
+                }
+                episode_done = bool((done | truncated).all())
+                frame = env.render(
+                    env_index=0,
+                    mode="rgb_array",
+                    overlay_info={
+                        "step": step_index + 1,
+                        "action": format_joint_action(joint_action),
+                        "reward": reward_value,
+                        "cumulative_reward": cumulative_reward,
+                        "done": episode_done,
+                    },
+                )
                 frames.append(frame[:, :, :3] if frame.shape[-1] == 4 else frame)
-                if bool((done | truncated).all()):
+                if episode_done:
                     break
     finally:
         env.close()
     return frames
+
+
+def format_joint_action(joint_action: dict[str, int]) -> dict[str, str]:
+    return {
+        agent_id: ACTION_NAMES[action] if 0 <= int(action) < len(ACTION_NAMES) else str(int(action))
+        for agent_id, action in joint_action.items()
+    }
 
 
 if __name__ == "__main__":

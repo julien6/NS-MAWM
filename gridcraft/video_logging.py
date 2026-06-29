@@ -15,6 +15,25 @@ from rnn.rnn import GridcraftRNN, rnn_init_state
 from vae.vae import GridcraftVAE
 
 
+ACTION_NAMES = [
+  "stay",
+  "move_n",
+  "move_s",
+  "move_w",
+  "move_e",
+  "harvest",
+  "pickup",
+  "attack",
+  "eat",
+  "craft_plank",
+  "craft_stick",
+  "craft_wood_sword",
+  "craft_stone_sword",
+  "craft_wood_pickaxe",
+  "craft_stone_pickaxe",
+]
+
+
 def record_world_model_comparison_video(
     vae_json="vae/vae.json",
     rnn_json="rnn/rnn.json",
@@ -35,24 +54,35 @@ def record_world_model_comparison_video(
       env = make_env(seed=episode_seed, render_mode=False, max_steps=max_steps)
       obs = env.reset(seed=episode_seed)
       controller.reset()
-      imagined_obs = decode_tabular_observation(controller, controller.encode_obs(obs))["agent_0"]
-      for _ in range(max_steps):
-        frames.append(_as_rgb(renderer.render({"agent_0": imagined_obs}, world=world_snapshot(env))))
-        z = controller.encode_obs(obs)
+      z = controller.encode_obs(obs)
+      imagined_obs = _copy_tabular_obs(env.last_obs)
+      cumulative_reward = 0.0
+      frames.append(_as_rgb(renderer.render(
+        {"agent_0": imagined_obs},
+        world=world_snapshot(env),
+        overlay_info=_overlay(0, "initial", 0.0, cumulative_reward, False),
+      )))
+      for step_index in range(max_steps):
         action = int(rng.integers(0, ACTION_SIZE))
-        current_obs = env.last_obs
+        current_imagined_obs = imagined_obs
         imagined_z = predict_rnn_next_z(controller, z, action, rng=rng, mode=imagination_mode)
         obs, reward, done, info = env.step(action)
         imagined_obs = decode_tabular_observation(controller, imagined_z)["agent_0"]
         imagined_obs, _ = apply_symbolic_projection(
           imagined_obs,
-          current_obs,
+          current_imagined_obs,
           action,
           ns_variant,
           coverage=symbolic_coverage,
         )
+        z = _encode_tabular(controller, imagined_obs) if ns_variant in ("projection", "residual") else imagined_z
+        cumulative_reward += float(reward)
+        frames.append(_as_rgb(renderer.render(
+          {"agent_0": imagined_obs},
+          world=world_snapshot(env),
+          overlay_info=_overlay(step_index + 1, _action_name(action), reward, cumulative_reward, done),
+        )))
         if done:
-          frames.append(_as_rgb(renderer.render({"agent_0": imagined_obs}, world=world_snapshot(env))))
           break
       env.close()
   finally:
@@ -113,18 +143,30 @@ def record_actor_policy_evaluation_video(
       env = make_env(seed=episode_seed, render_mode=False, max_steps=max_steps)
       obs = env.reset(seed=episode_seed)
       controller.reset()
-      imagined_obs = decode_tabular_observation(controller, controller.encode_obs(obs))["agent_0"]
-      for _ in range(max_steps):
-        frames.append(_as_rgb(renderer.render({"agent_0": imagined_obs}, world=world_snapshot(env))))
-        z, _ = vae.encode_mu_logvar(obs.reshape(1, -1))
-        action = actor.act(z[0], rng, deterministic=True)[0]
-        current_obs = env.last_obs
-        imagined_z = predict_rnn_next_z(controller, z[0], action, rng=rng, mode="mean")
+      z, _ = vae.encode_mu_logvar(obs.reshape(1, -1))
+      z = z[0]
+      imagined_obs = _copy_tabular_obs(env.last_obs)
+      cumulative_reward = 0.0
+      frames.append(_as_rgb(renderer.render(
+        {"agent_0": imagined_obs},
+        world=world_snapshot(env),
+        overlay_info=_overlay(0, "initial", 0.0, cumulative_reward, False),
+      )))
+      for step_index in range(max_steps):
+        action = actor.act(z, rng, deterministic=True)[0]
+        current_imagined_obs = imagined_obs
+        imagined_z = predict_rnn_next_z(controller, z, action, rng=rng, mode="mean")
         obs, reward, done, info = env.step(action)
         imagined_obs = decode_tabular_observation(controller, imagined_z)["agent_0"]
-        imagined_obs, _ = apply_symbolic_projection(imagined_obs, current_obs, action, ns_variant, coverage=symbolic_coverage)
+        imagined_obs, _ = apply_symbolic_projection(imagined_obs, current_imagined_obs, action, ns_variant, coverage=symbolic_coverage)
+        z = _encode_tabular(controller, imagined_obs) if ns_variant in ("projection", "residual") else imagined_z
+        cumulative_reward += float(reward)
+        frames.append(_as_rgb(renderer.render(
+          {"agent_0": imagined_obs},
+          world=world_snapshot(env),
+          overlay_info=_overlay(step_index + 1, _action_name(action), reward, cumulative_reward, done),
+        )))
         if done:
-          frames.append(_as_rgb(renderer.render({"agent_0": imagined_obs}, world=world_snapshot(env))))
           break
       env.close()
   finally:
@@ -159,17 +201,23 @@ def record_mpc_cem_evaluation_video(
       env = make_env(seed=episode_seed, render_mode=False, max_steps=max_steps)
       obs = env.reset(seed=episode_seed)
       state = rnn_init_state(rnn)
-      imagined_obs = controller.vae.decode_tabular(controller.encode_obs(obs))
-      for _ in range(max_steps):
-        frames.append(_as_rgb(renderer.render({"agent_0": imagined_obs}, world=world_snapshot(env))))
-        z, _ = vae.encode_mu_logvar(obs.reshape(1, -1))
-        current_obs = env.last_obs
+      z, _ = vae.encode_mu_logvar(obs.reshape(1, -1))
+      z = z[0]
+      imagined_obs = _copy_tabular_obs(env.last_obs)
+      cumulative_reward = 0.0
+      frames.append(_as_rgb(renderer.render(
+        {"agent_0": imagined_obs},
+        world=world_snapshot(env),
+        overlay_info=_overlay(0, "initial", 0.0, cumulative_reward, False),
+      )))
+      for step_index in range(max_steps):
+        current_imagined_obs = imagined_obs
         action, _ = _cem_action(
           rnn,
           vae,
-          z[0],
+          z,
           state,
-          current_obs,
+          current_imagined_obs,
           rng,
           ns_variant,
           symbolic_coverage,
@@ -178,13 +226,20 @@ def record_mpc_cem_evaluation_video(
           cem_elite_frac,
           gamma,
         )
-        _, _, _, _, _, state = rnn.step(z[0], action, state)
-        imagined_z = predict_rnn_next_z(controller, z[0], action, rng=rng, mode="mean")
+        controller.rnn_state = state
+        imagined_z = predict_rnn_next_z(controller, z, action, rng=rng, mode="mean")
+        state = controller.rnn_state
         obs, reward, done, info = env.step(action)
         imagined_obs = controller.vae.decode_tabular(imagined_z)
-        imagined_obs, _ = apply_symbolic_projection(imagined_obs, current_obs, action, ns_variant, coverage=symbolic_coverage)
+        imagined_obs, _ = apply_symbolic_projection(imagined_obs, current_imagined_obs, action, ns_variant, coverage=symbolic_coverage)
+        z = _encode_tabular(controller, imagined_obs) if ns_variant in ("projection", "residual") else imagined_z
+        cumulative_reward += float(reward)
+        frames.append(_as_rgb(renderer.render(
+          {"agent_0": imagined_obs},
+          world=world_snapshot(env),
+          overlay_info=_overlay(step_index + 1, _action_name(action), reward, cumulative_reward, done),
+        )))
         if done:
-          frames.append(_as_rgb(renderer.render({"agent_0": imagined_obs}, world=world_snapshot(env))))
           break
       env.close()
   finally:
@@ -240,3 +295,31 @@ def _stack_frames(frames):
   if not frames:
     raise RuntimeError("no frames were generated for W&B video")
   return np.stack(frames, axis=0).astype(np.uint8)
+
+
+def _copy_tabular_obs(obs):
+  return {
+    "grid": np.asarray(obs["grid"], dtype=np.int8).copy(),
+    "self": np.asarray(obs["self"], dtype=np.int16).copy(),
+  }
+
+
+def _encode_tabular(controller, obs):
+  vec = tabular_to_vector(obs).reshape(1, -1)
+  mu, _ = controller.vae.encode_mu_logvar(vec)
+  return mu[0]
+
+
+def _action_name(action):
+  action = int(action)
+  return ACTION_NAMES[action] if 0 <= action < len(ACTION_NAMES) else str(action)
+
+
+def _overlay(step, action, reward, cumulative_reward, done):
+  return {
+    "step": int(step),
+    "action": action,
+    "reward": float(reward),
+    "cumulative_reward": float(cumulative_reward),
+    "done": bool(done),
+  }

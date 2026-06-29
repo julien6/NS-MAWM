@@ -21,6 +21,24 @@ from torch_world_model import TorchGridcraftRNN, TorchGridcraftVAE
 from torch_world_model.models import ACTION_SIZE
 from vgridcraft import VGridcraftConfig, VectorizedGridcraftEnv
 
+ACTION_NAMES = [
+    "stay",
+    "move_n",
+    "move_s",
+    "move_w",
+    "move_e",
+    "harvest",
+    "pickup",
+    "attack",
+    "eat",
+    "craft_plank",
+    "craft_stick",
+    "craft_wood_sword",
+    "craft_stone_sword",
+    "craft_wood_pickaxe",
+    "craft_stone_pickaxe",
+]
+
 
 class SharedActorCritic(nn.Module):
     def __init__(self, obs_size: int = 64, hidden_size: int = 256, action_size: int = ACTION_SIZE):
@@ -305,10 +323,11 @@ def record_imagined_policy_video(vae, rnn, policy, args, config, device, ns_vari
     ns_memory = [None]
     frames = []
     env.reset()
-    for _ in range(max(1, int(args.video_max_steps))):
+    cumulative_reward = 0.0
+    for step_index in range(max(1, int(args.video_max_steps))):
         logits, _ = policy(z)
         action = logits.argmax(dim=-1)
-        predicted_z, _, _, state = rnn.step(z, action, state, deterministic=True)
+        predicted_z, reward, done_logit, state = rnn.step(z, action, state, deterministic=True)
         z, ns_memory, _ = apply_ns_mawm_to_latent_step(
             vae=vae,
             current_z=z,
@@ -327,7 +346,25 @@ def record_imagined_policy_video(vae, rnn, policy, args, config, device, ns_vari
                 "grid": imagined["grid"][agent_idx].detach().cpu().numpy().astype("int8"),
                 "self": imagined["self"][agent_idx].detach().cpu().numpy().astype("int16"),
             }
-        frame = env.render(env_index=0, mode="rgb_array", tabular_observations=tabular)
+        reward_value = float(reward.mean().detach().cpu())
+        cumulative_reward += reward_value
+        joint_action = {
+            f"agent_{agent_idx}": int(action[agent_idx].detach().cpu())
+            for agent_idx in range(config.num_agents)
+        }
+        done_value = bool((torch.sigmoid(done_logit) >= 0.5).all().detach().cpu())
+        frame = env.render(
+            env_index=0,
+            mode="rgb_array",
+            tabular_observations=tabular,
+            overlay_info={
+                "step": step_index + 1,
+                "action": format_joint_action(joint_action),
+                "reward": reward_value,
+                "cumulative_reward": cumulative_reward,
+                "done": done_value,
+            },
+        )
         frames.append(frame[:, :, :3] if frame.shape[-1] == 4 else frame)
     env.close()
     return np.asarray(frames, dtype=np.uint8)
@@ -347,6 +384,13 @@ def infer_ns_settings(baseline_id: str) -> tuple[str, float]:
         except ValueError:
             coverage = 0.0
     return variant, coverage
+
+
+def format_joint_action(joint_action: dict[str, int]) -> dict[str, str]:
+    return {
+        agent_id: ACTION_NAMES[action] if 0 <= int(action) < len(ACTION_NAMES) else str(int(action))
+        for agent_id, action in joint_action.items()
+    }
 
 
 @torch.no_grad()

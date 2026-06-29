@@ -43,7 +43,12 @@ def main():
     cmd = message.get("cmd")
     if cmd == "render_human":
       world = world_from_snapshot(message.get("world"))
-      renderer.render(world, "human", tabular_observations=message["observation"])
+      renderer.render(
+        world,
+        "human",
+        tabular_observations=message["observation"],
+        overlay_info=message.get("overlay_info"),
+      )
       write_message(sys.stdout.buffer, {"ok": True})
     elif cmd == "poll_action":
       action, closed = poll_action(renderer, float(message.get("seconds", 0.1)))
@@ -57,7 +62,12 @@ def main():
       write_message(sys.stdout.buffer, {"ok": True})
     else:
       world = world_from_snapshot(message.get("world"))
-      frame = renderer.render(world, "rgb_array", tabular_observations=message["observation"])
+      frame = renderer.render(
+        world,
+        "rgb_array",
+        tabular_observations=message["observation"],
+        overlay_info=message.get("overlay_info"),
+      )
       write_message(sys.stdout.buffer, frame)
   renderer.close()
 
