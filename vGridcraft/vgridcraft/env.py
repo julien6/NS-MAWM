@@ -91,6 +91,7 @@ class VectorizedGridcraftEnv:
         self.harvest_counter = torch.zeros((e, a), dtype=torch.long, device=d)
         self.attack_counter = torch.zeros((e, a), dtype=torch.long, device=d)
         self.last_attack_step = torch.full((e, a), -1, dtype=torch.long, device=d)
+        self.task_level_max = torch.zeros((e, a), dtype=torch.long, device=d)
         self.mob_x = torch.zeros((e, cfg.max_mobs), dtype=torch.long, device=d)
         self.mob_y = torch.zeros((e, cfg.max_mobs), dtype=torch.long, device=d)
         self.mob_hp = torch.zeros((e, cfg.max_mobs), dtype=torch.long, device=d)
@@ -136,6 +137,7 @@ class VectorizedGridcraftEnv:
         self.harvest_counter[env_ids] = 0
         self.attack_counter[env_ids] = 0
         self.last_attack_step[env_ids] = -1
+        self.task_level_max[env_ids] = 0
         self.mob_alive[env_ids] = False
         self.item_alive[env_ids] = False
         for local_idx, env_id in enumerate(env_ids.tolist()):
@@ -175,7 +177,10 @@ class VectorizedGridcraftEnv:
                 free = torch.nonzero(~self.mob_alive[env_id], as_tuple=False).flatten()
                 if free.numel() > 0:
                     self._spawn_mob(env_id, int(free[0]))
-        return self.observation(), rewards, done, truncated, {"config": asdict(cfg)}
+        return self.observation(), rewards, done, truncated, {
+            "config": asdict(cfg),
+            "task_level_max": self.task_level_max.clone(),
+        }
 
     def observation(self) -> dict[str, torch.Tensor]:
         grid = self.local_grid()
@@ -365,6 +370,7 @@ class VectorizedGridcraftEnv:
         self.agent_y[env_ids, agent_idx] = ny[env_ids]
         self.visited[env_ids, agent_idx, ny[env_ids], nx[env_ids]] = True
         rewards[env_ids, agent_idx] += old_new.float() * self.config.new_cell_reward
+        self._mark_task_level(env_ids[old_new], agent_idx, 1)
         self._charge_hunger(env_ids, agent_idx, "move")
 
     def _apply_harvest(self, agent_idx: int, action: torch.Tensor, rewards: torch.Tensor) -> None:
@@ -381,6 +387,7 @@ class VectorizedGridcraftEnv:
                     self.blocks[env_id, ny, nx] = BLOCK_EMPTY
                     self.inventory[env_id, agent_idx, ITEM_WOOD] += 1
                     rewards[env_id, agent_idx] += self.config.harvest_wood_reward
+                    self._mark_task_level(torch.tensor([env_id], device=self.device), agent_idx, 2)
                     if torch.rand((), generator=self.generator, device=self.device) < self.config.tree_apple_drop_chance:
                         self.inventory[env_id, agent_idx, ITEM_APPLE] += 1
                         rewards[env_id, agent_idx] += self.config.harvest_tree_apple_reward
@@ -390,6 +397,7 @@ class VectorizedGridcraftEnv:
                     self.blocks[env_id, ny, nx] = BLOCK_EMPTY
                     self.inventory[env_id, agent_idx, ITEM_STONE] += 1
                     rewards[env_id, agent_idx] += self.config.harvest_stone_reward
+                    self._mark_task_level(torch.tensor([env_id], device=self.device), agent_idx, 6)
                     self._charge_hunger(torch.tensor([env_id], device=self.device), agent_idx, "harvest")
                     break
 
@@ -398,12 +406,16 @@ class VectorizedGridcraftEnv:
         for env_id in envs.tolist():
             x = self.agent_x[env_id, agent_idx]
             y = self.agent_y[env_id, agent_idx]
-            here = self.item_alive[env_id] & (self.item_x[env_id] == x) & (self.item_y[env_id] == y)
-            for item_idx in torch.nonzero(here, as_tuple=False).flatten().tolist():
+            adjacent = torch.zeros_like(self.item_alive[env_id])
+            for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                adjacent |= (self.item_x[env_id] == x + dx) & (self.item_y[env_id] == y + dy)
+            reachable = self.item_alive[env_id] & adjacent
+            for item_idx in torch.nonzero(reachable, as_tuple=False).flatten().tolist():
                 item = int(self.item_type[env_id, item_idx])
                 count = int(self.item_count[env_id, item_idx])
                 self.inventory[env_id, agent_idx, item] += count
                 rewards[env_id, agent_idx] += self.config.pickup_item_reward * count
+                self._mark_task_level(torch.tensor([env_id], device=self.device), agent_idx, 6 if item == ITEM_STONE else 2)
                 self.item_alive[env_id, item_idx] = False
 
     def _apply_attack(self, agent_idx: int, action: torch.Tensor, rewards: torch.Tensor) -> None:
@@ -423,6 +435,7 @@ class VectorizedGridcraftEnv:
                 if self.mob_hp[env_id, mob_idx] <= 0:
                     self.mob_alive[env_id, mob_idx] = False
                     rewards[env_id, agent_idx] += self.config.mob_kill_reward
+                    self._mark_task_level(torch.tensor([env_id], device=self.device), agent_idx, 8)
                     if torch.rand((), generator=self.generator, device=self.device) < self.config.item_drop_chance:
                         self._drop_item(env_id, ITEM_APPLE, 1, int(self.mob_x[env_id, mob_idx]), int(self.mob_y[env_id, mob_idx]))
                 break
@@ -456,6 +469,7 @@ class VectorizedGridcraftEnv:
             if out_item in (ITEM_WOOD_SWORD, ITEM_STONE_SWORD, ITEM_WOOD_PICKAXE, ITEM_STONE_PICKAXE):
                 self.equipped[envs, agent_idx] = out_item
             rewards[envs, agent_idx] += self._craft_reward(reward_name)
+            self._mark_task_level(envs, agent_idx, self._craft_task_level(reward_name))
 
     def _craft_reward(self, reward_name: str) -> float:
         if reward_name == "plank":
@@ -467,6 +481,24 @@ class VectorizedGridcraftEnv:
         if reward_name == "stone_tool":
             return self.config.craft_stone_tool_reward
         return 0.0
+
+    @staticmethod
+    def _craft_task_level(reward_name: str) -> int:
+        if reward_name == "plank":
+            return 3
+        if reward_name == "stick":
+            return 4
+        if reward_name == "wood_tool":
+            return 5
+        if reward_name == "stone_tool":
+            return 7
+        return 0
+
+    def _mark_task_level(self, envs: torch.Tensor, agent_idx: int, level: int) -> None:
+        if envs.numel() == 0:
+            return
+        level_tensor = torch.full((envs.numel(),), int(level), dtype=torch.long, device=self.device)
+        self.task_level_max[envs, agent_idx] = torch.maximum(self.task_level_max[envs, agent_idx], level_tensor)
 
     def _move_mobs(self) -> None:
         # Batched random wandering. It preserves collision constraints and is the

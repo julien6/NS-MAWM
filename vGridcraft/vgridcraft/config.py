@@ -37,20 +37,20 @@ class VGridcraftConfig:
     item_drop_chance: float = 0.2
     tree_apple_drop_chance: float = 0.5
 
-    survival_reward: float = 0.05
-    new_cell_reward: float = 0.05
+    survival_reward: float = 0.001
+    new_cell_reward: float = 0.01
     harvest_wood_reward: float = 1.0
-    harvest_tree_apple_reward: float = 1.5
-    harvest_stone_reward: float = 4.0
+    harvest_tree_apple_reward: float = 2.0
+    harvest_stone_reward: float = 128.0
     pickup_item_reward: float = 1.0
     eat_apple_reward: float = 2.0
-    health_regen_reward: float = 0.5
-    attack_hit_reward: float = 0.5
-    mob_kill_reward: float = 8.0
-    craft_plank_reward: float = 1.0
-    craft_stick_reward: float = 2.0
-    craft_wood_tool_reward: float = 5.0
-    craft_stone_tool_reward: float = 8.0
+    health_regen_reward: float = 1.0
+    attack_hit_reward: float = 32.0
+    mob_kill_reward: float = 1024.0
+    craft_plank_reward: float = 8.0
+    craft_stick_reward: float = 16.0
+    craft_wood_tool_reward: float = 64.0
+    craft_stone_tool_reward: float = 512.0
 
     craft_anywhere: bool = True
 

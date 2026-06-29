@@ -72,6 +72,7 @@ def main():
   parser.add_argument("--ns-variant", choices=("neural", "regularization", "residual"), default="neural")
   parser.add_argument("--lambda-sym", type=float, default=1.0)
   parser.add_argument("--symbolic-coverage", type=float, default=1.0)
+  parser.add_argument("--enabled-pstr-rules", nargs="+", default=None)
   parser.add_argument("--vae-json", default="vae/vae.json")
   parser.add_argument("--eval-every", type=int, default=0)
   parser.add_argument("--eval-out-dir", default=None)
@@ -114,10 +115,20 @@ def main():
     z, obs, action, reward, done = sample_batch(episodes, args.batch_size, args.seq_len, rng)
     kwargs = {}
     if args.ns_variant == "regularization":
-      symbolic_target, symbolic_mask = symbolic_batch_targets(obs[:, :-1, :], action[:, :-1], coverage=args.symbolic_coverage)
+      symbolic_target, symbolic_mask = symbolic_batch_targets(
+        obs[:, :-1, :],
+        action[:, :-1],
+        coverage=args.symbolic_coverage,
+        enabled_pstr_rules=args.enabled_pstr_rules,
+      )
       kwargs.update(symbolic_target=symbolic_target, symbolic_mask=symbolic_mask, vae_decoder=vae.decoder, lambda_sym=args.lambda_sym)
     elif args.ns_variant == "residual":
-      symbolic_target, symbolic_mask = symbolic_batch_targets(obs[:, :-1, :], action[:, :-1], coverage=args.symbolic_coverage)
+      symbolic_target, symbolic_mask = symbolic_batch_targets(
+        obs[:, :-1, :],
+        action[:, :-1],
+        coverage=args.symbolic_coverage,
+        enabled_pstr_rules=args.enabled_pstr_rules,
+      )
       kwargs.update(target_obs=obs[:, 1:, :], target_obs_mask=1.0 - symbolic_mask, vae_decoder=vae.decoder, lambda_sym=args.lambda_sym)
     loss, z_loss, mean_loss, symbolic_loss, residual_loss, reward_loss, done_loss = model.train_batch(z, action, reward, done, **kwargs)
     if step == 0 or (step + 1) % 100 == 0:
@@ -168,6 +179,9 @@ def checkpoint_and_evaluate(model, args, step):
     "--out", eval_path,
     "--progress-every", "0",
   ]
+  if args.enabled_pstr_rules:
+    cmd.append("--enabled-pstr-rules")
+    cmd.extend(str(rule) for rule in args.enabled_pstr_rules)
   if args.eval_horizons:
     cmd.append("--horizons")
     cmd.extend(str(horizon) for horizon in args.eval_horizons)

@@ -34,6 +34,9 @@ WM_NUM_WORKERS="${WM_NUM_WORKERS:-8}"
 WM_EVAL_EVERY="${WM_EVAL_EVERY:-5000}"
 WM_VIDEO_EVERY="${WM_VIDEO_EVERY:-10000}"
 WM_HORIZONS="${WM_HORIZONS:-1 5 10 25 50 100}"
+ENABLED_PSTR_RULES="${ENABLED_PSTR_RULES:-}"
+JOINT_SYMBOLIC_TRAIN_EPISODES="${JOINT_SYMBOLIC_TRAIN_EPISODES:-8}"
+JOINT_SYMBOLIC_TRAIN_STEPS="${JOINT_SYMBOLIC_TRAIN_STEPS:-8}"
 SHARED_MODEL_DIR="${SHARED_MODEL_DIR:-shared_models}"
 REUSE_VAE_CACHE="${REUSE_VAE_CACHE:-1}"
 FORCE_VAE_RETRAIN="${FORCE_VAE_RETRAIN:-0}"
@@ -86,6 +89,7 @@ echo "W&B project: ${WANDB_PROJECT}"
 echo "Device: ${DEVICE}"
 echo "Agents: ${NUM_AGENTS}"
 echo "World model: num_envs=${WM_NUM_ENVS}, episodes=${WM_EPISODES}, max_steps=${WM_MAX_STEPS}, vae_steps=${VAE_STEPS}, rnn_steps=${RNN_STEPS}, batch=${WM_BATCH_SIZE}, eval_every=${WM_EVAL_EVERY}"
+echo "World model symbolic: enabled_pstr_rules=${ENABLED_PSTR_RULES:-all}, joint_symbolic_episodes=${JOINT_SYMBOLIC_TRAIN_EPISODES}, joint_symbolic_steps=${JOINT_SYMBOLIC_TRAIN_STEPS}"
 echo "World model cache: shared_model_dir=${SHARED_MODEL_DIR}, reuse_vae=${REUSE_VAE_CACHE}, force_vae_retrain=${FORCE_VAE_RETRAIN}, reuse_latents=${REUSE_LATENT_CACHE}, force_latent_reencode=${FORCE_LATENT_REENCODE}"
 echo "MARL: num_envs=${MARL_NUM_ENVS}, max_steps=${MARL_MAX_STEPS}, max_iters=${MARL_MAX_ITERS}, frames_per_batch=${MARL_FRAMES_PER_BATCH}, train_batch=${MARL_TRAIN_BATCH_SIZE}, optimizer_steps=${MARL_OPTIMIZER_STEPS}, eval_every_iters=${MARL_EVAL_EVERY_ITERS}, video_every_iters=${MARL_VIDEO_EVERY_ITERS}, hidden_size=${MARL_HIDDEN_SIZE}, model_free_downstream=${MODEL_FREE_DOWNSTREAM_ALGO}, model_based_downstream=${MODEL_BASED_DOWNSTREAM_ALGO}"
 echo "Model-based MARL params: wm_train_steps=${MB_WORLD_MODEL_TRAIN_EPOCHS}, wm_batch=${MB_WORLD_MODEL_BATCH_SIZE}, imagined_horizon=${MB_IMAGINED_HORIZON}, branches=${MB_IMAGINED_BRANCHES}, lambda_or_imagined_ratio=${MB_LAMBDA_IMAGINED}"
@@ -120,6 +124,9 @@ for seed in $SEEDS; do
     WM_EVAL_EVERY="$WM_EVAL_EVERY" \
     WM_VIDEO_EVERY="$WM_VIDEO_EVERY" \
     WM_HORIZONS="$WM_HORIZONS" \
+    ENABLED_PSTR_RULES="$ENABLED_PSTR_RULES" \
+    JOINT_SYMBOLIC_TRAIN_EPISODES="$JOINT_SYMBOLIC_TRAIN_EPISODES" \
+    JOINT_SYMBOLIC_TRAIN_STEPS="$JOINT_SYMBOLIC_TRAIN_STEPS" \
     SHARED_MODEL_DIR="$SHARED_MODEL_DIR" \
     REUSE_VAE_CACHE="$REUSE_VAE_CACHE" \
     FORCE_VAE_RETRAIN="$FORCE_VAE_RETRAIN" \

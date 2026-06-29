@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from ns_symbolic import ENTITY_AGENT, ENTITY_ITEM, ENTITY_NONE, ITEM_WOOD
 from pstr_scenarios import expected_rules, run_scenario, scenario_ids, scenario_specs
 from render_pstr_scenarios import diagram_panels
 
@@ -41,3 +42,19 @@ def test_diagram_left_panel_uses_initial_observation_for_all_scenarios():
     panel_width = left_panel.shape[1]
     expected_left = input_frame[:left_panel.shape[0], world_width:world_width + panel_width]
     np.testing.assert_array_equal(left_panel, expected_left)
+
+
+def test_pickup_pstr_uses_adjacent_item_not_agent_cell():
+  result = run_scenario("PSTR_INDIV_PICKUP_ITEM", steps=2)
+  initial = result.input_observations["agent_0"]
+  symbolic = result.symbolic_next_observations["agent_0"]
+  mask = result.symbolic_masks["agent_0"]
+
+  center = initial["grid"].shape[1] // 2
+  east = (center, center + 1)
+  assert initial["grid"][2, center, center] == ENTITY_AGENT
+  assert initial["grid"][2, east[0], east[1]] == ENTITY_ITEM
+  assert symbolic["grid"][2, center, center] == ENTITY_AGENT
+  assert symbolic["grid"][2, east[0], east[1]] == ENTITY_NONE
+  assert mask["grid"][2, east[0], east[1]]
+  assert symbolic["self"][2 + ITEM_WOOD] == 2

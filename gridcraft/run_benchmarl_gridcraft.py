@@ -75,6 +75,12 @@ def main() -> None:
     parser.add_argument("--joint-symbolic-train-episodes", type=int, default=8)
     parser.add_argument("--joint-symbolic-train-steps", type=int, default=8)
     parser.add_argument("--rvr-eval-steps", type=int, default=50)
+    parser.add_argument(
+        "--enabled-pstr-rules",
+        nargs="*",
+        default=None,
+        help="Optional PSTR allow-list for symbolic training/evaluation. Accepts space-separated ids or comma-separated groups.",
+    )
     parser.add_argument("--shared-model-dir", default="shared_models")
     vae_cache_group = parser.add_mutually_exclusive_group()
     vae_cache_group.add_argument("--reuse-vae-cache", dest="reuse_vae_cache", action="store_true", default=True)
@@ -158,6 +164,7 @@ def main() -> None:
                 "dataset_truncation_or_done_rate": float(data.get("metadata", {}).get("truncation_or_done_rate", 0.0)),
                 "symbolic_target_cached": int("symbolic_target" in data),
                 "symbolic_memory_mean_map_coverage": float(data.get("symbolic_metadata", {}).get("mean_map_coverage_ratio", 0.0)),
+                "enabled_pstr_rules": ",".join(enabled_pstr_rules_from_args(args) or ["all"]),
                 "dataset_path": str(dataset_file),
             },
             step=1,
@@ -449,10 +456,11 @@ def maybe_attach_symbolic_dataset_targets(data, baseline, args) -> None:
         coverage=coverage,
         episode_limit=max(0, int(args.joint_symbolic_train_episodes)),
         step_limit=max(0, int(args.joint_symbolic_train_steps)),
+        enabled_pstr_rules=enabled_pstr_rules_from_args(args),
     )
 
 
-def attach_symbolic_dataset_targets(data, coverage: float, episode_limit: int | None = None, step_limit: int | None = None) -> None:
+def attach_symbolic_dataset_targets(data, coverage: float, episode_limit: int | None = None, step_limit: int | None = None, enabled_pstr_rules=None) -> None:
     if "symbolic_target" in data and "symbolic_mask" in data:
         return
     obs = all_agent_obs(observation_vectors(data, episode_limit=episode_limit))
@@ -489,6 +497,7 @@ def attach_symbolic_dataset_targets(data, coverage: float, episode_limit: int | 
                 joint_action,
                 memory=memory,
                 coverage=coverage,
+                enabled_pstr_rules=enabled_pstr_rules,
             )
             map_coverages.append(float(report.get("map_coverage_ratio", 0.0)))
             alignment_counts.append(float(report.get("relative_alignment_count", 0.0)))
@@ -678,6 +687,7 @@ def evaluate_world_model(vae, rnn, data, device, horizons, baseline=None, args=N
         baseline=baseline or {},
         device=device,
         max_eval_steps=getattr(args, "rvr_eval_steps", 50) if args is not None else 50,
+        enabled_pstr_rules=enabled_pstr_rules_from_args(args),
     )
     result.update(symbolic_metrics)
     return result, pstr_rows
@@ -798,7 +808,12 @@ def symbolic_training_loss(vae, rnn, z_seq, action, obs_window, baseline, args, 
     decoded = vae.decode(expected_z.reshape(-1, expected_z.shape[-1])).reshape(limit, actions.shape[1], -1)
     obs_np = obs_window[:limit, :-1].detach().cpu().numpy()
     action_np = actions.detach().cpu().numpy()
-    target_np, mask_np = symbolic_batch_targets(obs_np, action_np, coverage=coverage)
+    target_np, mask_np = symbolic_batch_targets(
+        obs_np,
+        action_np,
+        coverage=coverage,
+        enabled_pstr_rules=enabled_pstr_rules_from_args(args),
+    )
     target = torch.as_tensor(target_np, dtype=torch.float32, device=device)
     mask = torch.as_tensor(mask_np, dtype=torch.float32, device=device)
     mask_count = mask.sum().clamp_min(1.0)
@@ -880,6 +895,7 @@ def joint_symbolic_training_loss(vae, rnn, z, raw_actions, raw_obs, symbolic_tar
                     joint_action,
                     memory=memories[episode_idx],
                     coverage=coverage,
+                    enabled_pstr_rules=enabled_pstr_rules_from_args(args),
                 )
                 for agent_idx in range(agents):
                     agent_id = f"agent_{agent_idx}"
@@ -911,10 +927,11 @@ def joint_symbolic_training_loss(vae, rnn, z, raw_actions, raw_obs, symbolic_tar
 
 
 @torch.no_grad()
-def evaluate_symbolic_rvr(vae, rnn, z, raw_actions, raw_obs, baseline, device, max_eval_steps=50):
+def evaluate_symbolic_rvr(vae, rnn, z, raw_actions, raw_obs, baseline, device, max_eval_steps=50, enabled_pstr_rules=None):
     episodes, steps, agents, obs_size = raw_obs.shape
     if steps < 2:
-        return empty_symbolic_metrics(), pstr_rvr_rows({}, baseline)
+        empty = empty_symbolic_metrics()
+        return prefix_symbolic_metrics(empty, "pre"), pstr_rvr_rows({}, {}, {})
     flat_actions = flatten_action_agents(raw_actions)
     eval_steps = min(int(max_eval_steps), steps - 1)
     memories = [None for _ in range(episodes)]
@@ -935,6 +952,7 @@ def evaluate_symbolic_rvr(vae, rnn, z, raw_actions, raw_obs, baseline, device, m
                 joint_actions[episode_idx],
                 memory=memories[episode_idx],
                 coverage=1.0,
+                enabled_pstr_rules=enabled_pstr_rules,
             )
             memories[episode_idx] = updated_memory
             row_metrics.append(compare_joint_with_symbolic(pred_tabular[episode_idx], symbolic, mask, report))
@@ -946,25 +964,33 @@ def evaluate_symbolic_rvr(vae, rnn, z, raw_actions, raw_obs, baseline, device, m
                     variant,
                     coverage=coverage,
                     memory=post_memories[episode_idx],
+                    enabled_pstr_rules=enabled_pstr_rules,
                 )
                 if symbolic_info is not None and len(symbolic_info) >= 3:
                     post_memories[episode_idx] = symbolic_info[2]
                 if symbolic_info is not None and len(symbolic_info) >= 4:
                     symbolic, mask, _updated_memory, report = symbolic_info
                     post_rows.append(compare_joint_with_symbolic(projected, symbolic, mask, report))
-    metrics = average_numeric_metrics(row_metrics)
-    metrics.setdefault("rvr_global", metrics.get("rvr", 0.0))
-    metrics.setdefault("rvr_individual", 0.0)
-    metrics.setdefault("rvr_joint", 0.0)
+    pre = average_numeric_metrics(row_metrics)
+    pre.setdefault("rvr_global", pre.get("rvr", 0.0))
+    pre.setdefault("rvr_individual", 0.0)
+    pre.setdefault("rvr_joint", 0.0)
+    metrics = prefix_symbolic_metrics(pre, "pre")
     metrics["rvr_eval_steps"] = float(eval_steps)
-    pstr_values = {key[len("rvr/"):]: value for key, value in metrics.items() if key.startswith("rvr/")}
+    pre_pstr_values = {key[len("rvr/"):]: value for key, value in pre.items() if key.startswith("rvr/")}
+    pre_counts = {key[len("determinable_count/"):]: value for key, value in pre.items() if key.startswith("determinable_count/")}
+    post_pstr_values = {}
     if post_rows:
         post = average_numeric_metrics(post_rows)
-        if "rvr_global" in post:
-            metrics["rvr_post_global"] = post["rvr_global"]
-        elif "rvr" in post:
-            metrics["rvr_post_global"] = post["rvr"]
-    return metrics, pstr_rvr_rows(pstr_values, baseline)
+        post.setdefault("rvr_global", post.get("rvr", 0.0))
+        post.setdefault("rvr_individual", 0.0)
+        post.setdefault("rvr_joint", 0.0)
+        metrics.update(prefix_symbolic_metrics(post, "post"))
+        post_pstr_values = {key[len("rvr/"):]: value for key, value in post.items() if key.startswith("rvr/")}
+    metrics["rvr_global"] = metrics.get("rvr_pre_global", 0.0)
+    metrics["rvr_individual"] = metrics.get("rvr_pre_individual", 0.0)
+    metrics["rvr_joint"] = metrics.get("rvr_pre_joint", 0.0)
+    return metrics, pstr_rvr_rows(pre_pstr_values, post_pstr_values, pre_counts)
 
 
 def empty_symbolic_metrics():
@@ -978,6 +1004,26 @@ def empty_symbolic_metrics():
         "map_coverage_ratio": 0.0,
         "relative_alignment_count": 0.0,
     }
+
+
+def prefix_symbolic_metrics(metrics, prefix):
+    renamed = {}
+    for key, value in metrics.items():
+        if key == "rvr":
+            renamed[f"rvr_{prefix}"] = value
+        elif key == "rvr_global":
+            renamed[f"rvr_{prefix}_global"] = value
+        elif key == "rvr_individual":
+            renamed[f"rvr_{prefix}_individual"] = value
+        elif key == "rvr_joint":
+            renamed[f"rvr_{prefix}_joint"] = value
+        elif key.startswith("rvr/"):
+            renamed[f"rvr_{prefix}/{key.split('/', 1)[1]}"] = value
+        elif key.startswith("determinable_count/"):
+            renamed[f"determinable_count/{key.split('/', 1)[1]}"] = value
+        else:
+            renamed[f"{prefix}_{key}"] = value
+    return renamed
 
 
 def average_numeric_metrics(rows):
@@ -1029,20 +1075,29 @@ def actions_to_joint(actions):
     return result
 
 
-def pstr_rvr_rows(pstr_values, baseline=None):
-    variant = str((baseline or {}).get("variant", "neural"))
-    force_na = variant in ("projection", "residual")
+def pstr_rvr_rows(pre_values, post_values=None, determinable_counts=None):
+    post_values = post_values or {}
+    determinable_counts = determinable_counts or {}
     rows = []
     for rule in PSTR_RULES:
         rule_id = rule["id"]
-        value = pstr_values.get(rule_id)
         rows.append(
             {
                 "PSTR id": rule_id,
-                "RVR": "n/a" if force_na or value is None else float(value),
+                "RVR pre": pstr_rvr_cell(pre_values.get(rule_id)),
+                "RVR post": pstr_rvr_cell(post_values.get(rule_id)),
+                "Determinable count": pstr_rvr_cell(determinable_counts.get(rule_id), precision=0),
             }
         )
     return rows
+
+
+def pstr_rvr_cell(value, precision=6):
+    if value is None:
+        return "n/a"
+    if precision == 0:
+        return int(float(value))
+    return float(value)
 
 
 def write_pstr_rvr_table(path: Path, rows):
@@ -1052,8 +1107,22 @@ def write_pstr_rvr_table(path: Path, rows):
 
 
 def log_pstr_rvr_table(logger, rows, step=None):
-    table_rows = [[row["PSTR id"], format_pstr_rvr_value(row["RVR"])] for row in rows]
-    logger.log_table("PSTR RVR table", ["PSTR id", "RVR"], table_rows, step=step, namespace="wm_evaluation")
+    table_rows = [
+        [
+            row["PSTR id"],
+            format_pstr_rvr_value(row["RVR pre"]),
+            format_pstr_rvr_value(row["RVR post"]),
+            format_pstr_rvr_value(row["Determinable count"]),
+        ]
+        for row in rows
+    ]
+    logger.log_table(
+        "PSTR RVR table",
+        ["PSTR id", "RVR pre", "RVR post", "Determinable count"],
+        table_rows,
+        step=step,
+        namespace="wm_evaluation",
+    )
 
 
 def format_pstr_rvr_value(value):
@@ -1100,6 +1169,19 @@ def run_vectorized_policy_smoke(args, config, device, model_based: bool):
 
 def args_to_config(args):
     return VGridcraftConfig(num_agents=args.num_agents, max_steps=args.max_steps, seed=args.seed)
+
+
+def enabled_pstr_rules_from_args(args):
+    if args is None:
+        return None
+    rules = getattr(args, "enabled_pstr_rules", None)
+    if not rules:
+        return None
+    normalized = []
+    for rule in rules:
+        normalized.extend(part.strip() for part in str(rule).split(","))
+    normalized = [rule for rule in normalized if rule]
+    return normalized or None
 
 
 @torch.no_grad()

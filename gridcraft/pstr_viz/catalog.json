@@ -11500,7 +11500,7 @@
         "agent_0": "stay"
       }
     ],
-    "description": "Picking up a known item on the agent cell removes the item entity and increases the corresponding inventory count.",
+    "description": "Picking up a known adjacent item removes the item entity and increases the corresponding inventory count.",
     "diagram": "pstr_viz/PSTR_INDIV_PICKUP_ITEM.png",
     "done_by_step": [
       false,
@@ -11516,10 +11516,10 @@
     "frames": [],
     "gif": null,
     "image": null,
-    "input_ascii": "agent_0:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . . I . . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20",
+    "input_ascii": "agent_0:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . . A I . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20",
     "output_ascii": "agent_0:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . . A . . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20, wood=2",
     "output_ascii_by_step": [
-      "agent_0:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . . I . . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20",
+      "agent_0:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . . A I . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20",
       "agent_0:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . . A . . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20, wood=2",
       "agent_0:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . . A . . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20, wood=2",
       "agent_0:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . . A . . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20, wood=2",
@@ -35023,7 +35023,7 @@
         "agent_1": "stay"
       }
     ],
-    "description": "A deterministic pickup removes the known item from shared symbolic memory.",
+    "description": "A deterministic pickup removes the known adjacent item from shared symbolic memory.",
     "diagram": "pstr_viz/PSTR_JOINT_SHARED_ITEM_UPDATE.png",
     "done_by_step": [
       false,
@@ -35039,11 +35039,11 @@
     "frames": [],
     "gif": null,
     "image": null,
-    "input_ascii": "agent_0:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . . I A . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20\nagent_1:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . I A . . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20",
+    "input_ascii": "agent_0:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . . A I . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20\nagent_1:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . A I . . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20",
     "output_ascii": "agent_0:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . . A A . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20, wood=1\nagent_1:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . A A . . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20",
     "output_ascii_by_step": [
-      "agent_0:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . . I A . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20\nagent_1:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . I A . . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20",
-      "agent_0:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . . A A . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20, wood=1\nagent_1:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . I A . . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20",
+      "agent_0:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . . A I . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20\nagent_1:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . A I . . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20",
+      "agent_0:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . . A . . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20, wood=1\nagent_1:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . A A . . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20",
       "agent_0:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . . A A . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20, wood=1\nagent_1:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . A A . . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20",
       "agent_0:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . . A A . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20, wood=1\nagent_1:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . A A . . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20",
       "agent_0:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . . A A . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20, wood=1\nagent_1:\n. . . . . . .\n. . . . . . .\n. . . . . . .\n. . A A . . .\n. . . . . . .\n. . . . . . .\n. . . . . . .\nself: hp=20, hunger=20",

@@ -129,10 +129,39 @@ def main() -> None:
         algorithm_config.imagined_rollouts.real_ratio = max(
             0.0, min(1.0, 1.0 - args.mb_lambda_imagined)
         )
+        if args.wm_run_dir:
+            ns_variant, ns_coverage = infer_ns_settings(args.baseline_id)
+            checkpoint_dir = Path(args.wm_run_dir) / "checkpoints"
+            algorithm_config.world_model.external_model_type = "gridcraft_vae_mdn_rnn"
+            algorithm_config.world_model.external_checkpoint_dir = str(checkpoint_dir)
+            algorithm_config.world_model.external_ns_variant = ns_variant
+            algorithm_config.world_model.external_ns_coverage = ns_coverage
+            algorithm_config.world_model.external_num_agents = args.num_agents
+            algorithm_config.world_model.train_steps = 0
+            algorithm_config.world_model.predict_done = True
+            if not (checkpoint_dir / "vae.pt").exists() or not (checkpoint_dir / "rnn.pt").exists():
+                raise FileNotFoundError(
+                    "MAMBPO model-based downstream requires trained Gridcraft "
+                    f"world-model checkpoints at {checkpoint_dir}"
+                )
     elif args.algorithm == "masac":
         algorithm_config = MasacConfig.get_from_yaml()
     else:
         algorithm_config = MappoConfig.get_from_yaml()
+    ns_variant, ns_coverage = infer_ns_settings(args.baseline_id)
+    checkpoint_dir = str(Path(args.wm_run_dir) / "checkpoints") if args.wm_run_dir else "none"
+    print(
+        "[routing] "
+        f"baseline_id={args.baseline_id or 'unknown'} "
+        f"algorithm={args.algorithm} "
+        f"ns_variant={ns_variant} "
+        f"ns_coverage={ns_coverage} "
+        f"wm_checkpoint_dir={checkpoint_dir} "
+        f"external_wm={int(args.algorithm in {'mb_mappo', 'mambpo'} and bool(args.wm_run_dir))} "
+        f"num_agents={args.num_agents} "
+        f"seed={args.seed}",
+        flush=True,
+    )
     on_policy = algorithm_config.on_policy()
     experiment_config = ExperimentConfig.get_from_yaml()
     experiment_config.sampling_device = args.device
@@ -176,7 +205,7 @@ def main() -> None:
         critic_model_config=critic_model_config,
         seed=args.seed,
         config=experiment_config,
-        callbacks=[MarlEvaluationVideoCallback(args)] if args.wandb and args.wandb_videos else None,
+        callbacks=[MarlEvaluationVideoCallback(args)] if args.wandb else None,
     )
     if args.wandb and os.environ.get("WANDB_MODE") == "offline":
         print(
@@ -295,6 +324,7 @@ def log_mambpo_imagined_evaluation(args, experiment, rollouts, iteration):
         try:
             group_metrics = algorithm.evaluate_imagined_rollouts(group, rollouts[0])
         except Exception as exc:
+            write_imagined_eval_error(args, exc)
             group_metrics = {
                 "mambpo/eval_imagined_generation_failed": torch.tensor(
                     1.0, device=algorithm.device
@@ -310,6 +340,16 @@ def log_mambpo_imagined_evaluation(args, experiment, rollouts, iteration):
         return
     step = int(args.wandb_step_offset) + int(iteration)
     wandb.log(metrics, step=step, commit=False)
+
+
+def write_imagined_eval_error(args, exc: Exception) -> None:
+    try:
+        out_dir = Path(args.wm_run_dir) if args.wm_run_dir else ROOT / "gridcraft" / args.save_folder
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with (out_dir / "imagined_eval_errors.log").open("a", encoding="utf-8") as handle:
+            handle.write(f"{type(exc).__name__}: {exc}\n")
+    except Exception:
+        pass
 
 
 def canonical_mambpo_eval_key(key):

@@ -64,21 +64,33 @@ CRAFT_RECIPES = {
 }
 
 
-def symbolic_transition_from_vector(obs_vector, action, coverage=1.0):
-  return symbolic_transition(vector_to_tabular(obs_vector), action, coverage=coverage)
+def symbolic_transition_from_vector(obs_vector, action, coverage=1.0, enabled_pstr_rules=None):
+  return symbolic_transition(vector_to_tabular(obs_vector), action, coverage=coverage, enabled_pstr_rules=enabled_pstr_rules)
 
 
-def symbolic_transition(obs, action, coverage=1.0):
-  symbolic, mask, _, _ = symbolic_joint_transition({"agent_0": obs}, {"agent_0": int(action)}, memory=None, coverage=coverage)
+def symbolic_transition(obs, action, coverage=1.0, enabled_pstr_rules=None):
+  symbolic, mask, _, _ = symbolic_joint_transition(
+    {"agent_0": obs},
+    {"agent_0": int(action)},
+    memory=None,
+    coverage=coverage,
+    enabled_pstr_rules=enabled_pstr_rules,
+  )
   return symbolic["agent_0"], mask["agent_0"]
 
 
-def symbolic_transition_with_report(obs, action, coverage=1.0):
-  symbolic, mask, memory, report = symbolic_joint_transition({"agent_0": obs}, {"agent_0": int(action)}, memory=None, coverage=coverage)
+def symbolic_transition_with_report(obs, action, coverage=1.0, enabled_pstr_rules=None):
+  symbolic, mask, memory, report = symbolic_joint_transition(
+    {"agent_0": obs},
+    {"agent_0": int(action)},
+    memory=None,
+    coverage=coverage,
+    enabled_pstr_rules=enabled_pstr_rules,
+  )
   return symbolic["agent_0"], mask["agent_0"], memory, report
 
 
-def symbolic_joint_transition(joint_obs, joint_action, memory=None, coverage=1.0):
+def symbolic_joint_transition(joint_obs, joint_action, memory=None, coverage=1.0, enabled_pstr_rules=None):
   """Predict a conservative partial joint symbolic observation.
 
   Any feature whose mask is False must be interpreted as unknown, even though
@@ -115,6 +127,7 @@ def symbolic_joint_transition(joint_obs, joint_action, memory=None, coverage=1.0
   _apply_joint_agent_entity_prediction(symbolic, mask, memory, proposed_shifts, report)
   for agent_id in agents:
     apply_coverage(mask[agent_id], coverage)
+  _filter_rules_and_masks(mask, report, enabled_pstr_rules)
   _refresh_report_counts(report, mask)
   return symbolic, mask, memory, report
 
@@ -134,24 +147,36 @@ def init_symbolic_memory(memory=None):
   return memory
 
 
-def apply_symbolic_projection(predicted_obs, current_obs, action, variant, coverage=1.0, memory=None):
+def apply_symbolic_projection(predicted_obs, current_obs, action, variant, coverage=1.0, memory=None, enabled_pstr_rules=None):
   if variant == "neural" or variant == "regularization":
     return predicted_obs, None
   if _is_joint_obs(current_obs):
-    symbolic, mask, updated_memory, report = symbolic_joint_transition(current_obs, action, memory=memory, coverage=coverage)
+    symbolic, mask, updated_memory, report = symbolic_joint_transition(
+      current_obs,
+      action,
+      memory=memory,
+      coverage=coverage,
+      enabled_pstr_rules=enabled_pstr_rules,
+    )
     projected = {}
     for agent_id, obs in predicted_obs.items():
       projected[agent_id] = _project_tabular(obs, symbolic[agent_id], mask[agent_id])
     return projected, (symbolic, mask, updated_memory, report)
-  symbolic, mask = symbolic_transition(current_obs, action, coverage=coverage)
+  symbolic, mask = symbolic_transition(current_obs, action, coverage=coverage, enabled_pstr_rules=enabled_pstr_rules)
   return _project_tabular(predicted_obs, symbolic, mask), (symbolic, mask)
 
 
-def compare_with_symbolic(predicted_obs, current_obs, action, coverage=1.0, memory=None):
+def compare_with_symbolic(predicted_obs, current_obs, action, coverage=1.0, memory=None, enabled_pstr_rules=None):
   if _is_joint_obs(current_obs):
-    symbolic, mask, _, report = symbolic_joint_transition(current_obs, action, memory=memory, coverage=coverage)
+    symbolic, mask, _, report = symbolic_joint_transition(
+      current_obs,
+      action,
+      memory=memory,
+      coverage=coverage,
+      enabled_pstr_rules=enabled_pstr_rules,
+    )
     return compare_joint_with_symbolic(predicted_obs, symbolic, mask, report)
-  symbolic, mask, _, report = symbolic_transition_with_report(current_obs, action, coverage=coverage)
+  symbolic, mask, _, report = symbolic_transition_with_report(current_obs, action, coverage=coverage, enabled_pstr_rules=enabled_pstr_rules)
   metrics = _compare_single_with_symbolic(predicted_obs, symbolic, mask)
   metrics.update(_rule_metrics({"agent_0": predicted_obs}, {"agent_0": symbolic}, {"agent_0": mask}, report))
   metrics["rvr_global"] = metrics["rvr"]
@@ -185,13 +210,18 @@ def compare_joint_with_symbolic(predicted_joint_obs, symbolic_joint, joint_mask,
   return metrics
 
 
-def symbolic_batch_targets(obs_batch, action_batch, coverage=1.0):
+def symbolic_batch_targets(obs_batch, action_batch, coverage=1.0, enabled_pstr_rules=None):
   batch, seq_len = action_batch.shape
   targets = np.zeros((batch, seq_len, GRID_FEATURES + SELF_FEATURES), dtype=np.float32)
   masks = np.zeros_like(targets, dtype=np.float32)
   for b in range(batch):
     for t in range(seq_len):
-      symbolic, mask = symbolic_transition_from_vector(obs_batch[b, t], int(action_batch[b, t]), coverage=coverage)
+      symbolic, mask = symbolic_transition_from_vector(
+        obs_batch[b, t],
+        int(action_batch[b, t]),
+        coverage=coverage,
+        enabled_pstr_rules=enabled_pstr_rules,
+      )
       targets[b, t] = tabular_to_vector(symbolic)
       masks[b, t] = tabular_mask_to_vector_mask(mask).astype(np.float32)
   return targets, masks
@@ -262,6 +292,53 @@ def apply_coverage(mask, coverage):
         mask["self"][idx] = False
 
 
+def normalize_enabled_pstr_rules(enabled_pstr_rules):
+  if enabled_pstr_rules is None:
+    return None
+  if isinstance(enabled_pstr_rules, str):
+    enabled_pstr_rules = [part.strip() for part in enabled_pstr_rules.split(",")]
+  expanded = []
+  for rule in enabled_pstr_rules:
+    expanded.extend(str(rule).split(","))
+  rules = {rule.strip() for rule in expanded if rule.strip()}
+  return rules or None
+
+
+def _filter_rules_and_masks(joint_mask, report, enabled_pstr_rules):
+  enabled = normalize_enabled_pstr_rules(enabled_pstr_rules)
+  if enabled is None:
+    return
+  filtered_rules = {
+    rule_id: entries
+    for rule_id, entries in report.get("rules", {}).items()
+    if rule_id in enabled
+  }
+  filtered_mask = {}
+  for agent_id, mask in joint_mask.items():
+    filtered_mask[agent_id] = {
+      "grid": np.zeros_like(mask["grid"], dtype=np.bool_),
+      "self": np.zeros_like(mask["self"], dtype=np.bool_),
+    }
+  for entries in filtered_rules.values():
+    for entry in entries:
+      agent_id = entry["agent"]
+      if agent_id == "*" or agent_id not in joint_mask:
+        continue
+      for feature in entry["features"]:
+        if feature[0] == "grid":
+          _, channel, y, x = feature
+          if joint_mask[agent_id]["grid"][channel, y, x]:
+            filtered_mask[agent_id]["grid"][channel, y, x] = True
+        elif feature[0] == "self":
+          _, idx = feature
+          if joint_mask[agent_id]["self"][idx]:
+            filtered_mask[agent_id]["self"][idx] = True
+  for agent_id, mask in joint_mask.items():
+    mask["grid"][:] = filtered_mask[agent_id]["grid"]
+    mask["self"][:] = filtered_mask[agent_id]["self"]
+  report["rules"] = filtered_rules
+
+
 def _symbolic_agent_transition(obs, action, memory, agent_id, forced_shift, report):
   grid = np.asarray(obs["grid"], dtype=np.int8)
   symbolic = {
@@ -320,18 +397,24 @@ def _apply_pickup(symbolic, mask, grid, action, memory, agent_id, report):
   if int(action) != ACTION_PICKUP:
     return
   c = GRIDCRAFT_VIEW_SIZE // 2
-  if int(grid[2, c, c]) != ENTITY_ITEM:
-    return
   pos = memory.get("agent_pos", {}).get(agent_id)
-  item = memory.get("items", {}).get(tuple(pos)) if pos is not None else None
-  symbolic["grid"][2, c, c] = ENTITY_AGENT
-  mask["grid"][2, c, c] = True
-  features = [("grid", 2, c, c)]
-  if item is not None:
-    item_id, count = item
-    _inc_self(symbolic, mask, int(item_id), int(count))
-    features.append(("self", 2 + int(item_id)))
-  _record_rule(report, "PSTR_INDIV_PICKUP_ITEM", agent_id, features, "individual")
+  for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+    x, y = c + dx, c + dy
+    if not (0 <= x < GRIDCRAFT_VIEW_SIZE and 0 <= y < GRIDCRAFT_VIEW_SIZE):
+      continue
+    if int(grid[2, y, x]) != ENTITY_ITEM:
+      continue
+    item_pos = (pos[0] + dx, pos[1] + dy) if pos is not None else None
+    item = memory.get("items", {}).get(item_pos) if item_pos is not None else None
+    symbolic["grid"][2, y, x] = ENTITY_NONE
+    mask["grid"][2, y, x] = True
+    features = [("grid", 2, y, x)]
+    if item is not None:
+      item_id, count = item
+      _inc_self(symbolic, mask, int(item_id), int(count))
+      features.append(("self", 2 + int(item_id)))
+    _record_rule(report, "PSTR_INDIV_PICKUP_ITEM", agent_id, features, "individual")
+    return
 
 
 def _apply_eat(symbolic, mask, action, report, agent_id):
@@ -547,10 +630,18 @@ def _apply_joint_world_updates(joint_obs, joint_action, memory, report):
           memory["blocks"][(pos[0] + dx, pos[1] + dy)] = BLOCK_EMPTY
           _record_rule(report, "PSTR_JOINT_SHARED_WORLD_UPDATE", agent_id, [], "joint")
           break
-    if action == ACTION_PICKUP and int(grid[2, center, center]) == ENTITY_ITEM:
-      memory["items"].pop(pos, None)
-      memory["entities"][pos] = ENTITY_AGENT
-      _record_rule(report, "PSTR_JOINT_SHARED_ITEM_UPDATE", agent_id, [], "joint")
+    if action == ACTION_PICKUP:
+      for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+        lx, ly = center + dx, center + dy
+        if not (0 <= lx < GRIDCRAFT_VIEW_SIZE and 0 <= ly < GRIDCRAFT_VIEW_SIZE):
+          continue
+        if int(grid[2, ly, lx]) != ENTITY_ITEM:
+          continue
+        item_pos = (pos[0] + dx, pos[1] + dy)
+        memory["items"].pop(item_pos, None)
+        memory["entities"].pop(item_pos, None)
+        _record_rule(report, "PSTR_JOINT_SHARED_ITEM_UPDATE", agent_id, [], "joint")
+        break
 
 
 def _agent_shift(grid, action, report=None):
@@ -653,6 +744,7 @@ def _rule_metrics(predicted_joint, symbolic_joint, joint_mask, report):
           violations += int(abs(float(predicted_joint[agent_id]["self"][idx]) - float(symbolic_joint[agent_id]["self"][idx])) > 0.5)
     if total:
       metrics[f"rvr/{rule_id}"] = float(violations / total)
+      metrics[f"determinable_count/{rule_id}"] = float(total)
   return metrics
 
 

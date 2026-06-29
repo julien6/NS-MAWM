@@ -24,6 +24,8 @@ def main():
   parser.add_argument("--seq-len", type=int, default=32)
   parser.add_argument("--eval-every", type=int, default=0)
   parser.add_argument("--lambda-sym", type=float, default=1.0)
+  parser.add_argument("--enabled-pstr-rules", nargs="+", default=None)
+  parser.add_argument("--symbolic-coverage-override", type=float, default=None)
   parser.add_argument("--episodes", "--eval-episodes", dest="episodes", type=int, default=100)
   parser.add_argument("--max-steps", "--eval-max-steps", dest="max_steps", type=int, default=500)
   parser.add_argument("--horizon-steps", type=int, default=50)
@@ -79,11 +81,13 @@ def main():
   os.makedirs(run_dir, exist_ok=True)
   os.makedirs(progress_dir, exist_ok=True)
   world_model_enabled = baseline.baseline_id != "B00"
+  symbolic_coverage = baseline.coverage if args.symbolic_coverage_override is None else float(args.symbolic_coverage_override)
 
   config = baseline.to_dict()
   config.update(vars(args))
   config["seed"] = seed
   config["run_dir"] = run_dir
+  config["effective_symbolic_coverage"] = symbolic_coverage
   logger = logger_from_args(
     args,
     config=config,
@@ -141,7 +145,7 @@ def main():
       "--out-dir", rnn_dir,
       "--initial-z-out", os.path.join(run_dir, "initial_z.json"),
       "--ns-variant", train_variant,
-      "--symbolic-coverage", str(baseline.coverage),
+      "--symbolic-coverage", str(symbolic_coverage),
       "--lambda-sym", str(args.lambda_sym),
       "--vae-json", vae_json,
       "--steps", str(args.steps),
@@ -161,6 +165,9 @@ def main():
       if args.horizons:
         cmd.append("--eval-horizons")
         cmd.extend(str(horizon) for horizon in args.horizons)
+    if args.enabled_pstr_rules:
+      cmd.append("--enabled-pstr-rules")
+      cmd.extend(str(rule) for rule in args.enabled_pstr_rules)
     commands.append(cmd)
 
   eval_out = os.path.join(run_dir, "eval.json")
@@ -169,7 +176,7 @@ def main():
       args.python, "evaluate_world_model.py",
       "--rnn-one-step",
       "--ns-variant", baseline.ns_variant,
-      "--symbolic-coverage", str(baseline.coverage),
+      "--symbolic-coverage", str(symbolic_coverage),
       "--rnn-json", rnn_json,
       "--vae-json", vae_json,
       "--episodes", str(args.episodes),
@@ -182,6 +189,9 @@ def main():
     if args.horizons:
       eval_cmd.append("--horizons")
       eval_cmd.extend(str(horizon) for horizon in args.horizons)
+    if args.enabled_pstr_rules:
+      eval_cmd.append("--enabled-pstr-rules")
+      eval_cmd.extend(str(rule) for rule in args.enabled_pstr_rules)
     eval_cmd.extend(video_cli_args(args))
     commands.append(eval_cmd)
 
@@ -216,7 +226,7 @@ def main():
         "--rnn-json", policy_rnn_json,
         "--initial-z-json", policy_initial_z_json,
         "--ns-variant", baseline.ns_variant,
-        "--symbolic-coverage", str(baseline.coverage),
+        "--symbolic-coverage", str(symbolic_coverage),
         "--planning-horizon", str(args.planning_horizon),
         "--cem-samples", str(args.cem_samples),
         "--progress-log", policy_progress_log,

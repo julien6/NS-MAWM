@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+# Short controlled experiment for instrumentation. It uses one reliable PSTR,
+# small budgets, offline W&B, and MAMBPO external world-model rollouts.
+
+export ENABLED_PSTR_RULES="${ENABLED_PSTR_RULES:-PSTR_INDIV_STATIC_TERRAIN_SHIFT}"
+export NUM_AGENTS="${NUM_AGENTS:-3}"
+export SEEDS="${SEEDS:-1}"
+export BASELINES="${BASELINES:-B10_neural_k0.0 B25_regularization_k0.3 B25_projection_k0.3 B25_residual_k0.3}"
+
+export WM_NUM_ENVS="${WM_NUM_ENVS:-64}"
+export WM_EPISODES="${WM_EPISODES:-512}"
+export WM_MAX_STEPS="${WM_MAX_STEPS:-64}"
+export VAE_STEPS="${VAE_STEPS:-1000}"
+export RNN_STEPS="${RNN_STEPS:-1000}"
+export WM_BATCH_SIZE="${WM_BATCH_SIZE:-256}"
+export WM_NUM_WORKERS="${WM_NUM_WORKERS:-2}"
+export WM_EVAL_EVERY="${WM_EVAL_EVERY:-250}"
+export WM_VIDEO_EVERY="${WM_VIDEO_EVERY:-0}"
+export WM_HORIZONS="${WM_HORIZONS:-1 5 10}"
+export JOINT_SYMBOLIC_TRAIN_EPISODES="${JOINT_SYMBOLIC_TRAIN_EPISODES:-32}"
+export JOINT_SYMBOLIC_TRAIN_STEPS="${JOINT_SYMBOLIC_TRAIN_STEPS:-32}"
+
+export MARL_MAX_ITERS="${MARL_MAX_ITERS:-10}"
+export MARL_NUM_ENVS="${MARL_NUM_ENVS:-32}"
+export MARL_MAX_STEPS="${MARL_MAX_STEPS:-64}"
+export MARL_FRAMES_PER_BATCH="${MARL_FRAMES_PER_BATCH:-256}"
+export MARL_TRAIN_BATCH_SIZE="${MARL_TRAIN_BATCH_SIZE:-128}"
+export MARL_OPTIMIZER_STEPS="${MARL_OPTIMIZER_STEPS:-1}"
+export MARL_EVAL_EVERY_ITERS="${MARL_EVAL_EVERY_ITERS:-5}"
+export MARL_EVAL_EPISODES="${MARL_EVAL_EPISODES:-2}"
+export MARL_VIDEO_EVERY_ITERS="${MARL_VIDEO_EVERY_ITERS:-0}"
+
+export MODEL_FREE_DOWNSTREAM_ALGO="${MODEL_FREE_DOWNSTREAM_ALGO:-masac}"
+export MODEL_BASED_DOWNSTREAM_ALGO="${MODEL_BASED_DOWNSTREAM_ALGO:-mambpo}"
+export MB_WORLD_MODEL_TRAIN_EPOCHS="${MB_WORLD_MODEL_TRAIN_EPOCHS:-0}"
+export MB_WORLD_MODEL_BATCH_SIZE="${MB_WORLD_MODEL_BATCH_SIZE:-64}"
+export MB_IMAGINED_HORIZON="${MB_IMAGINED_HORIZON:-3}"
+export MB_IMAGINED_BRANCHES="${MB_IMAGINED_BRANCHES:-2}"
+export MB_LAMBDA_IMAGINED="${MB_LAMBDA_IMAGINED:-0.5}"
+
+export WANDB_MODE="${WANDB_MODE:-offline}"
+export WANDB_FLAG="${WANDB_FLAG:---wandb}"
+
+echo "=== Running NS-MAWM micro PSTR experiment ==="
+echo "PSTR rules: ${ENABLED_PSTR_RULES}"
+exec ./run_benchmarl_requested_baselines_3agents_fast_scientific.bash

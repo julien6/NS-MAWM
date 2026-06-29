@@ -7,7 +7,10 @@
 from __future__ import annotations
 
 import random
+import sys
+import warnings
 from dataclasses import MISSING, dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Type
 
 import torch
@@ -36,6 +39,11 @@ class MambpoWorldModelConfig:
     stochastic: bool = True
     predict_delta_obs: bool = True
     predict_done: bool = False
+    external_model_type: str = "ensemble"
+    external_checkpoint_dir: str | None = None
+    external_ns_variant: str = "neural"
+    external_ns_coverage: float = 0.0
+    external_num_agents: int = 1
 
 
 @dataclass
@@ -299,8 +307,14 @@ class _MixedReplayBuffer:
             }
             return self.real_buffer.sample(batch_size=target_batch)
 
-        real = self.real_buffer.sample(batch_size=n_real)
-        model = model_buffer.sample(batch_size=n_model)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="Got conflicting batch_sizes.*",
+                category=UserWarning,
+            )
+            real = self.real_buffer.sample(batch_size=n_real)
+            model = model_buffer.sample(batch_size=n_model)
         reward_key = ("next", self.group, "reward")
         imagined_reward = (
             model.get(reward_key).float().mean().to(self.algorithm.device)
@@ -337,6 +351,7 @@ class Mambpo(Masac):
         self.imagined_rollouts = imagined_rollouts
         self._world_models: Dict[str, EnsembleWorldModel] = {}
         self._world_model_trainers: Dict[str, WorldModelTrainer] = {}
+        self._external_world_models: Dict[str, Dict] = {}
         self._model_replay_buffers: Dict[str, TensorDictReplayBuffer] = {}
         self._steps: Dict[str, int] = {}
         self.latest_metrics: Dict[str, torch.Tensor] = {}
@@ -359,15 +374,34 @@ class Mambpo(Masac):
         if data is None:
             return batch
         obs, action, next_obs, reward, done, flat_batch = data
-        trainer = self._get_world_model_trainer(group, obs, action, reward)
-
-        if self._steps[group] % max(1, self.world_model.train_interval) == 0:
-            self.latest_metrics.update(
-                trainer.train(obs, action, next_obs, reward, done)
-            )
 
         if len(flat_batch) > 0:
-            fake = self._generate_model_rollouts(group, flat_batch, trainer.model)
+            if self._uses_external_gridcraft_world_model():
+                fake = self._generate_external_gridcraft_rollouts(group, flat_batch)
+                self.latest_metrics.update(
+                    {
+                        "mambpo/external_world_model_used": torch.tensor(
+                            1.0, device=self.device
+                        ),
+                        "mambpo/world_model_loss": torch.tensor(
+                            0.0, device=self.device
+                        ),
+                    }
+                )
+            else:
+                trainer = self._get_world_model_trainer(group, obs, action, reward)
+                if self._steps[group] % max(1, self.world_model.train_interval) == 0:
+                    self.latest_metrics.update(
+                        trainer.train(obs, action, next_obs, reward, done)
+                    )
+                fake = self._generate_model_rollouts(group, flat_batch, trainer.model)
+                self.latest_metrics.update(
+                    {
+                        "mambpo/external_world_model_used": torch.tensor(
+                            0.0, device=self.device
+                        )
+                    }
+                )
             if fake is not None and len(fake) > 0:
                 model_buffer = self._get_model_replay_buffer(group)
                 model_buffer.extend(fake.to(model_buffer.storage.device))
@@ -396,6 +430,13 @@ class Mambpo(Masac):
                 )
 
         return batch
+
+    def _uses_external_gridcraft_world_model(self) -> bool:
+        return (
+            self.world_model.enabled
+            and self.world_model.external_model_type == "gridcraft_vae_mdn_rnn"
+            and bool(self.world_model.external_checkpoint_dir)
+        )
 
     def _extract_model_data(self, group: str, batch: TensorDictBase):
         obs_key = (group, "observation")
@@ -459,6 +500,49 @@ class Mambpo(Masac):
                 trainer.optimizer.load_state_dict(state["optimizer"])
         return self._world_model_trainers[group]
 
+    def _get_external_gridcraft_world_model(self, group: str) -> Dict:
+        if group in self._external_world_models:
+            return self._external_world_models[group]
+        checkpoint_dir = Path(str(self.world_model.external_checkpoint_dir)).expanduser()
+        if not checkpoint_dir.is_absolute():
+            checkpoint_dir = Path.cwd() / checkpoint_dir
+        vae_path = checkpoint_dir / "vae.pt"
+        rnn_path = checkpoint_dir / "rnn.pt"
+        if not vae_path.exists() or not rnn_path.exists():
+            raise FileNotFoundError(
+                "Missing external Gridcraft world model checkpoints: "
+                f"{vae_path} / {rnn_path}"
+            )
+        root = checkpoint_dir
+        for parent in checkpoint_dir.parents:
+            if (parent / "gridcraft" / "torch_world_model").exists():
+                root = parent
+                break
+        gridcraft_dir = root / "gridcraft"
+        if str(gridcraft_dir) not in sys.path:
+            sys.path.insert(0, str(gridcraft_dir))
+        from torch_world_model import TorchGridcraftRNN, TorchGridcraftVAE
+        from run_benchmarl_dyna_gridcraft import apply_ns_mawm_to_latent_step
+
+        vae = TorchGridcraftVAE().to(self.device)
+        rnn = TorchGridcraftRNN().to(self.device)
+        vae.load_state_dict(torch.load(vae_path, map_location=self.device))
+        rnn.load_state_dict(torch.load(rnn_path, map_location=self.device))
+        vae.eval()
+        rnn.eval()
+        for param in vae.parameters():
+            param.requires_grad_(False)
+        for param in rnn.parameters():
+            param.requires_grad_(False)
+        state = {
+            "vae": vae,
+            "rnn": rnn,
+            "apply_ns": apply_ns_mawm_to_latent_step,
+            "checkpoint_dir": str(checkpoint_dir),
+        }
+        self._external_world_models[group] = state
+        return state
+
     def _get_model_replay_buffer(self, group: str) -> TensorDictReplayBuffer:
         if group not in self._model_replay_buffers:
             self._model_replay_buffers[group] = TensorDictReplayBuffer(
@@ -467,7 +551,6 @@ class Mambpo(Masac):
                     device=self.buffer_device,
                 ),
                 sampler=RandomSampler(),
-                batch_size=self.experiment_config.train_batch_size(False),
                 priority_key=(group, "td_error"),
             )
         return self._model_replay_buffers[group]
@@ -526,6 +609,90 @@ class Mambpo(Masac):
             current_obs = next_obs
         return torch.cat(transitions, dim=0)
 
+    @torch.no_grad()
+    def _generate_external_gridcraft_rollouts(
+        self,
+        group: str,
+        flat_batch: TensorDictBase,
+    ) -> Optional[TensorDictBase]:
+        n_roots = min(self.imagined_rollouts.model_batch_size, len(flat_batch))
+        if n_roots <= 0:
+            return None
+        state = self._get_external_gridcraft_world_model(group)
+        vae = state["vae"]
+        rnn = state["rnn"]
+        apply_ns = state["apply_ns"]
+        indices = torch.randint(len(flat_batch), (n_roots,), device=flat_batch.device)
+        roots = flat_batch[indices].clone()
+        current_obs = roots.get((group, "observation")).to(self.device)
+        if current_obs.ndim < 3:
+            return None
+        num_agents = int(self.world_model.external_num_agents) or int(current_obs.shape[1])
+        if int(current_obs.shape[1]) != num_agents:
+            num_agents = int(current_obs.shape[1])
+        current_z = vae.encode(
+            current_obs.reshape(-1, current_obs.shape[-1]).float(),
+            sample=False,
+        )
+        rnn_state = None
+        ns_memory = [None for _ in range(n_roots)]
+        transitions = []
+        policy = self.get_policy_for_collection()
+        for _ in range(self._current_rollout_length()):
+            td = roots.clone()
+            td.set((group, "observation"), current_obs.to(td.device))
+            if self.imagined_rollouts.diverse_actions:
+                policy(td.to(self.device))
+            action_raw = td.get((group, "action")).to(self.device)
+            if action_raw.ndim >= 2 and action_raw.shape[-1] == num_agents and not action_raw.is_floating_point():
+                action_index = action_raw.long()
+            elif action_raw.ndim >= 3 and action_raw.shape[-1] == 1:
+                action_index = action_raw.squeeze(-1).long()
+            elif action_raw.ndim >= 3 and action_raw.shape[-1] > 1:
+                action_index = action_raw.argmax(dim=-1)
+            else:
+                action_index = action_raw.reshape(n_roots, num_agents).long()
+            flat_action = action_index.reshape(-1).clamp(0, rnn.action_size - 1)
+            next_z, reward, done_logit, rnn_state = rnn.step(
+                current_z, flat_action, rnn_state, deterministic=True
+            )
+            if self.world_model.external_ns_variant in ("projection", "residual"):
+                next_z, ns_memory, _ = apply_ns(
+                    vae=vae,
+                    current_z=current_z,
+                    predicted_z=next_z,
+                    action=flat_action,
+                    ns_memory=ns_memory,
+                    ns_variant=self.world_model.external_ns_variant,
+                    ns_coverage=float(self.world_model.external_ns_coverage),
+                    num_agents=num_agents,
+                    device=torch.device(self.device),
+                )
+            next_obs = vae.decode(next_z).reshape_as(current_obs)
+            reward = reward.reshape(n_roots, num_agents, 1)
+            done_prob = torch.sigmoid(done_logit).reshape(n_roots, num_agents, 1)
+            done = done_prob > 0.5 if self.world_model.predict_done else torch.zeros_like(done_prob, dtype=torch.bool)
+            transition = td.clone()
+            transition.set((group, "action"), action_raw.to(transition.device))
+            transition.set(
+                ("next", group, "observation"), next_obs.to(transition.device)
+            )
+            transition.set(("next", group, "reward"), reward.to(transition.device))
+            transition.set(("next", group, "done"), done.to(transition.device))
+            transition.set(("next", group, "terminated"), done.to(transition.device))
+            if ("next", "done") in transition.keys(True, True):
+                transition.set(
+                    ("next", "done"), done.any(dim=-2).to(transition.device)
+                )
+            if ("next", "terminated") in transition.keys(True, True):
+                transition.set(
+                    ("next", "terminated"), done.any(dim=-2).to(transition.device)
+                )
+            transitions.append(transition)
+            current_obs = next_obs.detach()
+            current_z = next_z.detach()
+        return torch.cat(transitions, dim=0)
+
     def _summarize_imagined_transitions(
         self, group: str, transitions: TensorDictBase
     ) -> Dict[str, torch.Tensor]:
@@ -551,13 +718,17 @@ class Mambpo(Masac):
         self, group: str, batch: TensorDictBase
     ) -> Dict[str, torch.Tensor]:
         if (
-            group not in self._world_models
-            or not self.world_model.enabled
+            not self.world_model.enabled
             or not self.imagined_rollouts.enabled
         ):
             return {}
         flat_batch = batch.reshape(-1).to(self.device)
-        fake = self._generate_model_rollouts(group, flat_batch, self._world_models[group])
+        if self._uses_external_gridcraft_world_model():
+            fake = self._generate_external_gridcraft_rollouts(group, flat_batch)
+        else:
+            if group not in self._world_models:
+                return {}
+            fake = self._generate_model_rollouts(group, flat_batch, self._world_models[group])
         if fake is None or len(fake) == 0:
             return {}
         metrics = self._summarize_imagined_transitions(group, fake)

@@ -12,6 +12,7 @@ from ns_symbolic import (
   NS_VARIANTS,
   apply_symbolic_projection,
   compare_with_symbolic,
+  normalize_enabled_pstr_rules,
   symbolic_transition,
   tabular_mask_to_vector_mask,
   tabular_to_vector,
@@ -23,7 +24,7 @@ from wandb_schema import GENERAL, WORLD_MODEL_EVALUATION
 from progress_logging import append_progress
 
 
-def compare_tabular(real_obs, imagined_obs, current_obs=None, action=None, symbolic_coverage=1.0):
+def compare_tabular(real_obs, imagined_obs, current_obs=None, action=None, symbolic_coverage=1.0, enabled_pstr_rules=None):
   real_grid = np.asarray(real_obs["grid"], dtype=np.int16)
   imagined_grid = np.asarray(imagined_obs["grid"], dtype=np.int16)
   real_self = np.asarray(real_obs["self"], dtype=np.float32)
@@ -36,13 +37,23 @@ def compare_tabular(real_obs, imagined_obs, current_obs=None, action=None, symbo
     "self_mse": float(np.mean((real_self - imagined_self) ** 2)),
   }
   if current_obs is not None and action is not None:
-    metrics.update(compare_with_symbolic(imagined_obs, current_obs, action, coverage=symbolic_coverage))
-    _, mask = symbolic_transition(current_obs, action, coverage=symbolic_coverage)
+    metrics.update(compare_with_symbolic(
+      imagined_obs,
+      current_obs,
+      action,
+      coverage=symbolic_coverage,
+      enabled_pstr_rules=enabled_pstr_rules,
+    ))
+    _, mask = symbolic_transition(current_obs, action, coverage=symbolic_coverage, enabled_pstr_rules=enabled_pstr_rules)
     mask_vec = tabular_mask_to_vector_mask(mask)
     real_vec = tabular_to_vector(real_obs)
     imagined_vec = tabular_to_vector(imagined_obs)
-    metrics["determinable_mismatch"] = float(np.mean(np.abs(real_vec[mask_vec] - imagined_vec[mask_vec]))) if np.any(mask_vec) else 0.0
-    metrics["undeterminable_mismatch"] = float(np.mean(np.abs(real_vec[~mask_vec] - imagined_vec[~mask_vec]))) if np.any(~mask_vec) else 0.0
+    real_determinable = float(np.mean(np.abs(real_vec[mask_vec] - imagined_vec[mask_vec]))) if np.any(mask_vec) else 0.0
+    real_undeterminable = float(np.mean(np.abs(real_vec[~mask_vec] - imagined_vec[~mask_vec]))) if np.any(~mask_vec) else 0.0
+    metrics["real_determinable_mismatch"] = real_determinable
+    metrics["real_undeterminable_mismatch"] = real_undeterminable
+    metrics["determinable_mismatch"] = real_determinable
+    metrics["undeterminable_mismatch"] = real_undeterminable
   else:
     metrics.update({
       "rvr": 0.0,
@@ -53,11 +64,65 @@ def compare_tabular(real_obs, imagined_obs, current_obs=None, action=None, symbo
   return metrics
 
 
+def compare_tabular_pre_post(real_obs, raw_obs, post_obs, current_obs, action, symbolic_coverage=1.0, enabled_pstr_rules=None):
+  metrics = compare_tabular(
+    real_obs,
+    post_obs,
+    current_obs=current_obs,
+    action=action,
+    symbolic_coverage=symbolic_coverage,
+    enabled_pstr_rules=enabled_pstr_rules,
+  )
+  pre = compare_with_symbolic(
+    raw_obs,
+    current_obs,
+    action,
+    coverage=symbolic_coverage,
+    enabled_pstr_rules=enabled_pstr_rules,
+  )
+  post = compare_with_symbolic(
+    post_obs,
+    current_obs,
+    action,
+    coverage=symbolic_coverage,
+    enabled_pstr_rules=enabled_pstr_rules,
+  )
+  metrics.update(_prefix_projection_metrics(pre, "pre"))
+  metrics.update(_prefix_projection_metrics(post, "post"))
+  metrics.update(_real_projection_mismatches(real_obs, raw_obs, post_obs, current_obs, action, symbolic_coverage, enabled_pstr_rules))
+  return metrics
+
+
+def _prefix_projection_metrics(metrics, phase):
+  prefixed = {}
+  for key, value in metrics.items():
+    if key.startswith("rvr/"):
+      prefixed[f"rvr_{phase}/{key.split('/', 1)[1]}"] = value
+    else:
+      prefixed[f"{phase}_projection_{key}"] = value
+  return prefixed
+
+
+def _real_projection_mismatches(real_obs, raw_obs, post_obs, current_obs, action, symbolic_coverage, enabled_pstr_rules):
+  _, mask = symbolic_transition(current_obs, action, coverage=symbolic_coverage, enabled_pstr_rules=enabled_pstr_rules)
+  mask_vec = tabular_mask_to_vector_mask(mask)
+  real_vec = tabular_to_vector(real_obs)
+  raw_vec = tabular_to_vector(raw_obs)
+  post_vec = tabular_to_vector(post_obs)
+  return {
+    "real_determinable_mismatch_pre": float(np.mean(np.abs(real_vec[mask_vec] - raw_vec[mask_vec]))) if np.any(mask_vec) else 0.0,
+    "real_determinable_mismatch_post": float(np.mean(np.abs(real_vec[mask_vec] - post_vec[mask_vec]))) if np.any(mask_vec) else 0.0,
+  }
+
+
 def average_metrics(rows):
   if not rows:
     return {}
-  keys = rows[0].keys()
-  return {key: float(np.mean([row[key] for row in rows])) for key in keys}
+  keys = sorted({key for row in rows for key in row.keys()})
+  return {
+    key: float(np.mean([row[key] for row in rows if key in row]))
+    for key in keys
+  }
 
 
 def evaluate_vae(args):
@@ -73,7 +138,7 @@ def evaluate_vae(args):
     for _ in range(args.max_steps):
       mu, _ = vae.encode_mu_logvar(obs.reshape(1, -1))
       imagined_obs = vae.decode_tabular(mu[0])
-      rows.append(compare_tabular(env.last_obs, imagined_obs))
+      rows.append(compare_tabular(env.last_obs, imagined_obs, enabled_pstr_rules=args.enabled_pstr_rules))
       action = int(rng.integers(0, ACTION_SIZE))
       obs, reward, done, info = env.step(action)
       if done:
@@ -103,9 +168,24 @@ def evaluate_rnn_one_step(args):
       imagined_z = predict_rnn_next_z(proxy, mu[0], action, rng=rng, mode=args.imagination_mode)
       state = proxy.rnn_state
       next_obs, reward, done, info = env.step(action)
-      imagined_obs = vae.decode_tabular(imagined_z)
-      imagined_obs, _ = apply_symbolic_projection(imagined_obs, current_obs, action, args.ns_variant, coverage=args.symbolic_coverage)
-      rows.append(compare_tabular(env.last_obs, imagined_obs, current_obs=current_obs, action=action, symbolic_coverage=args.symbolic_coverage))
+      raw_obs = vae.decode_tabular(imagined_z)
+      imagined_obs, _ = apply_symbolic_projection(
+        raw_obs,
+        current_obs,
+        action,
+        args.ns_variant,
+        coverage=args.symbolic_coverage,
+        enabled_pstr_rules=args.enabled_pstr_rules,
+      )
+      rows.append(compare_tabular_pre_post(
+        env.last_obs,
+        raw_obs,
+        imagined_obs,
+        current_obs,
+        action,
+        symbolic_coverage=args.symbolic_coverage,
+        enabled_pstr_rules=args.enabled_pstr_rules,
+      ))
       obs = next_obs
       if done:
         break
@@ -134,9 +214,24 @@ def evaluate_rnn_horizon(args):
       imagined_z = predict_rnn_next_z(proxy, z, action, rng=rng, mode=args.imagination_mode)
       state = proxy.rnn_state
       next_obs, reward, done, info = env.step(action)
-      imagined_obs = vae.decode_tabular(imagined_z)
-      imagined_obs, _ = apply_symbolic_projection(imagined_obs, imagined_current, action, args.ns_variant, coverage=args.symbolic_coverage)
-      rows.append(compare_tabular(env.last_obs, imagined_obs, current_obs=imagined_current, action=action, symbolic_coverage=args.symbolic_coverage))
+      raw_obs = vae.decode_tabular(imagined_z)
+      imagined_obs, _ = apply_symbolic_projection(
+        raw_obs,
+        imagined_current,
+        action,
+        args.ns_variant,
+        coverage=args.symbolic_coverage,
+        enabled_pstr_rules=args.enabled_pstr_rules,
+      )
+      rows.append(compare_tabular_pre_post(
+        env.last_obs,
+        raw_obs,
+        imagined_obs,
+        imagined_current,
+        action,
+        symbolic_coverage=args.symbolic_coverage,
+        enabled_pstr_rules=args.enabled_pstr_rules,
+      ))
       imagined_current = imagined_obs
       z = imagined_z
       if done:
@@ -168,6 +263,7 @@ def main():
   parser.add_argument("--rnn-json", default=None)
   parser.add_argument("--ns-variant", choices=NS_VARIANTS, default="neural")
   parser.add_argument("--symbolic-coverage", type=float, default=1.0)
+  parser.add_argument("--enabled-pstr-rules", nargs="+", default=None)
   parser.add_argument("--episodes", type=int, default=10)
   parser.add_argument("--max-steps", type=int, default=100)
   parser.add_argument("--seed", type=int, default=1)
@@ -179,6 +275,7 @@ def main():
   parser.add_argument("--progress-log", default=None)
   add_wandb_args(parser)
   args = parser.parse_args()
+  args.enabled_pstr_rules = normalize_enabled_pstr_rules(args.enabled_pstr_rules)
 
   logger = logger_from_args(
     args,

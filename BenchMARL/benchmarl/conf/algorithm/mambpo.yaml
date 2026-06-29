@@ -28,6 +28,11 @@ world_model:
   stochastic: true
   predict_delta_obs: true
   predict_done: false
+  external_model_type: "ensemble"
+  external_checkpoint_dir: null
+  external_ns_variant: "neural"
+  external_ns_coverage: 0.0
+  external_num_agents: 1
 
 imagined_rollouts:
   enabled: true

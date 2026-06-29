@@ -182,7 +182,7 @@ def scenario_specs() -> dict[str, PSTRScenarioSpec]:
       "PSTR_INDIV_PICKUP_ITEM",
       {"agent_0": ACTION_PICKUP},
       _setup_pickup_item,
-      "Picking up a known item on the agent cell removes the item entity and increases the corresponding inventory count.",
+      "Picking up a known adjacent item removes the item entity and increases the corresponding inventory count.",
     ),
     "PSTR_INDIV_EAT_APPLE": PSTRScenarioSpec(
       "PSTR_INDIV_EAT_APPLE",
@@ -260,7 +260,7 @@ def scenario_specs() -> dict[str, PSTRScenarioSpec]:
       "PSTR_JOINT_SHARED_ITEM_UPDATE",
       {"agent_0": ACTION_PICKUP, "agent_1": ACTION_STAY},
       _setup_joint_pickup_item,
-      "A deterministic pickup removes the known item from shared symbolic memory.",
+      "A deterministic pickup removes the known adjacent item from shared symbolic memory.",
     ),
   }
   ordered = {}
@@ -552,11 +552,11 @@ def _setup_harvest_stone(env: VectorizedGridcraftEnv) -> dict:
 def _setup_pickup_item(env: VectorizedGridcraftEnv) -> dict:
   _clear(env)
   env.item_alive[0, 0] = True
-  env.item_x[0, 0] = 5
+  env.item_x[0, 0] = 6
   env.item_y[0, 0] = 5
   env.item_type[0, 0] = ITEM_WOOD
   env.item_count[0, 0] = 2
-  return {"agent_pos": {"agent_0": (0, 0)}, "items": {(0, 0): (ITEM_WOOD, 2)}}
+  return {"agent_pos": {"agent_0": (0, 0)}, "items": {(1, 0): (ITEM_WOOD, 2)}}
 
 
 def _setup_eat_apple(env: VectorizedGridcraftEnv) -> dict:
@@ -648,14 +648,14 @@ def _setup_joint_harvest_tree(env: VectorizedGridcraftEnv) -> dict:
 def _setup_joint_pickup_item(env: VectorizedGridcraftEnv) -> dict:
   _setup_two_agents_adjacent(env)
   env.item_alive[0, 0] = True
-  env.item_x[0, 0] = 5
+  env.item_x[0, 0] = 6
   env.item_y[0, 0] = 5
   env.item_type[0, 0] = ITEM_WOOD
   env.item_count[0, 0] = 1
   return {
     "agent_pos": {"agent_0": (0, 0), "agent_1": (1, 0)},
-    "items": {(0, 0): (ITEM_WOOD, 1)},
-    "entities": {(0, 0): ENTITY_ITEM},
+    "items": {(1, 0): (ITEM_WOOD, 1)},
+    "entities": {(1, 0): ENTITY_ITEM},
   }
 
 
