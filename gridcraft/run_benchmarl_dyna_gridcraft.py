@@ -15,7 +15,8 @@ sys.path.insert(0, str(ROOT / "vGridcraft"))
 sys.path.insert(0, str(ROOT / "gridcraft"))
 
 from experiment_logging import add_wandb_args, logger_from_args, should_log_wandb_videos
-from ns_symbolic import NS_VARIANTS, apply_symbolic_projection, tabular_to_vector
+from ns_symbolic import NS_VARIANTS, apply_symbolic_projection, tabular_to_vector, vector_to_tabular
+from pstr_profiles import active_rules_for_baseline, profile_name_from_baseline, rules_to_csv
 from wandb_schema import GENERAL, MARL_EVALUATION, MARL_TRAINING
 from torch_world_model import TorchGridcraftRNN, TorchGridcraftVAE
 from torch_world_model.models import ACTION_SIZE
@@ -87,6 +88,7 @@ def main() -> None:
     run_dir = Path(args.wm_run_dir)
     checkpoint_dir = run_dir / "checkpoints"
     ns_variant, ns_coverage = infer_ns_settings(args.baseline_id)
+    enabled_pstr_rules = active_rules_for_baseline(args.baseline_id)
 
     logger = logger_from_args(
         args,
@@ -98,6 +100,9 @@ def main() -> None:
             "downstream_imagined_ratio": 1.0,
             "ns_variant": ns_variant,
             "ns_coverage": ns_coverage,
+            "pstr_profile": profile_name_from_baseline(args.baseline_id),
+            "enabled_pstr_rules": rules_to_csv(enabled_pstr_rules),
+            "enabled_pstr_count": len(enabled_pstr_rules),
             "world_model_checkpoint_dir": str(checkpoint_dir),
             "gridcraft_config": config.__dict__,
         },
@@ -115,7 +120,7 @@ def main() -> None:
     if not vae_path.exists() or not rnn_path.exists():
         raise FileNotFoundError(f"Missing world model checkpoints: {vae_path} / {rnn_path}")
     vae.load_state_dict(torch.load(vae_path, map_location=device))
-    rnn.load_state_dict(torch.load(rnn_path, map_location=device))
+    rnn.load_state_dict(torch.load(rnn_path, map_location=device), strict=False)
     vae.eval()
     rnn.eval()
     for param in vae.parameters():
@@ -190,7 +195,11 @@ def dyna_update(vae, rnn, policy, optimizer, z, rnn_state, ns_memory, ns_variant
         dist = torch.distributions.Categorical(logits=logits)
         action = dist.sample()
         with torch.no_grad():
-            next_z, reward, done_logit, state = rnn.step(current_z, action, state, deterministic=True)
+            if ns_variant == "residual":
+                next_z, reward, done_logit, state, residual_obs = rnn.step_with_observation(current_z, action, state, deterministic=True)
+            else:
+                next_z, reward, done_logit, state = rnn.step(current_z, action, state, deterministic=True)
+                residual_obs = None
             next_z, ns_memory, ns_metrics = apply_ns_mawm_to_latent_step(
                 vae=vae,
                 current_z=current_z,
@@ -201,6 +210,8 @@ def dyna_update(vae, rnn, policy, optimizer, z, rnn_state, ns_memory, ns_variant
                 ns_coverage=ns_coverage,
                 num_agents=args.num_agents,
                 device=device,
+                predicted_obs_vector=residual_obs,
+                enabled_pstr_rules=enabled_pstr_rules,
             )
             done_prob = torch.sigmoid(done_logit).clamp(0.0, 1.0)
             reward = reward * (1.0 - done_prob)
@@ -262,7 +273,11 @@ def evaluate_imagined_policy(vae, rnn, policy, args, device, ns_variant, ns_cove
     for _ in range(max(1, int(args.video_max_steps))):
         logits, _ = policy(z)
         action = logits.argmax(dim=-1)
-        predicted_z, reward, done_logit, state = rnn.step(z, action, state, deterministic=True)
+        if ns_variant == "residual":
+            predicted_z, reward, done_logit, state, residual_obs = rnn.step_with_observation(z, action, state, deterministic=True)
+        else:
+            predicted_z, reward, done_logit, state = rnn.step(z, action, state, deterministic=True)
+            residual_obs = None
         z, ns_memory, _ = apply_ns_mawm_to_latent_step(
             vae=vae,
             current_z=z,
@@ -273,6 +288,8 @@ def evaluate_imagined_policy(vae, rnn, policy, args, device, ns_variant, ns_cove
             ns_coverage=ns_coverage,
             num_agents=args.num_agents,
             device=device,
+            predicted_obs_vector=residual_obs,
+            enabled_pstr_rules=active_rules_for_baseline(args.baseline_id),
         )
         done_prob = torch.sigmoid(done_logit)
         alive = done_prob < 0.5
@@ -327,8 +344,12 @@ def record_imagined_policy_video(vae, rnn, policy, args, config, device, ns_vari
     for step_index in range(max(1, int(args.video_max_steps))):
         logits, _ = policy(z)
         action = logits.argmax(dim=-1)
-        predicted_z, reward, done_logit, state = rnn.step(z, action, state, deterministic=True)
-        z, ns_memory, _ = apply_ns_mawm_to_latent_step(
+        if ns_variant == "residual":
+            predicted_z, reward, done_logit, state, residual_obs = rnn.step_with_observation(z, action, state, deterministic=True)
+        else:
+            predicted_z, reward, done_logit, state = rnn.step(z, action, state, deterministic=True)
+            residual_obs = None
+        z, ns_memory, ns_metrics = apply_ns_mawm_to_latent_step(
             vae=vae,
             current_z=z,
             predicted_z=predicted_z,
@@ -338,14 +359,20 @@ def record_imagined_policy_video(vae, rnn, policy, args, config, device, ns_vari
             ns_coverage=ns_coverage,
             num_agents=config.num_agents,
             device=device,
+            predicted_obs_vector=residual_obs,
+            enabled_pstr_rules=active_rules_for_baseline(args.baseline_id),
         )
-        imagined = vae.decode_tabular(z)
+        projected_obs = ns_metrics.get("projected_observation")
+        imagined = vae.decode_tabular(z) if projected_obs is None else None
         tabular = {}
         for agent_idx in range(config.num_agents):
-            tabular[f"agent_{agent_idx}"] = {
-                "grid": imagined["grid"][agent_idx].detach().cpu().numpy().astype("int8"),
-                "self": imagined["self"][agent_idx].detach().cpu().numpy().astype("int16"),
-            }
+            if projected_obs is None:
+                tabular[f"agent_{agent_idx}"] = {
+                    "grid": imagined["grid"][agent_idx].detach().cpu().numpy().astype("int8"),
+                    "self": imagined["self"][agent_idx].detach().cpu().numpy().astype("int16"),
+                }
+            else:
+                tabular[f"agent_{agent_idx}"] = vector_to_tabular(projected_obs.detach().cpu().numpy()[agent_idx])
         reward_value = float(reward.mean().detach().cpu())
         cumulative_reward += reward_value
         joint_action = {
@@ -394,7 +421,7 @@ def format_joint_action(joint_action: dict[str, int]) -> dict[str, str]:
 
 
 @torch.no_grad()
-def apply_ns_mawm_to_latent_step(vae, current_z, predicted_z, action, ns_memory, ns_variant, ns_coverage, num_agents, device):
+def apply_ns_mawm_to_latent_step(vae, current_z, predicted_z, action, ns_memory, ns_variant, ns_coverage, num_agents, device, predicted_obs_vector=None, enabled_pstr_rules=None):
     if ns_variant in ("neural", "regularization"):
         return predicted_z, ns_memory, {"correction_count": 0.0}
     if predicted_z.shape[0] % int(num_agents) != 0:
@@ -403,7 +430,10 @@ def apply_ns_mawm_to_latent_step(vae, current_z, predicted_z, action, ns_memory,
     if ns_memory is None or len(ns_memory) != num_envs:
         ns_memory = [None for _ in range(num_envs)]
     current_tabular = decode_flat_tabular(vae, current_z, num_envs, num_agents)
-    predicted_tabular = decode_flat_tabular(vae, predicted_z, num_envs, num_agents)
+    if predicted_obs_vector is None:
+        predicted_tabular = decode_flat_tabular(vae, predicted_z, num_envs, num_agents)
+    else:
+        predicted_tabular = flat_vector_to_tabular(predicted_obs_vector, num_envs, num_agents)
     action_np = action.detach().cpu().long().reshape(num_envs, num_agents).numpy()
     projected_vectors = []
     correction_count = 0
@@ -427,6 +457,7 @@ def apply_ns_mawm_to_latent_step(vae, current_z, predicted_z, action, ns_memory,
             ns_variant,
             coverage=ns_coverage,
             memory=ns_memory[env_idx],
+            enabled_pstr_rules=enabled_pstr_rules,
         )
         if symbolic_info is not None and len(symbolic_info) >= 3:
             ns_memory[env_idx] = symbolic_info[2]
@@ -437,7 +468,7 @@ def apply_ns_mawm_to_latent_step(vae, current_z, predicted_z, action, ns_memory,
                 correction_count += 1
     projected = torch.as_tensor(np.asarray(projected_vectors, dtype=np.float32), device=device)
     corrected_z = vae.encode(projected, sample=False)
-    return corrected_z, ns_memory, {"correction_count": float(correction_count)}
+    return corrected_z, ns_memory, {"correction_count": float(correction_count), "projected_observation": projected}
 
 
 @torch.no_grad()
@@ -451,6 +482,19 @@ def decode_flat_tabular(vae, z, num_envs, num_agents):
         row = []
         for _ in range(num_agents):
             row.append({"grid": grids[cursor], "self": selves[cursor]})
+            cursor += 1
+        result.append(row)
+    return result
+
+
+def flat_vector_to_tabular(obs_vector, num_envs, num_agents):
+    vectors = obs_vector.detach().cpu().numpy()
+    result = []
+    cursor = 0
+    for _ in range(num_envs):
+        row = []
+        for _ in range(num_agents):
+            row.append(vector_to_tabular(vectors[cursor]))
             cursor += 1
         result.append(row)
     return result

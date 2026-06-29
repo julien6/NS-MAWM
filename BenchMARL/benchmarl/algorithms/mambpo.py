@@ -44,6 +44,7 @@ class MambpoWorldModelConfig:
     external_ns_variant: str = "neural"
     external_ns_coverage: float = 0.0
     external_num_agents: int = 1
+    external_enabled_pstr_rules: str = ""
 
 
 @dataclass
@@ -527,7 +528,7 @@ class Mambpo(Masac):
         vae = TorchGridcraftVAE().to(self.device)
         rnn = TorchGridcraftRNN().to(self.device)
         vae.load_state_dict(torch.load(vae_path, map_location=self.device))
-        rnn.load_state_dict(torch.load(rnn_path, map_location=self.device))
+        rnn.load_state_dict(torch.load(rnn_path, map_location=self.device), strict=False)
         vae.eval()
         rnn.eval()
         for param in vae.parameters():
@@ -653,11 +654,17 @@ class Mambpo(Masac):
             else:
                 action_index = action_raw.reshape(n_roots, num_agents).long()
             flat_action = action_index.reshape(-1).clamp(0, rnn.action_size - 1)
-            next_z, reward, done_logit, rnn_state = rnn.step(
-                current_z, flat_action, rnn_state, deterministic=True
-            )
+            if self.world_model.external_ns_variant == "residual":
+                next_z, reward, done_logit, rnn_state, residual_obs = rnn.step_with_observation(
+                    current_z, flat_action, rnn_state, deterministic=True
+                )
+            else:
+                next_z, reward, done_logit, rnn_state = rnn.step(
+                    current_z, flat_action, rnn_state, deterministic=True
+                )
+                residual_obs = None
             if self.world_model.external_ns_variant in ("projection", "residual"):
-                next_z, ns_memory, _ = apply_ns(
+                next_z, ns_memory, ns_metrics = apply_ns(
                     vae=vae,
                     current_z=current_z,
                     predicted_z=next_z,
@@ -667,8 +674,13 @@ class Mambpo(Masac):
                     ns_coverage=float(self.world_model.external_ns_coverage),
                     num_agents=num_agents,
                     device=torch.device(self.device),
+                    predicted_obs_vector=residual_obs,
+                    enabled_pstr_rules=self.world_model.external_enabled_pstr_rules,
                 )
-            next_obs = vae.decode(next_z).reshape_as(current_obs)
+                projected_obs = ns_metrics.get("projected_observation")
+                next_obs = projected_obs.reshape_as(current_obs) if projected_obs is not None else vae.decode(next_z).reshape_as(current_obs)
+            else:
+                next_obs = vae.decode(next_z).reshape_as(current_obs)
             reward = reward.reshape(n_roots, num_agents, 1)
             done_prob = torch.sigmoid(done_logit).reshape(n_roots, num_agents, 1)
             done = done_prob > 0.5 if self.world_model.predict_done else torch.zeros_like(done_prob, dtype=torch.bool)

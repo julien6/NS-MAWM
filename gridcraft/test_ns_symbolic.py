@@ -9,6 +9,7 @@ from ns_symbolic import (
   BLOCK_TREE,
   ENTITY_AGENT,
   ENTITY_ITEM,
+  ENTITY_MOB,
   ENTITY_NONE,
   ITEM_PLANK,
   ITEM_STONE,
@@ -20,6 +21,7 @@ from ns_symbolic import (
   symbolic_transition,
   tabular_to_vector,
 )
+from pstr_profiles import active_rules_for_baseline
 
 
 def make_obs():
@@ -37,6 +39,17 @@ def test_move_shift_masks_static_planes():
   symbolic, mask = symbolic_transition(obs, ACTION_MOVE_E, coverage=1.0)
   assert symbolic["grid"][0, 3, 3] == 2
   assert mask["grid"][0, 3, 3]
+  assert symbolic["grid"][2, 3, 3] == ENTITY_AGENT
+  assert mask["grid"][2, 3, 3]
+
+
+def test_move_shift_does_not_mask_uncertain_entities():
+  obs = make_obs()
+  obs["grid"][2, 3, 4] = ENTITY_MOB
+  symbolic, mask = symbolic_transition(obs, ACTION_MOVE_E, coverage=1.0)
+
+  assert not mask["grid"][2, 3, 2]
+  assert not mask["grid"][2, 3, 4]
   assert symbolic["grid"][2, 3, 3] == ENTITY_AGENT
   assert mask["grid"][2, 3, 3]
 
@@ -91,8 +104,8 @@ def test_pickup_predicts_adjacent_item_collection():
   agent_symbolic = symbolic["agent_0"]
   agent_mask = mask["agent_0"]
   assert agent_symbolic["grid"][2, 3, 3] == ENTITY_AGENT
-  assert agent_symbolic["grid"][2, 3, 4] == ENTITY_NONE
-  assert agent_mask["grid"][2, 3, 4]
+  assert agent_symbolic["grid"][2, 3, 4] == ENTITY_ITEM
+  assert not agent_mask["grid"][2, 3, 4]
   assert agent_symbolic["self"][2 + ITEM_STONE] == 2
   assert agent_mask["self"][2 + ITEM_STONE]
   assert "PSTR_INDIV_PICKUP_ITEM" in report["rules"]
@@ -171,6 +184,7 @@ def test_projection_pickup_rule_has_zero_post_rvr():
   post = compare_with_symbolic(projected, current, action, coverage=1.0, memory=memory, enabled_pstr_rules=enabled)
 
   assert pre["rvr/PSTR_INDIV_PICKUP_ITEM"] > 0.0
+  assert projected["agent_0"]["grid"][2, 3, 4] == ENTITY_ITEM
   assert post["rvr"] == 0.0
   assert post["rvr/PSTR_INDIV_PICKUP_ITEM"] == 0.0
 
@@ -212,6 +226,36 @@ def test_enabled_pstr_rules_filter_masks_and_report():
   assert np.any(mask["agent_0"]["grid"][0])
   assert not np.any(mask["agent_0"]["grid"][1])
   assert not np.any(mask["agent_0"]["grid"][2])
+
+
+def test_k03_profile_excludes_interaction_pstr_masks():
+  obs = make_obs()
+  obs["grid"][1, 3, 2] = BLOCK_TREE
+  obs["self"][2 + ITEM_WOOD] = 2
+  _, mask, _, report = symbolic_joint_transition(
+    {"agent_0": obs},
+    {"agent_0": ACTION_HARVEST},
+    coverage=0.3,
+    enabled_pstr_rules=active_rules_for_baseline("B25_residual_k0.3"),
+  )
+
+  assert "PSTR_INDIV_HARVEST_TREE_WOOD" not in report["rules"]
+  assert not mask["agent_0"]["self"][2 + ITEM_WOOD]
+
+
+def test_k06_profile_includes_interaction_pstr_masks():
+  obs = make_obs()
+  obs["grid"][1, 3, 2] = BLOCK_TREE
+  obs["self"][2 + ITEM_WOOD] = 2
+  _, mask, _, report = symbolic_joint_transition(
+    {"agent_0": obs},
+    {"agent_0": ACTION_HARVEST},
+    coverage=0.6,
+    enabled_pstr_rules=active_rules_for_baseline("B26_residual_k0.6"),
+  )
+
+  assert "PSTR_INDIV_HARVEST_TREE_WOOD" in report["rules"]
+  assert mask["agent_0"]["self"][2 + ITEM_WOOD]
 
 
 def test_symbolic_and_residual_training_masks_are_complementary():

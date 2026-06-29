@@ -28,6 +28,7 @@ from ns_symbolic import (
     tabular_to_vector,
     vector_to_tabular,
 )
+from pstr_profiles import active_rules_for_baseline, profile_name_from_baseline, rules_to_csv
 from wandb_schema import GENERAL, MARL_EVALUATION, MARL_TRAINING, PSTR_RULES, WORLD_MODEL_EVALUATION, WORLD_MODEL_TRAINING
 from torch_world_model import TorchGridcraftRNN, TorchGridcraftVAE
 from vgridcraft import VGridcraftConfig, VectorizedGridcraftEnv
@@ -113,6 +114,8 @@ def main() -> None:
     args = parser.parse_args()
 
     baseline = BASELINES[args.baseline_id]
+    pstr_profile = profile_name_from_baseline(args.baseline_id)
+    active_pstr_rules = enabled_pstr_rules_from_args(args)
     config = VGridcraftConfig(num_agents=args.num_agents, max_steps=args.max_steps, seed=args.seed)
     run_name = f"{args.baseline_id}_a{args.num_agents}_seed{args.seed}"
     run_dir = Path(args.run_dir) / run_name
@@ -127,6 +130,9 @@ def main() -> None:
             **vars(args),
             "baseline": baseline,
             "gridcraft_config": config.__dict__,
+            "pstr_profile": pstr_profile,
+            "enabled_pstr_rules": rules_to_csv(active_pstr_rules),
+            "enabled_pstr_count": len(active_pstr_rules),
             "torch_cuda_available": torch.cuda.is_available(),
         },
         default_group=args.baseline_id,
@@ -135,7 +141,16 @@ def main() -> None:
         info_sections=[GENERAL, WORLD_MODEL_TRAINING, WORLD_MODEL_EVALUATION, MARL_TRAINING, MARL_EVALUATION],
         out_dir=str(run_dir),
     )
-    logger.save_json(str(run_dir / "baseline_config.json"), {"baseline": baseline, "args": vars(args), "gridcraft_config": config.__dict__})
+    logger.save_json(
+        str(run_dir / "baseline_config.json"),
+        {
+            "baseline": baseline,
+            "args": vars(args),
+            "gridcraft_config": config.__dict__,
+            "pstr_profile": pstr_profile,
+            "enabled_pstr_rules": list(active_pstr_rules),
+        },
+    )
 
     if args.dry_run:
         print(json.dumps({"run_dir": str(run_dir), "baseline": baseline, "device": args.device}, indent=2))
@@ -182,7 +197,10 @@ def main() -> None:
                 "dataset_truncation_or_done_rate": float(data.get("metadata", {}).get("truncation_or_done_rate", 0.0)),
                 "symbolic_target_cached": int("symbolic_target" in data),
                 "symbolic_memory_mean_map_coverage": float(data.get("symbolic_metadata", {}).get("mean_map_coverage_ratio", 0.0)),
-                "enabled_pstr_rules": ",".join(enabled_pstr_rules_from_args(args) or ["all"]),
+                "pstr_profile": pstr_profile,
+                "enabled_pstr_rules": rules_to_csv(active_pstr_rules),
+                "enabled_pstr_count": len(active_pstr_rules),
+                "empirical_determinable_ratio": float(data.get("symbolic_metadata", {}).get("empirical_determinable_ratio", 0.0)),
                 "dataset_path": str(dataset_file),
             },
             step=1,
@@ -493,6 +511,7 @@ def attach_symbolic_dataset_targets(data, coverage: float, episode_limit: int | 
     masks = torch.zeros_like(targets, dtype=torch.float32)
     map_coverages = []
     alignment_counts = []
+    mask_counts = []
     obs_np = obs.detach().cpu().numpy()
     actions_np = actions.detach().cpu().long().numpy()
     print(
@@ -523,6 +542,7 @@ def attach_symbolic_dataset_targets(data, coverage: float, episode_limit: int | 
                 agent_id = f"agent_{agent_idx}"
                 targets[episode_idx, t, agent_idx] = torch.as_tensor(tabular_to_vector(symbolic[agent_id]))
                 masks[episode_idx, t, agent_idx] = torch.as_tensor(tabular_mask_to_vector_mask(mask[agent_id]).astype(np.float32))
+                mask_counts.append(float(masks[episode_idx, t, agent_idx].sum().item()))
         if episode_idx == 0 or (episode_idx + 1) % max(1, target_episodes // 10) == 0:
             print(f"[ns-mawm] symbolic targets {episode_idx + 1}/{target_episodes}", flush=True)
     data["symbolic_target"] = targets
@@ -531,6 +551,10 @@ def attach_symbolic_dataset_targets(data, coverage: float, episode_limit: int | 
         "coverage": float(coverage),
         "mean_map_coverage_ratio": float(np.mean(map_coverages)) if map_coverages else 0.0,
         "mean_relative_alignment_count": float(np.mean(alignment_counts)) if alignment_counts else 0.0,
+        "empirical_determinable_ratio": float(np.mean(mask_counts) / max(1, obs_size)) if mask_counts else 0.0,
+        "empirical_determinable_count": float(np.mean(mask_counts)) if mask_counts else 0.0,
+        "enabled_pstr_count": len(enabled_pstr_rules or ()),
+        "enabled_pstr_rules": list(enabled_pstr_rules or ()),
     }
 
 
@@ -708,6 +732,11 @@ def evaluate_world_model(vae, rnn, data, device, horizons, baseline=None, args=N
         enabled_pstr_rules=enabled_pstr_rules_from_args(args),
     )
     result.update(symbolic_metrics)
+    if args is not None:
+        result.update(pstr_profile_metrics(args))
+        result["empirical_determinable_ratio"] = float(
+            result.get("pre_determinable_count", result.get("determinable_count", 0.0)) / 550.0
+        )
     return result, pstr_rows
 
 
@@ -801,6 +830,36 @@ def flatten_valid_agents(valid: torch.Tensor | None, num_agents: int) -> torch.T
     raise ValueError(f"unsupported valid tensor shape: {tuple(valid.shape)}")
 
 
+def mask_feature_metrics(mask: torch.Tensor, prefix: str) -> dict[str, float]:
+    flat = mask.detach().float().reshape(-1, mask.shape[-1])
+    total_features = float(flat.numel())
+    determinable = float(flat.sum().detach().cpu())
+    non_determinable = total_features - determinable
+    terrain_end = 49 * 3
+    block_end = terrain_end + 49 * 4
+    entity_end = block_end + 49 * 4
+    self_start = entity_end
+    status_end = self_start + 2
+    sections = {
+        "terrain": flat[:, :terrain_end],
+        "block": flat[:, terrain_end:block_end],
+        "entity": flat[:, block_end:entity_end],
+        "self_status": flat[:, self_start:status_end],
+        "self_inventory": flat[:, status_end:],
+    }
+    metrics = {
+        f"{prefix}_determinable_feature_count": determinable,
+        f"{prefix}_non_determinable_feature_count": non_determinable,
+        f"{prefix}_determinable_ratio": determinable / max(total_features, 1.0),
+    }
+    for name, section in sections.items():
+        section_total = float(section.numel())
+        section_count = float(section.sum().detach().cpu())
+        metrics[f"{prefix}_determinable_{name}_count"] = section_count
+        metrics[f"{prefix}_determinable_{name}_ratio"] = section_count / max(section_total, 1.0)
+    return metrics
+
+
 def symbolic_training_loss(vae, rnn, z_seq, action, obs_window, baseline, args, device):
     variant = str(baseline.get("variant", "neural"))
     if variant not in ("regularization", "residual"):
@@ -824,6 +883,10 @@ def symbolic_training_loss(vae, rnn, z_seq, action, obs_window, baseline, args, 
     (logmix, mean, _logstd, _reward_pred, _done_logit), _ = rnn.forward(pred_input, actions)
     expected_z = (logmix.exp() * mean).sum(dim=-1)
     decoded = vae.decode(expected_z.reshape(-1, expected_z.shape[-1])).reshape(limit, actions.shape[1], -1)
+    if variant == "residual":
+        (_unused_output, residual_decoded, _unused_state) = rnn.forward_with_observation(pred_input, actions)
+    else:
+        residual_decoded = decoded
     obs_np = obs_window[:limit, :-1].detach().cpu().numpy()
     action_np = actions.detach().cpu().numpy()
     target_np, mask_np = symbolic_batch_targets(
@@ -839,7 +902,7 @@ def symbolic_training_loss(vae, rnn, z_seq, action, obs_window, baseline, args, 
     residual_mask = 1.0 - mask
     residual_target = obs_window[:limit, 1:].detach()
     residual_count = residual_mask.sum().clamp_min(1.0)
-    residual_loss = (((decoded - residual_target) ** 2) * residual_mask).sum() / residual_count
+    residual_loss = (((residual_decoded - residual_target) ** 2) * residual_mask).sum() / residual_count
     if variant == "regularization":
         total = float(args.lambda_sym) * symbolic_loss
     else:
@@ -848,6 +911,7 @@ def symbolic_training_loss(vae, rnn, z_seq, action, obs_window, baseline, args, 
         "training_symbolic_loss_individual": float(symbolic_loss.detach().cpu()),
         "training_residual_loss_individual": float(residual_loss.detach().cpu()),
         "training_symbolic_mask_count_individual": float(mask.sum().detach().cpu()),
+        **mask_feature_metrics(mask, prefix="training_individual"),
     }
 
 
@@ -891,7 +955,12 @@ def joint_symbolic_training_loss(vae, rnn, z, raw_actions, raw_obs, symbolic_tar
     for t in range(seq_len):
         z_t = z_window[:, t].reshape(batch_episodes * agents, -1)
         actions_t = action_window[:, t].reshape(batch_episodes * agents)
-        pred_z, _, _, state = rnn.step(z_t, actions_t, state, deterministic=True)
+        if variant == "residual":
+            pred_z, _, _, state, residual_decoded = rnn.step_with_observation(z_t, actions_t, state, deterministic=True)
+            residual_decoded = residual_decoded.reshape(batch_episodes, agents, obs_size)
+        else:
+            pred_z, _, _, state = rnn.step(z_t, actions_t, state, deterministic=True)
+            residual_decoded = None
         decoded = vae.decode(pred_z).reshape(batch_episodes, agents, obs_size)
         if target_window is not None and mask_window is not None:
             target = target_window[:, t]
@@ -926,7 +995,8 @@ def joint_symbolic_training_loss(vae, rnn, z, raw_actions, raw_obs, symbolic_tar
         residual_mask = 1.0 - mask
         residual_target = next_obs_window[:, t]
         residual_count = residual_mask.sum().clamp_min(1.0)
-        residual_loss = (((decoded - residual_target) ** 2) * residual_mask).sum() / residual_count
+        residual_source = residual_decoded if residual_decoded is not None else decoded
+        residual_loss = (((residual_source - residual_target) ** 2) * residual_mask).sum() / residual_count
         symbolic_losses.append(symbolic_loss)
         residual_losses.append(residual_loss)
         mask_counts.append(mask.sum())
@@ -941,6 +1011,7 @@ def joint_symbolic_training_loss(vae, rnn, z, raw_actions, raw_obs, symbolic_tar
         "training_symbolic_loss_joint": float(symbolic_loss.detach().cpu()),
         "training_residual_loss_joint": float(residual_loss.detach().cpu()),
         "training_symbolic_mask_count_joint": float(torch.stack(mask_counts).sum().detach().cpu()),
+        **mask_feature_metrics(mask, prefix="training_joint"),
     }
 
 
@@ -960,7 +1031,12 @@ def evaluate_symbolic_rvr(vae, rnn, z, raw_actions, raw_obs, baseline, device, m
     variant = str(baseline.get("variant", "neural"))
     coverage = float(baseline.get("coverage", 0.0))
     for t in range(eval_steps):
-        pred_z, _, _, state = rnn.step(z[:, t], flat_actions[:, t], state, deterministic=True)
+        if variant == "residual":
+            pred_z, _, _, state, residual_obs = rnn.step_with_observation(z[:, t], flat_actions[:, t], state, deterministic=True)
+            residual_tabular = flat_vectors_to_joint_tabular(residual_obs, episodes, agents)
+        else:
+            pred_z, _, _, state = rnn.step(z[:, t], flat_actions[:, t], state, deterministic=True)
+            residual_tabular = None
         pred_tabular = decode_flat_tabular(vae, pred_z, episodes, agents)
         current_tabular = vectors_to_joint_tabular(raw_obs[:, t])
         joint_actions = actions_to_joint(raw_actions[:, t])
@@ -975,8 +1051,9 @@ def evaluate_symbolic_rvr(vae, rnn, z, raw_actions, raw_obs, baseline, device, m
             memories[episode_idx] = updated_memory
             row_metrics.append(compare_joint_with_symbolic(pred_tabular[episode_idx], symbolic, mask, report))
             if variant in ("projection", "residual"):
+                projection_source = residual_tabular[episode_idx] if residual_tabular is not None else pred_tabular[episode_idx]
                 projected, symbolic_info = apply_symbolic_projection(
-                    pred_tabular[episode_idx],
+                    projection_source,
                     current_tabular[episode_idx],
                     joint_actions[episode_idx],
                     variant,
@@ -1084,6 +1161,19 @@ def vectors_to_joint_tabular(obs):
     return result
 
 
+def flat_vectors_to_joint_tabular(obs, episodes, agents):
+    obs_np = obs.detach().cpu().numpy()
+    result = []
+    cursor = 0
+    for _ in range(episodes):
+        row = {}
+        for agent_idx in range(agents):
+            row[f"agent_{agent_idx}"] = vector_to_tabular(obs_np[cursor])
+            cursor += 1
+        result.append(row)
+    return result
+
+
 def actions_to_joint(actions):
     actions_np = actions.detach().cpu().long().numpy()
     episodes, agents = actions_np.shape[:2]
@@ -1108,6 +1198,15 @@ def pstr_rvr_rows(pre_values, post_values=None, determinable_counts=None):
             }
         )
     return rows
+
+
+def pstr_profile_metrics(args) -> dict[str, object]:
+    rules = enabled_pstr_rules_from_args(args)
+    return {
+        "pstr_profile": profile_name_from_baseline(getattr(args, "baseline_id", "")),
+        "enabled_pstr_count": len(rules),
+        "enabled_pstr_ids": rules_to_csv(rules),
+    }
 
 
 def pstr_rvr_cell(value, precision=6):
@@ -1193,13 +1292,7 @@ def enabled_pstr_rules_from_args(args):
     if args is None:
         return None
     rules = getattr(args, "enabled_pstr_rules", None)
-    if not rules:
-        return None
-    normalized = []
-    for rule in rules:
-        normalized.extend(part.strip() for part in str(rule).split(","))
-    normalized = [rule for rule in normalized if rule]
-    return normalized or None
+    return list(active_rules_for_baseline(getattr(args, "baseline_id", ""), rules))
 
 
 @torch.no_grad()
@@ -1268,10 +1361,20 @@ def record_world_model_video(args, config, vae, rnn, device):
     for step_index in range(max_steps):
         previous_imagined_tabular = imagined_tabular
         action = torch.randint(0, config.action_size, (1, config.num_agents), generator=generator, device=device)
-        pred_z, _, _, state = rnn.step(z, action[0], state, deterministic=True)
+        if ns_variant == "residual":
+            pred_z, _, _, state, residual_obs = rnn.step_with_observation(z, action[0], state, deterministic=True)
+        else:
+            pred_z, _, _, state = rnn.step(z, action[0], state, deterministic=True)
+            residual_obs = None
         obs, reward, done, truncated, _ = env.step(action)
-        imagined = vae.decode_tabular(pred_z)
-        imagined_tabular = decoded_to_joint_tabular(imagined, config.num_agents)
+        if residual_obs is not None:
+            imagined_tabular = {
+                f"agent_{idx}": vector_to_tabular(residual_obs.detach().cpu().numpy()[idx])
+                for idx in range(config.num_agents)
+            }
+        else:
+            imagined = vae.decode_tabular(pred_z)
+            imagined_tabular = decoded_to_joint_tabular(imagined, config.num_agents)
         joint_action = {
             f"agent_{agent_idx}": int(action[0, agent_idx].detach().cpu())
             for agent_idx in range(config.num_agents)

@@ -26,6 +26,7 @@ world_model:
   external_ns_variant: "neural"
   external_ns_coverage: 0.0
   external_num_agents: 1
+  external_enabled_pstr_rules: ""
 
 imagined_rollouts:
   enabled: true

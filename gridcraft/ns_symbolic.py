@@ -315,7 +315,9 @@ def normalize_enabled_pstr_rules(enabled_pstr_rules):
   for rule in enabled_pstr_rules:
     expanded.extend(str(rule).split(","))
   rules = {rule.strip() for rule in expanded if rule.strip()}
-  return rules or None
+  if any(rule.lower() in ("all", "*") for rule in rules):
+    return None
+  return rules
 
 
 def _filter_rules_and_masks(joint_mask, report, enabled_pstr_rules):
@@ -420,14 +422,13 @@ def _apply_pickup(symbolic, mask, grid, action, memory, agent_id, report):
       continue
     item_pos = (pos[0] + dx, pos[1] + dy) if pos is not None else None
     item = memory.get("items", {}).get(item_pos) if item_pos is not None else None
-    symbolic["grid"][2, y, x] = ENTITY_NONE
-    mask["grid"][2, y, x] = True
-    features = [("grid", 2, y, x)]
+    features = []
     if item is not None:
       item_id, count = item
       _inc_self(symbolic, mask, int(item_id), int(count))
       features.append(("self", 2 + int(item_id)))
-    _record_rule(report, "PSTR_INDIV_PICKUP_ITEM", agent_id, features, "individual")
+    if features:
+      _record_rule(report, "PSTR_INDIV_PICKUP_ITEM", agent_id, features, "individual")
     return
 
 

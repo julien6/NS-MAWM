@@ -107,12 +107,20 @@ class TorchGridcraftRNN(nn.Module):
         self.num_mixture = num_mixture
         self.rnn = nn.LSTM(input_size=z_size + action_size, hidden_size=rnn_size, batch_first=True)
         self.head = nn.Linear(rnn_size, z_size * num_mixture * 3 + 2)
+        self.obs_head = nn.Linear(rnn_size, OBS_SIZE)
 
     def forward(self, z: torch.Tensor, actions: torch.Tensor, state=None):
         action_oh = F.one_hot(actions.clamp(0, self.action_size - 1), self.action_size).float()
         out, next_state = self.rnn(torch.cat([z, action_oh], dim=-1), state)
         raw = self.head(out)
         return self.split_output(raw), next_state
+
+    def forward_with_observation(self, z: torch.Tensor, actions: torch.Tensor, state=None):
+        action_oh = F.one_hot(actions.clamp(0, self.action_size - 1), self.action_size).float()
+        out, next_state = self.rnn(torch.cat([z, action_oh], dim=-1), state)
+        raw = self.head(out)
+        obs = self.obs_head(out)
+        return self.split_output(raw), obs, next_state
 
     def step(self, z: torch.Tensor, action: torch.Tensor, state=None, deterministic: bool = True):
         z_in = z[:, None, :]
@@ -129,6 +137,23 @@ class TorchGridcraftRNN(nn.Module):
         else:
             next_z = sample_mdn(logmix, mean, logstd)
         return next_z, reward, done_logit, next_state
+
+    def step_with_observation(self, z: torch.Tensor, action: torch.Tensor, state=None, deterministic: bool = True):
+        z_in = z[:, None, :]
+        action_in = action[:, None]
+        (logmix, mean, logstd, reward, done_logit), obs, next_state = self.forward_with_observation(z_in, action_in, state)
+        logmix = logmix[:, 0]
+        mean = mean[:, 0]
+        logstd = logstd[:, 0]
+        reward = reward[:, 0]
+        done_logit = done_logit[:, 0]
+        obs = obs[:, 0]
+        if deterministic:
+            mix = logmix.exp()
+            next_z = (mix * mean).sum(dim=-1)
+        else:
+            next_z = sample_mdn(logmix, mean, logstd)
+        return next_z, reward, done_logit, next_state, obs
 
     def split_output(self, raw: torch.Tensor):
         mdn = raw[..., : self.z_size * self.num_mixture * 3]

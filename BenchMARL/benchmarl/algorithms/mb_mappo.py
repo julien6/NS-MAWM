@@ -40,6 +40,7 @@ class WorldModelConfig:
     external_ns_variant: str = "neural"
     external_ns_coverage: float = 0.0
     external_num_agents: int = 1
+    external_enabled_pstr_rules: str = ""
 
 
 @dataclass
@@ -378,7 +379,7 @@ class MBMappo(Mappo):
         vae = TorchGridcraftVAE().to(self.device)
         rnn = TorchGridcraftRNN().to(self.device)
         vae.load_state_dict(torch.load(vae_path, map_location=self.device))
-        rnn.load_state_dict(torch.load(rnn_path, map_location=self.device))
+        rnn.load_state_dict(torch.load(rnn_path, map_location=self.device), strict=False)
         vae.eval()
         rnn.eval()
         for param in vae.parameters():
@@ -487,6 +488,7 @@ class MBMappo(Mappo):
                     ns_coverage=float(self.world_model_config.external_ns_coverage),
                     num_agents=num_agents,
                     device=torch.device(self.device),
+                    enabled_pstr_rules=self.world_model_config.external_enabled_pstr_rules,
                 )
             done_prob = torch.sigmoid(done_logit).reshape(-1, 1)
             reward = reward.reshape(-1, 1)

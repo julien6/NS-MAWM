@@ -13,8 +13,10 @@ ROOT = Path(__file__).resolve().parents[1]
 BENCHMARL_DIR = Path(os.environ.get("BENCHMARL_DIR", ROOT / "BenchMARL"))
 sys.path.insert(0, str(BENCHMARL_DIR))
 sys.path.insert(0, str(ROOT / "vGridcraft"))
+sys.path.insert(0, str(ROOT / "gridcraft"))
 
 from vgridcraft import VGridcraftConfig, VectorizedGridcraftEnv
+from pstr_profiles import active_rules_for_baseline, profile_name_from_baseline, rules_to_csv
 from benchmarl.experiment.callback import Callback
 
 ACTION_NAMES = [
@@ -125,11 +127,13 @@ def main() -> None:
         algorithm_config.imagined_rollouts.use_for_actor = False
         if args.wm_run_dir:
             ns_variant, ns_coverage = infer_ns_settings(args.baseline_id)
+            enabled_pstr_rules = active_rules_for_baseline(args.baseline_id)
             algorithm_config.world_model.external_model_type = "gridcraft_vae_mdn_rnn"
             algorithm_config.world_model.external_checkpoint_dir = str(Path(args.wm_run_dir) / "checkpoints")
             algorithm_config.world_model.external_ns_variant = ns_variant
             algorithm_config.world_model.external_ns_coverage = ns_coverage
             algorithm_config.world_model.external_num_agents = args.num_agents
+            algorithm_config.world_model.external_enabled_pstr_rules = rules_to_csv(enabled_pstr_rules)
             algorithm_config.world_model.train_epochs = 0
             algorithm_config.world_model.predict_done = True
     elif args.algorithm == "mambpo":
@@ -149,12 +153,14 @@ def main() -> None:
         )
         if args.wm_run_dir:
             ns_variant, ns_coverage = infer_ns_settings(args.baseline_id)
+            enabled_pstr_rules = active_rules_for_baseline(args.baseline_id)
             checkpoint_dir = Path(args.wm_run_dir) / "checkpoints"
             algorithm_config.world_model.external_model_type = "gridcraft_vae_mdn_rnn"
             algorithm_config.world_model.external_checkpoint_dir = str(checkpoint_dir)
             algorithm_config.world_model.external_ns_variant = ns_variant
             algorithm_config.world_model.external_ns_coverage = ns_coverage
             algorithm_config.world_model.external_num_agents = args.num_agents
+            algorithm_config.world_model.external_enabled_pstr_rules = rules_to_csv(enabled_pstr_rules)
             algorithm_config.world_model.train_steps = 0
             algorithm_config.world_model.predict_done = True
             if not (checkpoint_dir / "vae.pt").exists() or not (checkpoint_dir / "rnn.pt").exists():
@@ -167,6 +173,7 @@ def main() -> None:
     else:
         algorithm_config = MappoConfig.get_from_yaml()
     ns_variant, ns_coverage = infer_ns_settings(args.baseline_id)
+    active_pstr_rules = active_rules_for_baseline(args.baseline_id)
     checkpoint_dir = str(Path(args.wm_run_dir) / "checkpoints") if args.wm_run_dir else "none"
     print(
         "[routing] "
@@ -174,6 +181,8 @@ def main() -> None:
         f"algorithm={args.algorithm} "
         f"ns_variant={ns_variant} "
         f"ns_coverage={ns_coverage} "
+        f"pstr_profile={profile_name_from_baseline(args.baseline_id)} "
+        f"enabled_pstr_count={len(active_pstr_rules)} "
         f"wm_checkpoint_dir={checkpoint_dir} "
         f"external_wm={int(args.algorithm in {'mb_mappo', 'mambpo'} and bool(args.wm_run_dir))} "
         f"num_agents={args.num_agents} "

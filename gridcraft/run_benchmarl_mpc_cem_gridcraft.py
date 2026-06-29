@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "gridcraft"))
 
 from experiment_logging import add_wandb_args, logger_from_args, should_log_wandb_videos
 from ns_symbolic import NS_VARIANTS, apply_symbolic_projection, tabular_to_vector
+from pstr_profiles import active_rules_for_baseline
 from torch_world_model import TorchGridcraftRNN, TorchGridcraftVAE
 from torch_world_model.models import ACTION_SIZE
 from vgridcraft import VGridcraftConfig, VectorizedGridcraftEnv
@@ -44,6 +45,7 @@ def main() -> None:
     torch.manual_seed(args.seed)
     config = VGridcraftConfig(num_agents=args.num_agents, max_steps=args.max_steps, seed=args.seed)
     ns_variant, ns_coverage = infer_ns_settings(args.baseline_id)
+    enabled_pstr_rules = active_rules_for_baseline(args.baseline_id)
     run_dir = Path(args.wm_run_dir)
     checkpoint_dir = run_dir / "checkpoints"
 
@@ -54,7 +56,7 @@ def main() -> None:
     if not vae_path.exists() or not rnn_path.exists():
         raise FileNotFoundError(f"Missing world model checkpoints: {vae_path} / {rnn_path}")
     vae.load_state_dict(torch.load(vae_path, map_location=device))
-    rnn.load_state_dict(torch.load(rnn_path, map_location=device))
+    rnn.load_state_dict(torch.load(rnn_path, map_location=device), strict=False)
     vae.eval()
     rnn.eval()
 
@@ -209,7 +211,11 @@ def rollout_action_sequences(vae, rnn, z, sequences, args, ns_variant="neural", 
     ns_memory = [None for _ in range(env_batch * samples)]
     for t in range(horizon):
         action = flat_sequences[:, t]
-        predicted_z, reward, done_logit, state = rnn.step(current_z, action, state, deterministic=True)
+        if ns_variant == "residual":
+            predicted_z, reward, done_logit, state, residual_obs = rnn.step_with_observation(current_z, action, state, deterministic=True)
+        else:
+            predicted_z, reward, done_logit, state = rnn.step(current_z, action, state, deterministic=True)
+            residual_obs = None
         if ns_variant in ("projection", "residual"):
             current_z, ns_memory, _ = apply_ns_mawm_to_latent_step(
                 vae=vae,
@@ -221,6 +227,8 @@ def rollout_action_sequences(vae, rnn, z, sequences, args, ns_variant="neural", 
                 ns_coverage=ns_coverage,
                 num_agents=num_agents,
                 device=z.device,
+                predicted_obs_vector=residual_obs,
+                enabled_pstr_rules=enabled_pstr_rules,
             )
         else:
             current_z = predicted_z
