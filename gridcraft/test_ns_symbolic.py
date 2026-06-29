@@ -1,6 +1,7 @@
 import numpy as np
 
 from ns_symbolic import (
+  ACTION_EAT,
   ACTION_HARVEST,
   ACTION_MOVE_E,
   ACTION_PICKUP,
@@ -40,6 +41,20 @@ def test_move_shift_masks_static_planes():
   assert mask["grid"][2, 3, 3]
 
 
+def test_non_moving_actions_preserve_static_planes():
+  obs = make_obs()
+  obs["grid"][0, 1, 2] = 2
+  obs["grid"][1, 4, 5] = BLOCK_TREE
+  symbolic, mask = symbolic_transition(obs, ACTION_EAT, coverage=1.0)
+
+  assert symbolic["grid"][0, 1, 2] == 2
+  assert symbolic["grid"][1, 4, 5] == BLOCK_TREE
+  assert np.all(symbolic["grid"][0] == obs["grid"][0])
+  assert np.all(symbolic["grid"][1] == obs["grid"][1])
+  assert np.all(mask["grid"][0])
+  assert np.all(mask["grid"][1])
+
+
 def test_harvest_tree_predicts_wood_not_apple():
   obs = make_obs()
   obs["grid"][1, 3, 2] = BLOCK_TREE
@@ -47,6 +62,8 @@ def test_harvest_tree_predicts_wood_not_apple():
   symbolic, mask = symbolic_transition(obs, ACTION_HARVEST, coverage=1.0)
   assert symbolic["grid"][1, 3, 2] == 0
   assert mask["grid"][1, 3, 2]
+  assert np.all(mask["grid"][0])
+  assert np.all(mask["grid"][1])
   assert symbolic["self"][2 + ITEM_WOOD] == 3
   assert mask["self"][2 + ITEM_WOOD]
   assert not mask["self"][2 + 8]
@@ -113,10 +130,12 @@ def test_joint_alignment_predicts_other_agent_entity():
   assert "PSTR_JOINT_AGENT_ENTITY_PREDICTION" in report["rules"]
 
 
-def test_coverage_zero_masks_everything():
+def test_pstr_coverage_is_forced_to_full_masks():
   obs = make_obs()
   symbolic, mask = symbolic_transition(obs, 0, coverage=0.0)
-  assert not np.any(mask["grid"])
+  assert np.any(mask["grid"])
+  assert np.all(mask["grid"][0])
+  assert np.all(mask["grid"][1])
   assert not np.any(mask["self"])
 
 
@@ -220,5 +239,5 @@ if __name__ == "__main__":
   test_harvest_tree_predicts_wood_not_apple()
   test_craft_plank_updates_inventory()
   test_joint_alignment_predicts_other_agent_entity()
-  test_coverage_zero_masks_everything()
+  test_pstr_coverage_is_forced_to_full_masks()
   print("ns_symbolic tests passed")

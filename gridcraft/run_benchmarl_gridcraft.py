@@ -1248,6 +1248,7 @@ def record_world_model_video(args, config, vae, rnn, device):
     baseline = BASELINES.get(getattr(args, "baseline_id", ""), {})
     ns_variant = str(baseline.get("variant", "neural"))
     ns_coverage = float(baseline.get("coverage", 0.0))
+    enabled_pstr_rules = enabled_pstr_rules_from_args(args)
     ns_memory = None
     cumulative_reward = 0.0
     max_steps = max(1, int(args.video_max_steps))
@@ -1283,6 +1284,7 @@ def record_world_model_video(args, config, vae, rnn, device):
                 ns_variant,
                 coverage=ns_coverage,
                 memory=ns_memory,
+                enabled_pstr_rules=enabled_pstr_rules,
             )
             if symbolic_info is not None and len(symbolic_info) >= 3:
                 ns_memory = symbolic_info[2]

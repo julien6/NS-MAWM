@@ -16,6 +16,7 @@ from exp_config import (
 
 
 NS_VARIANTS = ("neural", "regularization", "projection", "residual")
+PSTR_EFFECTIVE_COVERAGE = 1.0
 
 TERRAIN_WATER = 1
 BLOCK_EMPTY = 0
@@ -63,6 +64,15 @@ CRAFT_RECIPES = {
   14: (((ITEM_STICK, 1), (ITEM_STONE, 1)), (ITEM_STONE_PICKAXE, 1), "PSTR_INDIV_CRAFT_TOOLS"),
 }
 
+NON_MOVING_ACTIONS = {
+  ACTION_STAY,
+  ACTION_HARVEST,
+  ACTION_PICKUP,
+  ACTION_ATTACK,
+  ACTION_EAT,
+  *CRAFT_RECIPES.keys(),
+}
+
 
 def symbolic_transition_from_vector(obs_vector, action, coverage=1.0, enabled_pstr_rules=None):
   return symbolic_transition(vector_to_tabular(obs_vector), action, coverage=coverage, enabled_pstr_rules=enabled_pstr_rules)
@@ -97,9 +107,13 @@ def symbolic_joint_transition(joint_obs, joint_action, memory=None, coverage=1.0
   the value arrays carry convenient copied values for compatibility with the
   existing projection/training code.
   """
+  requested_coverage = float(np.clip(coverage, 0.0, 1.0))
+  coverage = PSTR_EFFECTIVE_COVERAGE
   memory = init_symbolic_memory(memory)
   agents = sorted(joint_obs)
   report = _new_report()
+  report["requested_coverage"] = requested_coverage
+  report["effective_coverage"] = coverage
   _align_agents_from_observations(joint_obs, memory, report)
   _fuse_observations_into_map(joint_obs, memory, report)
 
@@ -557,11 +571,11 @@ def _apply_global_static_query(symbolic, mask, memory, agent_id, shift, report):
     for x in range(GRIDCRAFT_VIEW_SIZE):
       gx, gy = next_pos[0] + (x - center), next_pos[1] + (y - center)
       key = (gx, gy)
-      if key in memory["terrain"]:
+      if key in memory["terrain"] and not mask["grid"][0, y, x]:
         symbolic["grid"][0, y, x] = memory["terrain"][key]
         mask["grid"][0, y, x] = True
         features.append(("grid", 0, y, x))
-      if key in memory["blocks"]:
+      if key in memory["blocks"] and not mask["grid"][1, y, x]:
         symbolic["grid"][1, y, x] = memory["blocks"][key]
         mask["grid"][1, y, x] = True
         features.append(("grid", 1, y, x))
@@ -645,7 +659,7 @@ def _apply_joint_world_updates(joint_obs, joint_action, memory, report):
 
 
 def _agent_shift(grid, action, report=None):
-  if action == ACTION_STAY:
+  if int(action) in NON_MOVING_ACTIONS:
     return (0, 0)
   if action not in MOVE_DELTAS:
     return None
