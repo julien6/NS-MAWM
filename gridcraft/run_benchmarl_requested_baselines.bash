@@ -20,6 +20,9 @@ SEEDS="${SEEDS:-1 2 3}"
 WANDB_FLAG="${WANDB_FLAG---wandb}"
 WANDB_PROJECT="${WANDB_PROJECT:-ns-mawm-gridcraft}"
 DRY_RUN="${DRY_RUN:-0}"
+CONTINUE_ON_ERROR="${CONTINUE_ON_ERROR:-0}"
+CAMPAIGN_LOG_DIR="${CAMPAIGN_LOG_DIR:-campaign_logs}"
+RESUME_COMPLETED="${RESUME_COMPLETED:-1}"
 
 # World model defaults. These are intended for serious experimental runs, not
 # smoke tests. They are deliberately expensive and should be launched on Spark
@@ -34,6 +37,9 @@ WM_NUM_WORKERS="${WM_NUM_WORKERS:-8}"
 WM_EVAL_EVERY="${WM_EVAL_EVERY:-5000}"
 WM_VIDEO_EVERY="${WM_VIDEO_EVERY:-10000}"
 WM_HORIZONS="${WM_HORIZONS:-1 5 10 25 50 100}"
+RESIDUAL_WM_BATCH_SIZE="${RESIDUAL_WM_BATCH_SIZE:-$WM_BATCH_SIZE}"
+SYMBOLIC_TRAIN_SAMPLES="${SYMBOLIC_TRAIN_SAMPLES:-512}"
+RESIDUAL_SYMBOLIC_TRAIN_SAMPLES="${RESIDUAL_SYMBOLIC_TRAIN_SAMPLES:-$SYMBOLIC_TRAIN_SAMPLES}"
 ENABLED_PSTR_RULES="${ENABLED_PSTR_RULES:-}"
 JOINT_SYMBOLIC_TRAIN_EPISODES="${JOINT_SYMBOLIC_TRAIN_EPISODES:-8}"
 JOINT_SYMBOLIC_TRAIN_STEPS="${JOINT_SYMBOLIC_TRAIN_STEPS:-8}"
@@ -99,11 +105,30 @@ if [[ "$MODEL_BASED_DOWNSTREAM_ALGO" == "imagined_mappo" ]]; then
   echo "Note: imagined_mappo now runs native BenchMARL MAPPO inside GridcraftDreamTorchRLEnv."
 fi
 echo "Videos: wm_every=${WM_VIDEO_EVERY}, marl_every_iters=${MARL_VIDEO_EVERY_ITERS}, max_steps=${VIDEO_MAX_STEPS}, fps=${VIDEO_FPS}"
+echo "Campaign logs: ${CAMPAIGN_LOG_DIR}"
+echo "Continue on error: ${CONTINUE_ON_ERROR}"
+echo "Resume completed: ${RESUME_COMPLETED}"
 
 for seed in $SEEDS; do
   for baseline in $BASELINES; do
     echo
     echo "=== Baseline ${baseline}, seed ${seed} ==="
+    mkdir -p "$CAMPAIGN_LOG_DIR"
+    completion_marker="${CAMPAIGN_LOG_DIR}/${baseline}_a${NUM_AGENTS}_seed${seed}.complete"
+    if [[ "$RESUME_COMPLETED" == "1" && -f "$completion_marker" ]]; then
+      echo "Skipping ${baseline}, seed ${seed}: completion marker exists at ${completion_marker}"
+      continue
+    fi
+    log_file="${CAMPAIGN_LOG_DIR}/${baseline}_a${NUM_AGENTS}_seed${seed}_$(date +%Y%m%d_%H%M%S).log"
+    echo "Writing baseline transcript to ${log_file}"
+    baseline_wm_batch_size="$WM_BATCH_SIZE"
+    baseline_symbolic_train_samples="$SYMBOLIC_TRAIN_SAMPLES"
+    if [[ "$baseline" == *"_residual_"* ]]; then
+      baseline_wm_batch_size="$RESIDUAL_WM_BATCH_SIZE"
+      baseline_symbolic_train_samples="$RESIDUAL_SYMBOLIC_TRAIN_SAMPLES"
+      echo "Residual memory profile: wm_batch_size=${baseline_wm_batch_size}, symbolic_train_samples=${baseline_symbolic_train_samples}"
+    fi
+    set +e
     PYTHON_BIN="$PYTHON_BIN" \
     BASELINE_ID="$baseline" \
     SEED="$seed" \
@@ -119,11 +144,12 @@ for seed in $SEEDS; do
     WM_MAX_STEPS="$WM_MAX_STEPS" \
     VAE_STEPS="$VAE_STEPS" \
     RNN_STEPS="$RNN_STEPS" \
-    WM_BATCH_SIZE="$WM_BATCH_SIZE" \
+    WM_BATCH_SIZE="$baseline_wm_batch_size" \
     WM_NUM_WORKERS="$WM_NUM_WORKERS" \
     WM_EVAL_EVERY="$WM_EVAL_EVERY" \
     WM_VIDEO_EVERY="$WM_VIDEO_EVERY" \
     WM_HORIZONS="$WM_HORIZONS" \
+    SYMBOLIC_TRAIN_SAMPLES="$baseline_symbolic_train_samples" \
     ENABLED_PSTR_RULES="$ENABLED_PSTR_RULES" \
     JOINT_SYMBOLIC_TRAIN_EPISODES="$JOINT_SYMBOLIC_TRAIN_EPISODES" \
     JOINT_SYMBOLIC_TRAIN_STEPS="$JOINT_SYMBOLIC_TRAIN_STEPS" \
@@ -157,7 +183,19 @@ for seed in $SEEDS; do
     DYNA_IMAGINED_HORIZON="$DYNA_IMAGINED_HORIZON" \
     VIDEO_MAX_STEPS="$VIDEO_MAX_STEPS" \
     VIDEO_FPS="$VIDEO_FPS" \
-    ./run_full_benchmarl_baseline.bash
+    ./run_full_benchmarl_baseline.bash 2>&1 | tee "$log_file"
+    status=${PIPESTATUS[0]}
+    set -e
+    if [[ "$status" -ne 0 ]]; then
+      echo "=== Baseline ${baseline}, seed ${seed} failed with status ${status}; see ${log_file} ===" >&2
+      if [[ "$CONTINUE_ON_ERROR" == "1" ]]; then
+        continue
+      fi
+      exit "$status"
+    fi
+    if [[ "$DRY_RUN" != "1" ]]; then
+      date -Is > "$completion_marker"
+    fi
   done
 done
 

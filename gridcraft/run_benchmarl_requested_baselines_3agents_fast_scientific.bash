@@ -26,6 +26,11 @@ export WM_EVAL_EVERY="${WM_EVAL_EVERY:-2500}"
 export WM_VIDEO_EVERY="${WM_VIDEO_EVERY:-5000}"
 export WM_HORIZONS="${WM_HORIZONS:-1 5 10 25 50 100}"
 
+# Residual variants compute an additional observation-space head/loss. Keeping
+# the neural batch size there can OOM on GPUs that handle B10 comfortably.
+export RESIDUAL_WM_BATCH_SIZE="${RESIDUAL_WM_BATCH_SIZE:-2048}"
+export RESIDUAL_SYMBOLIC_TRAIN_SAMPLES="${RESIDUAL_SYMBOLIC_TRAIN_SAMPLES:-256}"
+
 # Native BenchMARL MASAC/MAMBPO.
 export MODEL_FREE_DOWNSTREAM_ALGO="${MODEL_FREE_DOWNSTREAM_ALGO:-masac}"
 export MODEL_BASED_DOWNSTREAM_ALGO="${MODEL_BASED_DOWNSTREAM_ALGO:-mambpo}"
