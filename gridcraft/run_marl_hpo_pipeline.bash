@@ -103,7 +103,12 @@ for family in $MARL_HPO_FAMILIES; do
 
   sweep_config="$(config_for_family "$family")"
   echo "[marl-hpo] ${family}: creating sweep from ${sweep_config}"
-  SWEEP_ID="$(../.venv/bin/wandb sweep --project "$PROJECT" "${ENTITY_ARGS[@]}" "$sweep_config" | awk '/wandb agent/ {print $NF}' | tail -n 1)"
+  SWEEP_OUTPUT="$(../.venv/bin/wandb sweep --project "$PROJECT" "${ENTITY_ARGS[@]}" "$sweep_config" 2>&1)"
+  printf '%s\n' "$SWEEP_OUTPUT"
+  SWEEP_ID="$(printf '%s\n' "$SWEEP_OUTPUT" | awk '
+    /Creating sweep with ID:/ {print $NF}
+    /wandb agent/ {print $NF}
+  ' | tail -n 1)"
   if [[ -z "$SWEEP_ID" ]]; then
     echo "Could not parse sweep id from wandb sweep output for ${family}." >&2
     exit 1
