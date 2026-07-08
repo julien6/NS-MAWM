@@ -17,6 +17,8 @@ BENCHMARL_DIR="${BENCHMARL_DIR:-${ROOT_DIR}/BenchMARL}"
 SMAC_DIR="${SMAC_DIR:-${ROOT_DIR}/SMAC}"
 OVERCOOKED_AI_DIR="${OVERCOOKED_AI_DIR:-${ROOT_DIR}/Overcooked_AI}"
 MAMBPO_DIR="${MAMBPO_DIR:-${ROOT_DIR}/MAMBPO}"
+GRIDCRAFT_REPO="${GRIDCRAFT_REPO:-https://github.com/julien6/Gridcraft.git}"
+GRIDCRAFT_REPO_BRANCH="${GRIDCRAFT_REPO_BRANCH:-main}"
 SMAC_REPO="${SMAC_REPO:-git@github.com:julien6/smac.git}"
 OVERCOOKED_AI_REPO="${OVERCOOKED_AI_REPO:-git@github.com:julien6/overcooked_ai.git}"
 LEGACY_REPO_BRANCH="${LEGACY_REPO_BRANCH:-ns-mawm}"
@@ -48,7 +50,8 @@ Environment variables mirror these flags:
   LEGACY_ISOLATED, INSTALL_MAMBPO_LEGACY_REQUIREMENTS, RUN_VERIFY.
   GRIDCRAFT_DIR, VGRIDCRAFT_DIR, BENCHMARL_DIR, SMAC_DIR,
   OVERCOOKED_AI_DIR, MAMBPO_DIR can point to non-default local checkouts.
-  SMAC_REPO, OVERCOOKED_AI_REPO and LEGACY_REPO_BRANCH configure fork checks.
+  GRIDCRAFT_REPO, GRIDCRAFT_REPO_BRANCH, SMAC_REPO, OVERCOOKED_AI_REPO
+  and LEGACY_REPO_BRANCH configure fork checks.
 EOF
 }
 
@@ -175,6 +178,25 @@ https_fallback_url() {
   fi
 }
 
+github_repo_slug() {
+  local repo_url="$1"
+  if [[ "${repo_url}" =~ ^git@github.com:(.*)\.git$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+  elif [[ "${repo_url}" =~ ^https://github.com/(.*)\.git$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+  elif [[ "${repo_url}" =~ ^https://github.com/(.*)$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+  else
+    echo "${repo_url}"
+  fi
+}
+
+same_github_repo() {
+  local a="$1"
+  local b="$2"
+  [[ "$(github_repo_slug "${a}")" == "$(github_repo_slug "${b}")" ]]
+}
+
 fetch_branch_with_fallback() {
   local path="$1"
   local remote_name="$2"
@@ -248,7 +270,7 @@ ensure_fork_checkout() {
   echo "[repo-check] ${label}: path=${path}"
   echo "[repo-check] ${label}: origin=${origin_url:-none}, branch=${current_branch:-detached}"
 
-  if [[ "${origin_url}" == "${repo_url}" ]]; then
+  if same_github_repo "${origin_url}" "${repo_url}"; then
     remote_name="origin"
   else
     echo "[repo-check] ${label}: origin does not match expected fork ${repo_url}; adding/updating remote ${remote_name}."
@@ -293,6 +315,10 @@ ensure_legacy_forks() {
   fi
   ensure_fork_checkout "${SMAC_DIR}" "SMAC" "${SMAC_REPO}" "${LEGACY_REPO_BRANCH}"
   ensure_fork_checkout "${OVERCOOKED_AI_DIR}" "Overcooked_AI" "${OVERCOOKED_AI_REPO}" "${LEGACY_REPO_BRANCH}"
+}
+
+ensure_main_forks() {
+  ensure_fork_checkout "${GRIDCRAFT_DIR}" "Gridcraft" "${GRIDCRAFT_REPO}" "${GRIDCRAFT_REPO_BRANCH}"
 }
 
 warn_native_tools() {
@@ -434,6 +460,7 @@ EOF
   pip_install "${python}" "protobuf>=6.31.1,<7"
 }
 
+ensure_main_forks
 install_main_stack
 
 ensure_legacy_forks
