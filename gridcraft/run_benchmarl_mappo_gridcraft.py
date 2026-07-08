@@ -218,17 +218,28 @@ def main() -> None:
     experiment_config.prefer_continuous_actions = False
     experiment_config.max_n_iters = args.max_iters
     experiment_config.max_n_frames = None
+    effective_frames_per_batch = int(args.frames_per_batch)
+    if args.num_envs > 0 and effective_frames_per_batch % int(args.num_envs) != 0:
+        effective_frames_per_batch = int(
+            -(-effective_frames_per_batch // int(args.num_envs)) * int(args.num_envs)
+        )
+        print(
+            "[marl] adjusted frames_per_batch "
+            f"from {args.frames_per_batch} to {effective_frames_per_batch} "
+            f"so it is divisible by num_envs={args.num_envs}",
+            flush=True,
+        )
     if on_policy:
-        experiment_config.on_policy_collected_frames_per_batch = args.frames_per_batch
+        experiment_config.on_policy_collected_frames_per_batch = effective_frames_per_batch
         experiment_config.on_policy_n_envs_per_worker = args.num_envs
-        experiment_config.on_policy_minibatch_size = min(args.marl_train_batch_size, args.frames_per_batch)
+        experiment_config.on_policy_minibatch_size = min(args.marl_train_batch_size, effective_frames_per_batch)
         experiment_config.on_policy_n_minibatch_iters = args.marl_optimizer_steps
     else:
-        experiment_config.off_policy_collected_frames_per_batch = args.frames_per_batch
+        experiment_config.off_policy_collected_frames_per_batch = effective_frames_per_batch
         experiment_config.off_policy_n_envs_per_worker = args.num_envs
-        experiment_config.off_policy_train_batch_size = min(args.marl_train_batch_size, args.frames_per_batch)
+        experiment_config.off_policy_train_batch_size = min(args.marl_train_batch_size, effective_frames_per_batch)
         experiment_config.off_policy_n_optimizer_steps = args.marl_optimizer_steps
-    experiment_config.evaluation_interval = args.frames_per_batch * max(1, args.marl_eval_every_iters)
+    experiment_config.evaluation_interval = effective_frames_per_batch * max(1, args.marl_eval_every_iters)
     experiment_config.evaluation_episodes = min(args.marl_eval_episodes, args.num_envs)
     experiment_config.render = False
     experiment_config.loggers = ["csv", "wandb"] if args.wandb else ["csv"]
@@ -256,6 +267,7 @@ def main() -> None:
                 "marl_discrete_target_entropy_weight": args.marl_discrete_target_entropy_weight,
                 "marl_memory_size": args.marl_memory_size,
                 "marl_frames_per_batch": args.frames_per_batch,
+                "marl_effective_frames_per_batch": effective_frames_per_batch,
                 "marl_train_batch_size": args.marl_train_batch_size,
                 "marl_optimizer_steps": args.marl_optimizer_steps,
                 "marl_hidden_size": args.marl_hidden_size,
@@ -316,6 +328,11 @@ def warn_legacy_marl_names(algorithm: str) -> None:
 
 
 def write_marl_run_summary(args, experiment) -> None:
+    effective_frames_per_batch = int(args.frames_per_batch)
+    if args.num_envs > 0 and effective_frames_per_batch % int(args.num_envs) != 0:
+        effective_frames_per_batch = int(
+            -(-effective_frames_per_batch // int(args.num_envs)) * int(args.num_envs)
+        )
     metrics = {
         "mean_return": float(getattr(experiment, "mean_return", 0.0)),
         "total_frames": float(getattr(experiment, "total_frames", 0)),
@@ -342,6 +359,7 @@ def write_marl_run_summary(args, experiment) -> None:
                 "metrics": metrics,
                 "hyperparameters": {
                     "frames_per_batch": args.frames_per_batch,
+                    "effective_frames_per_batch": effective_frames_per_batch,
                     "train_batch_size": args.marl_train_batch_size,
                     "optimizer_steps": args.marl_optimizer_steps,
                     "hidden_size": args.marl_hidden_size,
