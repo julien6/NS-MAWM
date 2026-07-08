@@ -129,17 +129,25 @@ add_source_path() {
   fi
   "${python}" - "${path}" "${label}" <<'PY'
 import site
+import sysconfig
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1]).resolve()
 label = sys.argv[2].lower().replace("-", "_").replace(" ", "_")
-site_dirs = site.getsitepackages()
+site_dirs = set(site.getsitepackages())
+for key in ("purelib", "platlib"):
+    value = sysconfig.get_paths().get(key)
+    if value:
+        site_dirs.add(value)
+site_dirs = {Path(item) for item in site_dirs if item}
 if not site_dirs:
     raise SystemExit("could not locate site-packages")
-pth_path = Path(site_dirs[0]) / f"ns_mawm_{label}.pth"
-pth_path.write_text(str(path) + "\n")
-print(f"[install] added source path for {label}: {pth_path} -> {path}")
+for site_dir in sorted(site_dirs):
+    site_dir.mkdir(parents=True, exist_ok=True)
+    pth_path = site_dir / f"ns_mawm_{label}.pth"
+    pth_path.write_text(str(path) + "\n")
+    print(f"[install] added source path for {label}: {pth_path} -> {path}")
 PY
 }
 
@@ -167,7 +175,6 @@ install_editable_or_warn() {
   local label="$3"
   if [[ -d "${path}" ]]; then
     install_editable_if_present "${python}" "${path}" "${label}"
-    add_source_path "${python}" "${path}" "${label}"
   else
     echo "[install] skipping ${label}: directory not found at ${path}" >&2
   fi
@@ -192,6 +199,15 @@ is_git_repo() {
 is_git_dirty() {
   local path="$1"
   [[ -n "$(git -C "${path}" status --porcelain 2>/dev/null)" ]]
+}
+
+backup_path_for_reclone() {
+  local path="$1"
+  local label="$2"
+  local backup_path
+  backup_path="${path}.invalid_$(date +%Y%m%d_%H%M%S)"
+  echo "[repo-check] ${label}: moving unusable checkout to ${backup_path}" >&2
+  mv "${path}" "${backup_path}"
 }
 
 https_fallback_url() {
@@ -284,13 +300,29 @@ ensure_fork_checkout() {
   fi
 
   if ! is_git_repo "${path}"; then
-    echo "[repo-check] ${label} at ${path} is not a git repository; leaving it unchanged." >&2
+    if ! is_python_project "${path}"; then
+      backup_path_for_reclone "${path}" "${label}"
+      ensure_fork_checkout "${path}" "${label}" "${repo_url}" "${branch}"
+    else
+      echo "[repo-check] ${label} at ${path} is not a git repository; leaving it unchanged." >&2
+    fi
     return 0
   fi
 
   local origin_url current_branch expected_ref
   origin_url="$(git -C "${path}" remote get-url origin 2>/dev/null || true)"
   current_branch="$(git -C "${path}" branch --show-current 2>/dev/null || true)"
+  local top_level
+  top_level="$(git -C "${path}" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [[ -n "${top_level}" && "$(cd "${top_level}" && pwd -P)" != "$(cd "${path}" && pwd -P)" ]]; then
+    if ! is_python_project "${path}"; then
+      backup_path_for_reclone "${path}" "${label}"
+      ensure_fork_checkout "${path}" "${label}" "${repo_url}" "${branch}"
+    else
+      echo "[repo-check] ${label}: ${path} is not the git top-level but is installable; leaving it unchanged." >&2
+    fi
+    return 0
+  fi
 
   echo "[repo-check] ${label}: path=${path}"
   echo "[repo-check] ${label}: origin=${origin_url:-none}, branch=${current_branch:-detached}"
@@ -298,6 +330,11 @@ ensure_fork_checkout() {
   if same_github_repo "${origin_url}" "${repo_url}"; then
     remote_name="origin"
   else
+    if ! is_python_project "${path}" && ! is_git_dirty "${path}"; then
+      backup_path_for_reclone "${path}" "${label}"
+      ensure_fork_checkout "${path}" "${label}" "${repo_url}" "${branch}"
+      return 0
+    fi
     echo "[repo-check] ${label}: origin does not match expected fork ${repo_url}; adding/updating remote ${remote_name}."
     if git -C "${path}" remote get-url "${remote_name}" >/dev/null 2>&1; then
       git -C "${path}" remote set-url "${remote_name}" "${repo_url}"
@@ -364,7 +401,7 @@ EOF
 
 verify_main() {
   local python="$1"
-  "${python}" - <<'PY'
+  PYTHONPATH="${BENCHMARL_DIR}:${GRIDCRAFT_DIR}:${VGRIDCRAFT_DIR}:${PYTHONPATH:-}" "${python}" - <<'PY'
 import importlib
 
 modules = [
@@ -394,11 +431,12 @@ verify_legacy() {
   local label="$1"
   local python="$2"
   local module="$3"
+  local source_dir="${4:-}"
   if [[ ! -x "${python}" ]]; then
     echo "[verify] ${label}: missing python at ${python}" >&2
     return 0
   fi
-  "${python}" - <<PY
+  PYTHONPATH="${source_dir}:${PYTHONPATH:-}" "${python}" - <<PY
 import importlib
 module = importlib.import_module("${module}")
 print("${label}: import ${module} ok", getattr(module, "__version__", "unknown"))
@@ -467,8 +505,6 @@ install_legacy_isolated() {
       echo "[install] skipping MAMBPO/requirements.txt by default because it pins old torch/tensorflow/gym versions"
     fi
     install_editable_if_present "${mambpo_venv}/bin/python" "${MAMBPO_DIR}" "MAMBPO"
-  else
-    echo "[install] skipping MAMBPO: directory not found at ${MAMBPO_DIR}" >&2
   fi
 }
 
@@ -504,13 +540,13 @@ if [[ "${RUN_VERIFY}" == "1" ]]; then
 
   if [[ "${INSTALL_LEGACY}" == "1" && "${LEGACY_ISOLATED}" == "1" ]]; then
     if is_python_project "${SMAC_DIR}"; then
-      verify_legacy "SMAC" "${SMAC_DIR}/.venv_ns_mawm/bin/python" "smac" || true
+      verify_legacy "SMAC" "${SMAC_DIR}/.venv_ns_mawm/bin/python" "smac" "${SMAC_DIR}" || true
     fi
     if is_python_project "${OVERCOOKED_AI_DIR}"; then
-      verify_legacy "Overcooked_AI" "${OVERCOOKED_AI_DIR}/.venv_ns_mawm/bin/python" "overcooked_ai_py" || true
+      verify_legacy "Overcooked_AI" "${OVERCOOKED_AI_DIR}/.venv_ns_mawm/bin/python" "overcooked_ai_py" "${OVERCOOKED_AI_DIR}/src:${OVERCOOKED_AI_DIR}" || true
     fi
     if is_python_project "${MAMBPO_DIR}"; then
-      verify_legacy "MAMBPO" "${MAMBPO_DIR}/.venv_ns_mawm/bin/python" "decentralizedlearning" || true
+      verify_legacy "MAMBPO" "${MAMBPO_DIR}/.venv_ns_mawm/bin/python" "decentralizedlearning" "${MAMBPO_DIR}" || true
     fi
   fi
 fi
@@ -524,5 +560,7 @@ Main environment:
 Legacy isolated environments:
   SMAC:          ${SMAC_DIR}/.venv_ns_mawm
   Overcooked_AI: ${OVERCOOKED_AI_DIR}/.venv_ns_mawm
-  MAMBPO:        ${MAMBPO_DIR}/.venv_ns_mawm
 EOF
+if [[ -d "${MAMBPO_DIR}" ]]; then
+  echo "  MAMBPO:        ${MAMBPO_DIR}/.venv_ns_mawm"
+fi
