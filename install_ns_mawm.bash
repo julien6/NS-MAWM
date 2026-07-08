@@ -120,6 +120,29 @@ pip_install() {
   "${python}" -m pip install "$@"
 }
 
+add_source_path() {
+  local python="$1"
+  local path="$2"
+  local label="$3"
+  if [[ ! -d "${path}" ]]; then
+    return 0
+  fi
+  "${python}" - "${path}" "${label}" <<'PY'
+import site
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1]).resolve()
+label = sys.argv[2].lower().replace("-", "_").replace(" ", "_")
+site_dirs = site.getsitepackages()
+if not site_dirs:
+    raise SystemExit("could not locate site-packages")
+pth_path = Path(site_dirs[0]) / f"ns_mawm_{label}.pth"
+pth_path.write_text(str(path) + "\n")
+print(f"[install] added source path for {label}: {pth_path} -> {path}")
+PY
+}
+
 install_editable_if_present() {
   local python="$1"
   local path="$2"
@@ -127,6 +150,7 @@ install_editable_if_present() {
   if [[ -f "${path}/setup.py" || -f "${path}/pyproject.toml" ]]; then
     echo "[install] installing ${label} editable from ${path}"
     pip_install "${python}" -e "${path}"
+    add_source_path "${python}" "${path}" "${label}"
   else
     echo "[install] skipping ${label}: no setup.py or pyproject.toml at ${path}" >&2
   fi
@@ -143,6 +167,7 @@ install_editable_or_warn() {
   local label="$3"
   if [[ -d "${path}" ]]; then
     install_editable_if_present "${python}" "${path}" "${label}"
+    add_source_path "${python}" "${path}" "${label}"
   else
     echo "[install] skipping ${label}: directory not found at ${path}" >&2
   fi
