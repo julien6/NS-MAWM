@@ -166,6 +166,44 @@ is_git_dirty() {
   [[ -n "$(git -C "${path}" status --porcelain 2>/dev/null)" ]]
 }
 
+https_fallback_url() {
+  local repo_url="$1"
+  if [[ "${repo_url}" =~ ^git@github.com:(.*)\.git$ ]]; then
+    echo "https://github.com/${BASH_REMATCH[1]}.git"
+  else
+    echo "${repo_url}"
+  fi
+}
+
+fetch_branch_with_fallback() {
+  local path="$1"
+  local remote_name="$2"
+  local repo_url="$3"
+  local branch="$4"
+  local fallback_remote="${remote_name}_https"
+  local fallback_url
+
+  if git -C "${path}" fetch "${remote_name}" "${branch}" >&2; then
+    echo "${remote_name}"
+    return 0
+  fi
+
+  fallback_url="$(https_fallback_url "${repo_url}")"
+  if [[ "${fallback_url}" == "${repo_url}" ]]; then
+    echo "[repo-check] fetch failed for ${repo_url}; no HTTPS fallback available." >&2
+    return 1
+  fi
+
+  echo "[repo-check] SSH fetch failed; trying HTTPS fallback ${fallback_url}" >&2
+  if git -C "${path}" remote get-url "${fallback_remote}" >/dev/null 2>&1; then
+    git -C "${path}" remote set-url "${fallback_remote}" "${fallback_url}"
+  else
+    git -C "${path}" remote add "${fallback_remote}" "${fallback_url}"
+  fi
+  git -C "${path}" fetch "${fallback_remote}" "${branch}" >&2
+  echo "${fallback_remote}"
+}
+
 ensure_fork_checkout() {
   local path="$1"
   local label="$2"
@@ -180,7 +218,16 @@ ensure_fork_checkout() {
 
   if [[ ! -e "${path}" ]]; then
     echo "[repo-check] cloning ${label} from ${repo_url} (${branch}) into ${path}"
-    git clone --branch "${branch}" "${repo_url}" "${path}"
+    if ! git clone --branch "${branch}" "${repo_url}" "${path}"; then
+      local fallback_url
+      fallback_url="$(https_fallback_url "${repo_url}")"
+      if [[ "${fallback_url}" == "${repo_url}" ]]; then
+        echo "[repo-check] clone failed for ${repo_url}; no HTTPS fallback available." >&2
+        return 1
+      fi
+      echo "[repo-check] SSH clone failed; trying HTTPS fallback ${fallback_url}" >&2
+      git clone --branch "${branch}" "${fallback_url}" "${path}"
+    fi
     return 0
   fi
 
@@ -214,7 +261,8 @@ ensure_fork_checkout() {
   expected_ref="refs/remotes/${remote_name}/${branch}"
 
   echo "[repo-check] ${label}: fetching ${remote_name}/${branch}"
-  git -C "${path}" fetch "${remote_name}" "${branch}"
+  remote_name="$(fetch_branch_with_fallback "${path}" "${remote_name}" "${repo_url}" "${branch}")"
+  expected_ref="refs/remotes/${remote_name}/${branch}"
 
   if [[ "${current_branch}" == "${branch}" ]]; then
     echo "[repo-check] ${label}: already on ${branch}."
