@@ -1,0 +1,62 @@
+program: sweep_benchmarl_wm_hpo.py
+method: bayes
+metric:
+  name: World Model Evaluation/wm_hpo_score
+  goal: minimize
+parameters:
+  hpo_family:
+    value: residual_k0.6
+  baseline_id:
+    value: B26_residual_k0.6
+  num_agents:
+    value: 3
+  device:
+    value: cuda
+  seed:
+    values: [1]
+  episodes:
+    value: 4096
+  max_steps:
+    value: 256
+  num_envs:
+    value: 256
+  vae_steps:
+    value: 10000
+  rnn_steps:
+    value: 10000
+  eval_every:
+    value: 2500
+  video_every:
+    value: 0
+  horizons:
+    value: [1, 5, 10, 25]
+  wm_batch_size:
+    values: [1024, 2048, 4096]
+  wm_num_workers:
+    value: 4
+  seq_len:
+    values: [16, 32, 64]
+  learning_rate:
+    values: [0.001, 0.0005, 0.0003]
+  vae_z_size:
+    values: [64, 96, 128, 192]
+  vae_hidden_size:
+    values: [512, 768, 1024]
+  vae_kl_tolerance:
+    values: [0.25, 0.5, 1.0]
+  rnn_size:
+    values: [128, 256, 384, 512]
+  rnn_num_mixture:
+    values: [5, 8, 10]
+  mean_mse_weight:
+    values: [5.0, 10.0, 20.0]
+  reward_loss_weight:
+    values: [1.0, 2.0, 5.0, 10.0]
+  done_loss_weight:
+    values: [1.0, 2.0, 5.0]
+  lambda_residual:
+    values: [0.1, 0.25, 0.5, 1.0]
+command:
+  - ${env}
+  - ../.venv/bin/python
+  - ${program}

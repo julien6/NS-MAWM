@@ -64,3 +64,38 @@ frame = env.render(env_index=0, mode="rgb_array")
 env.render(env_index=0, mode="human")
 env.close()
 ```
+
+## Automatic Spark resource profile
+
+For long campaigns and HPO on Spark, enable the automatic resource profile. It
+detects CUDA, free VRAM, CPU count and RAM, then exports aggressive but bounded
+values for vectorized environments, world-model batches, DataLoader workers,
+BenchMARL frame batches and replay memory.
+
+```bash
+cd gridcraft
+AUTO_RESOURCE_PROFILE=1 RESOURCE_PROFILE=spark_max \
+./run_benchmarl_requested_baselines_3agents_fast_scientific.bash
+```
+
+The same mechanism is available for HPO:
+
+```bash
+cd gridcraft
+AUTO_RESOURCE_PROFILE=1 RESOURCE_PROFILE=spark_max HPO_MODE=serious \
+./run_world_model_hpo_pipeline.bash
+
+AUTO_RESOURCE_PROFILE=1 RESOURCE_PROFILE=spark_max MARL_HPO_MODE=serious \
+./run_marl_hpo_pipeline.bash
+```
+
+Inspect the selected settings without launching a run:
+
+```bash
+../.venv/bin/python resource_profile.py --profile spark_max --target all --format summary
+../.venv/bin/python resource_profile.py --profile spark_max --target all --format shell
+```
+
+Explicit environment variables still win. For example, setting
+`WM_NUM_ENVS=1024` before the command keeps that value even when
+`AUTO_RESOURCE_PROFILE=1` is enabled.

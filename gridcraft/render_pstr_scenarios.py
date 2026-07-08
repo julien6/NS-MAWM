@@ -10,6 +10,9 @@ from PIL import Image, ImageDraw, ImageFont
 
 from pstr_scenarios import ACTION_NAMES, expected_rules, run_scenario, scenario_ids, scenario_specs
 
+SCENARIO_GRID_WIDTH = 11
+SCENARIO_TILE_SIZE = 48
+
 
 def main() -> None:
   parser = argparse.ArgumentParser(description="Render visual explanations for Gridcraft PSTR rules.")
@@ -120,9 +123,6 @@ def _save_diagram(result, path: Path) -> None:
 
 def build_diagram_image(result) -> Image.Image:
   step = 1 if len(result.plain_frames) > 1 else 0
-  output_frame = result.plain_frames[step]
-  world_width = output_frame.shape[0]
-  panel_width = max(1, (output_frame.shape[1] - world_width) // 2)
   real_panel, symbolic_panel = diagram_panels(result)
   action = result.actions_by_step[0] if result.actions_by_step else {"all": "initial"}
   action_text = ", ".join(f"{agent}={name}" for agent, name in sorted(action.items()))
@@ -149,12 +149,16 @@ def diagram_panels(result) -> tuple[np.ndarray, np.ndarray]:
   step = 1 if len(result.plain_frames) > 1 else 0
   input_frame = result.plain_frames[0]
   output_frame = result.plain_frames[step]
-  world_width = output_frame.shape[0]
+  world_width = _scenario_world_width()
   panel_width = max(1, (output_frame.shape[1] - world_width) // 2)
   panel_height = _diagram_panel_height(result, output_frame)
   real_panel = input_frame[:panel_height, world_width:world_width + panel_width]
   symbolic_panel = output_frame[:panel_height, world_width + panel_width:world_width + 2 * panel_width]
   return real_panel, symbolic_panel
+
+
+def _scenario_world_width() -> int:
+  return SCENARIO_GRID_WIDTH * SCENARIO_TILE_SIZE
 
 
 def _diagram_panel_height(result, frame: np.ndarray) -> int:

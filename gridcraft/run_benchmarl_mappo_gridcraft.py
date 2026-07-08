@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -68,6 +69,12 @@ def main() -> None:
     parser.add_argument("--marl-eval-episodes", "--mappo-eval-episodes", dest="marl_eval_episodes", type=int, default=4)
     parser.add_argument("--marl-video-every-iters", "--mappo-video-every-iters", dest="marl_video_every_iters", type=int, default=250)
     parser.add_argument("--marl-hidden-size", "--mappo-hidden-size", dest="marl_hidden_size", type=int, default=256)
+    parser.add_argument("--marl-lr", type=float, default=5e-5)
+    parser.add_argument("--marl-gamma", type=float, default=0.99)
+    parser.add_argument("--marl-polyak-tau", type=float, default=0.005)
+    parser.add_argument("--marl-alpha-init", type=float, default=1.0)
+    parser.add_argument("--marl-discrete-target-entropy-weight", type=float, default=0.2)
+    parser.add_argument("--marl-memory-size", type=int, default=1_000_000)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--save-folder", default="runs_benchmarl/native_marl")
@@ -90,6 +97,12 @@ def main() -> None:
     parser.add_argument("--mb-imagined-horizon", type=int, default=3)
     parser.add_argument("--mb-imagined-branches", type=int, default=4)
     parser.add_argument("--mb-lambda-imagined", type=float, default=0.5)
+    parser.add_argument("--marl-hpo-core-reused", type=float, default=0.0)
+    parser.add_argument("--marl-hpo-core-score", type=float, default=None)
+    parser.add_argument("--marl-hpo-core-config-path", default=None)
+    parser.add_argument("--marl-hpo-imagination-reused", type=float, default=0.0)
+    parser.add_argument("--marl-hpo-imagination-score", type=float, default=None)
+    parser.add_argument("--marl-hpo-imagination-config-path", default=None)
     args = parser.parse_args()
     warn_legacy_marl_names(args.algorithm)
 
@@ -138,6 +151,8 @@ def main() -> None:
             algorithm_config.world_model.predict_done = True
     elif args.algorithm == "mambpo":
         algorithm_config = MambpoConfig.get_from_yaml()
+        algorithm_config.alpha_init = args.marl_alpha_init
+        algorithm_config.discrete_target_entropy_weight = args.marl_discrete_target_entropy_weight
         algorithm_config.world_model.train_steps = args.mb_world_model_train_epochs
         algorithm_config.world_model.batch_size = args.mb_world_model_batch_size
         algorithm_config.world_model.hidden_sizes = [
@@ -170,6 +185,8 @@ def main() -> None:
                 )
     elif args.algorithm == "masac":
         algorithm_config = MasacConfig.get_from_yaml()
+        algorithm_config.alpha_init = args.marl_alpha_init
+        algorithm_config.discrete_target_entropy_weight = args.marl_discrete_target_entropy_weight
     else:
         algorithm_config = MappoConfig.get_from_yaml()
     ns_variant, ns_coverage = infer_ns_settings(args.baseline_id)
@@ -194,6 +211,10 @@ def main() -> None:
     experiment_config.sampling_device = args.device
     experiment_config.train_device = args.device
     experiment_config.buffer_device = args.device
+    experiment_config.lr = args.marl_lr
+    experiment_config.gamma = args.marl_gamma
+    experiment_config.polyak_tau = args.marl_polyak_tau
+    experiment_config.off_policy_memory_size = args.marl_memory_size
     experiment_config.prefer_continuous_actions = False
     experiment_config.max_n_iters = args.max_iters
     experiment_config.max_n_frames = None
@@ -219,6 +240,29 @@ def main() -> None:
             **({"name": args.wandb_name} if args.wandb_name else {}),
             **({"group": args.wandb_group} if args.wandb_group else {}),
             "tags": ["gridcraft", args.algorithm, "real-vgridcraft", args.baseline_id or "baseline-unknown"],
+            "config": {
+                "baseline_id": args.baseline_id,
+                "algorithm": args.algorithm,
+                "marl_hpo_core_reused": args.marl_hpo_core_reused,
+                "marl_hpo_core_score": args.marl_hpo_core_score,
+                "marl_hpo_core_config_path": args.marl_hpo_core_config_path,
+                "marl_hpo_imagination_reused": args.marl_hpo_imagination_reused,
+                "marl_hpo_imagination_score": args.marl_hpo_imagination_score,
+                "marl_hpo_imagination_config_path": args.marl_hpo_imagination_config_path,
+                "marl_lr": args.marl_lr,
+                "marl_gamma": args.marl_gamma,
+                "marl_polyak_tau": args.marl_polyak_tau,
+                "marl_alpha_init": args.marl_alpha_init,
+                "marl_discrete_target_entropy_weight": args.marl_discrete_target_entropy_weight,
+                "marl_memory_size": args.marl_memory_size,
+                "marl_frames_per_batch": args.frames_per_batch,
+                "marl_train_batch_size": args.marl_train_batch_size,
+                "marl_optimizer_steps": args.marl_optimizer_steps,
+                "marl_hidden_size": args.marl_hidden_size,
+                "mb_imagined_horizon": args.mb_imagined_horizon,
+                "mb_imagined_branches": args.mb_imagined_branches,
+                "mb_lambda_imagined": args.mb_lambda_imagined,
+            },
         }
     save_folder = (ROOT / "gridcraft" / args.save_folder).resolve()
     save_folder.mkdir(parents=True, exist_ok=True)
@@ -242,6 +286,7 @@ def main() -> None:
             flush=True,
         )
     experiment.run()
+    write_marl_run_summary(args, experiment)
 
 
 def warn_legacy_marl_names(algorithm: str) -> None:
@@ -267,6 +312,54 @@ def warn_legacy_marl_names(algorithm: str) -> None:
             f"runner ({algorithm}): {details}. Prefer MARL_* env vars and "
             "--marl-* CLI flags.",
             flush=True,
+        )
+
+
+def write_marl_run_summary(args, experiment) -> None:
+    metrics = {
+        "mean_return": float(getattr(experiment, "mean_return", 0.0)),
+        "total_frames": float(getattr(experiment, "total_frames", 0)),
+        "n_iters_performed": float(getattr(experiment, "n_iters_performed", 0)),
+    }
+    try:
+        import wandb
+
+        if wandb.run is not None:
+            for key, value in dict(wandb.run.summary).items():
+                if isinstance(value, (int, float, str, bool)) or value is None:
+                    metrics[str(key)] = value
+    except Exception:
+        pass
+    save_root = (ROOT / "gridcraft" / args.save_folder).resolve()
+    save_root.mkdir(parents=True, exist_ok=True)
+    run_name = args.wandb_name or f"{args.algorithm}_{args.baseline_id or 'baseline'}_seed{args.seed}"
+    path = save_root / f"{run_name}_marl_summary.json"
+    with path.open("w") as handle:
+        json.dump(
+            {
+                "baseline_id": args.baseline_id,
+                "algorithm": args.algorithm,
+                "metrics": metrics,
+                "hyperparameters": {
+                    "frames_per_batch": args.frames_per_batch,
+                    "train_batch_size": args.marl_train_batch_size,
+                    "optimizer_steps": args.marl_optimizer_steps,
+                    "hidden_size": args.marl_hidden_size,
+                    "lr": args.marl_lr,
+                    "gamma": args.marl_gamma,
+                    "polyak_tau": args.marl_polyak_tau,
+                    "alpha_init": args.marl_alpha_init,
+                    "discrete_target_entropy_weight": args.marl_discrete_target_entropy_weight,
+                    "memory_size": args.marl_memory_size,
+                    "mb_imagined_horizon": args.mb_imagined_horizon,
+                    "mb_imagined_branches": args.mb_imagined_branches,
+                    "mb_lambda_imagined": args.mb_lambda_imagined,
+                    "mb_world_model_batch_size": args.mb_world_model_batch_size,
+                    "mb_world_model_train_epochs": args.mb_world_model_train_epochs,
+                },
+            },
+            handle,
+            indent=2,
         )
 
 

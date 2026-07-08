@@ -1,0 +1,52 @@
+program: sweep_benchmarl_marl_hpo.py
+method: bayes
+metric:
+  name: marl_hpo_score
+  goal: maximize
+parameters:
+  hpo_family:
+    value: masac_core
+  baseline_id:
+    value: B00_model-free-control
+  num_agents:
+    value: 3
+  device:
+    value: cuda
+  seed:
+    values: [1]
+  num_envs:
+    value: 128
+  max_steps:
+    value: 500
+  max_iters:
+    value: 200
+  eval_every_iters:
+    value: 10
+  eval_episodes:
+    value: 4
+  video_every_iters:
+    value: 0
+  frames_per_batch:
+    values: [4096, 8192, 16384]
+  train_batch_size:
+    values: [512, 1024, 2048]
+  optimizer_steps:
+    values: [2, 4, 8]
+  hidden_size:
+    values: [128, 256, 512]
+  lr:
+    values: [0.0001, 0.00005, 0.00003]
+  gamma:
+    values: [0.95, 0.99, 0.995]
+  polyak_tau:
+    values: [0.002, 0.005, 0.01]
+  alpha_init:
+    values: [0.2, 0.5, 1.0]
+  discrete_target_entropy_weight:
+    values: [0.1, 0.2, 0.5]
+  memory_size:
+    values: [250000, 500000, 1000000]
+command:
+  - ${env}
+  - ../.venv/bin/python
+  - ${program}

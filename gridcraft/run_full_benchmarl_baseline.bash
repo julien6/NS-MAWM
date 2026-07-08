@@ -20,6 +20,26 @@ VAE_STEPS="${VAE_STEPS:-2000}"
 RNN_STEPS="${RNN_STEPS:-2000}"
 WM_BATCH_SIZE="${WM_BATCH_SIZE:-512}"
 WM_NUM_WORKERS="${WM_NUM_WORKERS:-4}"
+WM_SEQ_LEN="${WM_SEQ_LEN:-32}"
+VAE_Z_SIZE="${VAE_Z_SIZE:-64}"
+VAE_HIDDEN_SIZE="${VAE_HIDDEN_SIZE:-512}"
+VAE_KL_TOLERANCE="${VAE_KL_TOLERANCE:-0.5}"
+RNN_SIZE="${RNN_SIZE:-128}"
+RNN_NUM_MIXTURE="${RNN_NUM_MIXTURE:-5}"
+WM_MEAN_MSE_WEIGHT="${WM_MEAN_MSE_WEIGHT:-10.0}"
+WM_REWARD_LOSS_WEIGHT="${WM_REWARD_LOSS_WEIGHT:-1.0}"
+WM_DONE_LOSS_WEIGHT="${WM_DONE_LOSS_WEIGHT:-1.0}"
+WM_LEARNING_RATE="${WM_LEARNING_RATE:-0.001}"
+LAMBDA_SYM="${LAMBDA_SYM:-1.0}"
+LAMBDA_RESIDUAL="${LAMBDA_RESIDUAL:-0.25}"
+HPO_RESULTS_DIR="${HPO_RESULTS_DIR:-hpo_results/world_model}"
+REUSE_WM_HPO_CONFIG="${REUSE_WM_HPO_CONFIG:-1}"
+REQUIRE_WM_HPO="${REQUIRE_WM_HPO:-0}"
+WM_HPO_FAMILY="${WM_HPO_FAMILY:-}"
+WM_HPO_CONFIG_REUSED="${WM_HPO_CONFIG_REUSED:-0}"
+WM_HPO_CONFIG_PATH="${WM_HPO_CONFIG_PATH:-}"
+WM_HPO_SCORE="${WM_HPO_SCORE:-}"
+WM_HPO_BEST_RUN_URL="${WM_HPO_BEST_RUN_URL:-}"
 WM_EVAL_EVERY="${WM_EVAL_EVERY:-500}"
 WM_VIDEO_EVERY="${WM_VIDEO_EVERY:-$WM_EVAL_EVERY}"
 WM_HORIZONS="${WM_HORIZONS:-1 5 10 25 50}"
@@ -84,6 +104,21 @@ MARL_EVAL_EVERY_ITERS="${MARL_EVAL_EVERY_ITERS:-${MAPPO_EVAL_EVERY_ITERS:-25}}"
 MARL_EVAL_EPISODES="${MARL_EVAL_EPISODES:-${MAPPO_EVAL_EPISODES:-4}}"
 MARL_VIDEO_EVERY_ITERS="${MARL_VIDEO_EVERY_ITERS:-${MAPPO_VIDEO_EVERY_ITERS:-250}}"
 MARL_HIDDEN_SIZE="${MARL_HIDDEN_SIZE:-${MAPPO_HIDDEN_SIZE:-256}}"
+MARL_LR="${MARL_LR:-0.00005}"
+MARL_GAMMA="${MARL_GAMMA:-0.99}"
+MARL_POLYAK_TAU="${MARL_POLYAK_TAU:-0.005}"
+MARL_ALPHA_INIT="${MARL_ALPHA_INIT:-1.0}"
+MARL_DISCRETE_TARGET_ENTROPY_WEIGHT="${MARL_DISCRETE_TARGET_ENTROPY_WEIGHT:-0.2}"
+MARL_MEMORY_SIZE="${MARL_MEMORY_SIZE:-1000000}"
+MARL_HPO_RESULTS_DIR="${MARL_HPO_RESULTS_DIR:-hpo_results/marl}"
+REUSE_MARL_HPO_CONFIG="${REUSE_MARL_HPO_CONFIG:-1}"
+REQUIRE_MARL_HPO="${REQUIRE_MARL_HPO:-0}"
+MARL_HPO_CORE_REUSED="${MARL_HPO_CORE_REUSED:-0}"
+MARL_HPO_CORE_SCORE="${MARL_HPO_CORE_SCORE:-}"
+MARL_HPO_CORE_CONFIG_PATH="${MARL_HPO_CORE_CONFIG_PATH:-}"
+MARL_HPO_IMAGINATION_REUSED="${MARL_HPO_IMAGINATION_REUSED:-0}"
+MARL_HPO_IMAGINATION_SCORE="${MARL_HPO_IMAGINATION_SCORE:-}"
+MARL_HPO_IMAGINATION_CONFIG_PATH="${MARL_HPO_IMAGINATION_CONFIG_PATH:-}"
 for legacy_marl_env in MAPPO_MINIBATCH_SIZE MAPPO_MINIBATCH_ITERS MAPPO_EVAL_EVERY_ITERS MAPPO_EVAL_EPISODES MAPPO_VIDEO_EVERY_ITERS MAPPO_HIDDEN_SIZE; do
   if [[ -n "${!legacy_marl_env:-}" ]]; then
     echo "[naming] ${legacy_marl_env} is deprecated for generic MARL settings; prefer MARL_* variables." >&2
@@ -110,6 +145,33 @@ case "$BASELINE_ID" in
     MODEL_BASED=1
     ;;
 esac
+
+if [[ "$MODEL_BASED" == "1" && "$REUSE_WM_HPO_CONFIG" == "1" ]]; then
+  HPO_EXPORT_CMD=("$PYTHON_BIN" wm_hpo_registry.py export-env --baseline-id "$BASELINE_ID" --root "$HPO_RESULTS_DIR")
+  if [[ "$REQUIRE_WM_HPO" == "1" ]]; then
+    HPO_EXPORT_CMD+=(--require)
+  fi
+  echo "[wm-hpo] checking best HPO config for ${BASELINE_ID} in ${HPO_RESULTS_DIR}"
+  eval "$("${HPO_EXPORT_CMD[@]}")"
+  if [[ "${WM_HPO_CONFIG_REUSED:-0}" == "1" ]]; then
+    echo "[wm-hpo] using ${WM_HPO_FAMILY} config: ${WM_HPO_CONFIG_PATH} (score=${WM_HPO_SCORE})"
+  fi
+fi
+
+if [[ "$REUSE_MARL_HPO_CONFIG" == "1" ]]; then
+  MARL_HPO_EXPORT_CMD=("$PYTHON_BIN" marl_hpo_registry.py export-env --baseline-id "$BASELINE_ID" --downstream-algo "$MODEL_BASED_DOWNSTREAM_ALGO" --root "$MARL_HPO_RESULTS_DIR")
+  if [[ "$REQUIRE_MARL_HPO" == "1" ]]; then
+    MARL_HPO_EXPORT_CMD+=(--require)
+  fi
+  echo "[marl-hpo] checking best MARL HPO config for ${BASELINE_ID} in ${MARL_HPO_RESULTS_DIR}"
+  eval "$("${MARL_HPO_EXPORT_CMD[@]}")"
+  if [[ "${MARL_HPO_CORE_REUSED:-0}" == "1" ]]; then
+    echo "[marl-hpo] using masac_core config: ${MARL_HPO_CORE_CONFIG_PATH} (score=${MARL_HPO_CORE_SCORE})"
+  fi
+  if [[ "${MARL_HPO_IMAGINATION_REUSED:-0}" == "1" ]]; then
+    echo "[marl-hpo] using mambpo_imagination config: ${MARL_HPO_IMAGINATION_CONFIG_PATH} (score=${MARL_HPO_IMAGINATION_SCORE})"
+  fi
+fi
 
 print_cmd() {
   printf '[dry-run]'
@@ -143,7 +205,21 @@ WM_CMD=(
   --rnn-steps "$RNN_STEPS"
   --wm-batch-size "$WM_BATCH_SIZE"
   --wm-num-workers "$WM_NUM_WORKERS"
-  --seq-len 32
+  --seq-len "$WM_SEQ_LEN"
+  --vae-z-size "$VAE_Z_SIZE"
+  --vae-hidden-size "$VAE_HIDDEN_SIZE"
+  --vae-kl-tolerance "$VAE_KL_TOLERANCE"
+  --rnn-size "$RNN_SIZE"
+  --rnn-num-mixture "$RNN_NUM_MIXTURE"
+  --learning-rate "$WM_LEARNING_RATE"
+  --mean-mse-weight "$WM_MEAN_MSE_WEIGHT"
+  --reward-loss-weight "$WM_REWARD_LOSS_WEIGHT"
+  --done-loss-weight "$WM_DONE_LOSS_WEIGHT"
+  --lambda-sym "$LAMBDA_SYM"
+  --lambda-residual "$LAMBDA_RESIDUAL"
+  --wm-hpo-family "${WM_HPO_FAMILY:-}"
+  --wm-hpo-config-reused "${WM_HPO_CONFIG_REUSED:-0}"
+  --wm-hpo-config-path "${WM_HPO_CONFIG_PATH:-}"
   --eval-every "$WM_EVAL_EVERY"
   --video-every "$WM_VIDEO_EVERY"
   --video-max-steps "$VIDEO_MAX_STEPS"
@@ -158,6 +234,12 @@ WM_CMD=(
   --wandb-group "$WANDB_GROUP"
   "${VAE_CACHE_ARGS[@]}"
 )
+if [[ -n "${WM_HPO_SCORE:-}" ]]; then
+  WM_CMD+=(--wm-hpo-score "$WM_HPO_SCORE")
+fi
+if [[ -n "${WM_HPO_BEST_RUN_URL:-}" ]]; then
+  WM_CMD+=(--wm-hpo-best-run-url "$WM_HPO_BEST_RUN_URL")
+fi
 if [[ -n "$ENABLED_PSTR_RULES" ]]; then
   WM_CMD+=(--enabled-pstr-rules $ENABLED_PSTR_RULES)
 fi
@@ -341,6 +423,27 @@ else
   )
   if [[ -n "${WANDB_FLAG}" ]]; then
     MARL_CMD+=($WANDB_FLAG)
+  fi
+fi
+
+if [[ "${MARL_CMD[1]}" == "run_benchmarl_marl_gridcraft.py" ]]; then
+  MARL_CMD+=(
+    --marl-lr "$MARL_LR"
+    --marl-gamma "$MARL_GAMMA"
+    --marl-polyak-tau "$MARL_POLYAK_TAU"
+    --marl-alpha-init "$MARL_ALPHA_INIT"
+    --marl-discrete-target-entropy-weight "$MARL_DISCRETE_TARGET_ENTROPY_WEIGHT"
+    --marl-memory-size "$MARL_MEMORY_SIZE"
+    --marl-hpo-core-reused "${MARL_HPO_CORE_REUSED:-0}"
+    --marl-hpo-core-config-path "${MARL_HPO_CORE_CONFIG_PATH:-}"
+    --marl-hpo-imagination-reused "${MARL_HPO_IMAGINATION_REUSED:-0}"
+    --marl-hpo-imagination-config-path "${MARL_HPO_IMAGINATION_CONFIG_PATH:-}"
+  )
+  if [[ -n "${MARL_HPO_CORE_SCORE:-}" ]]; then
+    MARL_CMD+=(--marl-hpo-core-score "$MARL_HPO_CORE_SCORE")
+  fi
+  if [[ -n "${MARL_HPO_IMAGINATION_SCORE:-}" ]]; then
+    MARL_CMD+=(--marl-hpo-imagination-score "$MARL_HPO_IMAGINATION_SCORE")
   fi
 fi
 

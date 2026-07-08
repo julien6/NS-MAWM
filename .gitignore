@@ -45,8 +45,12 @@ gridcraft/tf_initial_z/
 gridcraft/log/
 gridcraft/trainlog/
 gridcraft/runs_benchmarl/
+gridcraft/runs_benchmarl_hpo/
+gridcraft/runs_benchmarl_marl_hpo/
 gridcraft/datasets/
 gridcraft/shared_models/
+gridcraft/shared_models_hpo/
+gridcraft/hpo_results/
 gridcraft/*.npz
 gridcraft/*.npy
 

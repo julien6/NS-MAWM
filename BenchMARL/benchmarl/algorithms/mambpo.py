@@ -522,11 +522,12 @@ class Mambpo(Masac):
         gridcraft_dir = root / "gridcraft"
         if str(gridcraft_dir) not in sys.path:
             sys.path.insert(0, str(gridcraft_dir))
-        from torch_world_model import TorchGridcraftRNN, TorchGridcraftVAE
+        from torch_world_model import load_world_model_config, make_rnn_from_config, make_vae_from_config
         from run_benchmarl_dyna_gridcraft import apply_ns_mawm_to_latent_step
 
-        vae = TorchGridcraftVAE().to(self.device)
-        rnn = TorchGridcraftRNN().to(self.device)
+        wm_config = load_world_model_config(checkpoint_dir)
+        vae = make_vae_from_config(wm_config).to(self.device)
+        rnn = make_rnn_from_config(wm_config).to(self.device)
         vae.load_state_dict(torch.load(vae_path, map_location=self.device))
         rnn.load_state_dict(torch.load(rnn_path, map_location=self.device), strict=False)
         vae.eval()

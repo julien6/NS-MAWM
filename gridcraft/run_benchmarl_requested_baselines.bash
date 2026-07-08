@@ -14,6 +14,13 @@ cd "$(dirname "$0")"
 # their world model and use MAMBPO by default for downstream MARL.
 
 PYTHON_BIN="${PYTHON_BIN:-../.venv/bin/python}"
+if [[ "${AUTO_RESOURCE_PROFILE:-0}" == "1" && "${RESOURCE_PROFILE_APPLIED:-0}" != "1" ]]; then
+  RESOURCE_PROFILE="${RESOURCE_PROFILE:-spark_max}"
+  echo "[resource-profile] applying ${RESOURCE_PROFILE} to requested baseline campaign"
+  eval "$("$PYTHON_BIN" resource_profile.py --profile "$RESOURCE_PROFILE" --target campaign --format shell)"
+  "$PYTHON_BIN" resource_profile.py --profile "$RESOURCE_PROFILE" --target campaign --format summary >&2 || true
+  export RESOURCE_PROFILE_APPLIED=1
+fi
 DEVICE="${DEVICE:-cuda}"
 NUM_AGENTS="${NUM_AGENTS:-1}"
 SEEDS="${SEEDS:-1 2 3}"
@@ -48,6 +55,12 @@ REUSE_VAE_CACHE="${REUSE_VAE_CACHE:-1}"
 FORCE_VAE_RETRAIN="${FORCE_VAE_RETRAIN:-0}"
 REUSE_LATENT_CACHE="${REUSE_LATENT_CACHE:-1}"
 FORCE_LATENT_REENCODE="${FORCE_LATENT_REENCODE:-0}"
+HPO_RESULTS_DIR="${HPO_RESULTS_DIR:-hpo_results/world_model}"
+REUSE_WM_HPO_CONFIG="${REUSE_WM_HPO_CONFIG:-1}"
+REQUIRE_WM_HPO="${REQUIRE_WM_HPO:-0}"
+MARL_HPO_RESULTS_DIR="${MARL_HPO_RESULTS_DIR:-hpo_results/marl}"
+REUSE_MARL_HPO_CONFIG="${REUSE_MARL_HPO_CONFIG:-1}"
+REQUIRE_MARL_HPO="${REQUIRE_MARL_HPO:-0}"
 
 # Downstream MARL defaults. B00 uses MASAC on real vGridcraft; model-based
 # baselines use MAMBPO unless explicitly overridden.
@@ -63,6 +76,12 @@ MARL_EVAL_EVERY_ITERS="${MARL_EVAL_EVERY_ITERS:-${MAPPO_EVAL_EVERY_ITERS:-25}}"
 MARL_EVAL_EPISODES="${MARL_EVAL_EPISODES:-${MAPPO_EVAL_EPISODES:-4}}"
 MARL_VIDEO_EVERY_ITERS="${MARL_VIDEO_EVERY_ITERS:-${MAPPO_VIDEO_EVERY_ITERS:-250}}"
 MARL_HIDDEN_SIZE="${MARL_HIDDEN_SIZE:-${MAPPO_HIDDEN_SIZE:-256}}"
+MARL_LR="${MARL_LR:-0.00005}"
+MARL_GAMMA="${MARL_GAMMA:-0.99}"
+MARL_POLYAK_TAU="${MARL_POLYAK_TAU:-0.005}"
+MARL_ALPHA_INIT="${MARL_ALPHA_INIT:-1.0}"
+MARL_DISCRETE_TARGET_ENTROPY_WEIGHT="${MARL_DISCRETE_TARGET_ENTROPY_WEIGHT:-0.2}"
+MARL_MEMORY_SIZE="${MARL_MEMORY_SIZE:-1000000}"
 for legacy_marl_env in MAPPO_MINIBATCH_SIZE MAPPO_MINIBATCH_ITERS MAPPO_EVAL_EVERY_ITERS MAPPO_EVAL_EPISODES MAPPO_VIDEO_EVERY_ITERS MAPPO_HIDDEN_SIZE; do
   if [[ -n "${!legacy_marl_env:-}" ]]; then
     echo "[naming] ${legacy_marl_env} is deprecated for generic MARL settings; prefer MARL_* variables." >&2
@@ -97,7 +116,10 @@ echo "Agents: ${NUM_AGENTS}"
 echo "World model: num_envs=${WM_NUM_ENVS}, episodes=${WM_EPISODES}, max_steps=${WM_MAX_STEPS}, vae_steps=${VAE_STEPS}, rnn_steps=${RNN_STEPS}, batch=${WM_BATCH_SIZE}, eval_every=${WM_EVAL_EVERY}"
 echo "World model symbolic: enabled_pstr_rules=${ENABLED_PSTR_RULES:-auto-profile-from-baseline}, joint_symbolic_episodes=${JOINT_SYMBOLIC_TRAIN_EPISODES}, joint_symbolic_steps=${JOINT_SYMBOLIC_TRAIN_STEPS}"
 echo "World model cache: shared_model_dir=${SHARED_MODEL_DIR}, reuse_vae=${REUSE_VAE_CACHE}, force_vae_retrain=${FORCE_VAE_RETRAIN}, reuse_latents=${REUSE_LATENT_CACHE}, force_latent_reencode=${FORCE_LATENT_REENCODE}"
+echo "World model HPO: results_dir=${HPO_RESULTS_DIR}, reuse=${REUSE_WM_HPO_CONFIG}, require=${REQUIRE_WM_HPO}"
+echo "MARL HPO: results_dir=${MARL_HPO_RESULTS_DIR}, reuse=${REUSE_MARL_HPO_CONFIG}, require=${REQUIRE_MARL_HPO}"
 echo "MARL: num_envs=${MARL_NUM_ENVS}, max_steps=${MARL_MAX_STEPS}, max_iters=${MARL_MAX_ITERS}, frames_per_batch=${MARL_FRAMES_PER_BATCH}, train_batch=${MARL_TRAIN_BATCH_SIZE}, optimizer_steps=${MARL_OPTIMIZER_STEPS}, eval_every_iters=${MARL_EVAL_EVERY_ITERS}, video_every_iters=${MARL_VIDEO_EVERY_ITERS}, hidden_size=${MARL_HIDDEN_SIZE}, model_free_downstream=${MODEL_FREE_DOWNSTREAM_ALGO}, model_based_downstream=${MODEL_BASED_DOWNSTREAM_ALGO}"
+echo "MARL optimization: lr=${MARL_LR}, gamma=${MARL_GAMMA}, tau=${MARL_POLYAK_TAU}, alpha_init=${MARL_ALPHA_INIT}, discrete_entropy_w=${MARL_DISCRETE_TARGET_ENTROPY_WEIGHT}, memory=${MARL_MEMORY_SIZE}"
 echo "Model-based MARL params: wm_train_steps=${MB_WORLD_MODEL_TRAIN_EPOCHS}, wm_batch=${MB_WORLD_MODEL_BATCH_SIZE}, imagined_horizon=${MB_IMAGINED_HORIZON}, branches=${MB_IMAGINED_BRANCHES}, lambda_or_imagined_ratio=${MB_LAMBDA_IMAGINED}"
 echo "MPC-CEM: horizon=${MPC_PLANNING_HORIZON}, samples=${MPC_CEM_SAMPLES}, iters=${MPC_CEM_ITERS}, elite_frac=${MPC_CEM_ELITE_FRAC}"
 echo "MARL routing: B00/model-free uses real vGridcraft ${MODEL_FREE_DOWNSTREAM_ALGO}; model-based baselines use MODEL_BASED_DOWNSTREAM_ALGO=${MODEL_BASED_DOWNSTREAM_ALGO}."
@@ -158,6 +180,12 @@ for seed in $SEEDS; do
     FORCE_VAE_RETRAIN="$FORCE_VAE_RETRAIN" \
     REUSE_LATENT_CACHE="$REUSE_LATENT_CACHE" \
     FORCE_LATENT_REENCODE="$FORCE_LATENT_REENCODE" \
+    HPO_RESULTS_DIR="$HPO_RESULTS_DIR" \
+    REUSE_WM_HPO_CONFIG="$REUSE_WM_HPO_CONFIG" \
+    REQUIRE_WM_HPO="$REQUIRE_WM_HPO" \
+    MARL_HPO_RESULTS_DIR="$MARL_HPO_RESULTS_DIR" \
+    REUSE_MARL_HPO_CONFIG="$REUSE_MARL_HPO_CONFIG" \
+    REQUIRE_MARL_HPO="$REQUIRE_MARL_HPO" \
     MODEL_BASED_DOWNSTREAM_ALGO="$MODEL_BASED_DOWNSTREAM_ALGO" \
     MODEL_FREE_DOWNSTREAM_ALGO="$MODEL_FREE_DOWNSTREAM_ALGO" \
     MARL_NUM_ENVS="$MARL_NUM_ENVS" \
@@ -170,6 +198,12 @@ for seed in $SEEDS; do
     MARL_EVAL_EPISODES="$MARL_EVAL_EPISODES" \
     MARL_VIDEO_EVERY_ITERS="$MARL_VIDEO_EVERY_ITERS" \
     MARL_HIDDEN_SIZE="$MARL_HIDDEN_SIZE" \
+    MARL_LR="$MARL_LR" \
+    MARL_GAMMA="$MARL_GAMMA" \
+    MARL_POLYAK_TAU="$MARL_POLYAK_TAU" \
+    MARL_ALPHA_INIT="$MARL_ALPHA_INIT" \
+    MARL_DISCRETE_TARGET_ENTROPY_WEIGHT="$MARL_DISCRETE_TARGET_ENTROPY_WEIGHT" \
+    MARL_MEMORY_SIZE="$MARL_MEMORY_SIZE" \
     MB_WORLD_MODEL_TRAIN_EPOCHS="$MB_WORLD_MODEL_TRAIN_EPOCHS" \
     MB_WORLD_MODEL_BATCH_SIZE="$MB_WORLD_MODEL_BATCH_SIZE" \
     MB_WORLD_MODEL_HIDDEN_SIZE="$MB_WORLD_MODEL_HIDDEN_SIZE" \

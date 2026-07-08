@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT / "gridcraft"))
 from experiment_logging import add_wandb_args, logger_from_args, should_log_wandb_videos
 from ns_symbolic import NS_VARIANTS, apply_symbolic_projection, tabular_to_vector
 from pstr_profiles import active_rules_for_baseline
-from torch_world_model import TorchGridcraftRNN, TorchGridcraftVAE
+from torch_world_model import load_world_model_config, make_rnn_from_config, make_vae_from_config
 from torch_world_model.models import ACTION_SIZE
 from vgridcraft import VGridcraftConfig, VectorizedGridcraftEnv
 from wandb_schema import GENERAL, MARL_EVALUATION
@@ -49,12 +49,13 @@ def main() -> None:
     run_dir = Path(args.wm_run_dir)
     checkpoint_dir = run_dir / "checkpoints"
 
-    vae = TorchGridcraftVAE().to(device)
-    rnn = TorchGridcraftRNN().to(device)
     vae_path = checkpoint_dir / "vae.pt"
     rnn_path = checkpoint_dir / "rnn.pt"
     if not vae_path.exists() or not rnn_path.exists():
         raise FileNotFoundError(f"Missing world model checkpoints: {vae_path} / {rnn_path}")
+    wm_config = load_world_model_config(checkpoint_dir)
+    vae = make_vae_from_config(wm_config).to(device)
+    rnn = make_rnn_from_config(wm_config).to(device)
     vae.load_state_dict(torch.load(vae_path, map_location=device))
     rnn.load_state_dict(torch.load(rnn_path, map_location=device), strict=False)
     vae.eval()

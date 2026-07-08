@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import math
+from pathlib import Path
 
 import torch
 from torch import nn
@@ -163,7 +165,16 @@ class TorchGridcraftRNN(nn.Module):
         logmix, mean, logstd = torch.split(mdn, self.num_mixture, dim=-1)
         return F.log_softmax(logmix, dim=-1), mean, logstd.clamp(-6.0, 2.0), reward, done_logit
 
-    def loss(self, z_seq: torch.Tensor, actions: torch.Tensor, rewards: torch.Tensor, dones: torch.Tensor) -> tuple[torch.Tensor, dict[str, float]]:
+    def loss(
+        self,
+        z_seq: torch.Tensor,
+        actions: torch.Tensor,
+        rewards: torch.Tensor,
+        dones: torch.Tensor,
+        mean_mse_weight: float = 10.0,
+        reward_loss_weight: float = 1.0,
+        done_loss_weight: float = 1.0,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
         target_z = z_seq[:, 1:]
         pred_input = z_seq[:, :-1]
         (logmix, mean, logstd, reward_pred, done_logit), _ = self.forward(pred_input, actions)
@@ -174,13 +185,21 @@ class TorchGridcraftRNN(nn.Module):
         mean_mse = F.mse_loss(expected_z, target_z)
         reward_loss = F.mse_loss(reward_pred, rewards)
         done_loss = F.binary_cross_entropy_with_logits(done_logit, dones.float())
-        loss = z_nll + 10.0 * mean_mse + reward_loss + done_loss
+        loss = (
+            z_nll
+            + float(mean_mse_weight) * mean_mse
+            + float(reward_loss_weight) * reward_loss
+            + float(done_loss_weight) * done_loss
+        )
         return loss, {
             "training_wm_total_loss": float(loss.detach().cpu()),
             "training_obs_loss": float(z_nll.detach().cpu()),
             "training_mean_mse": float(mean_mse.detach().cpu()),
             "training_reward_loss": float(reward_loss.detach().cpu()),
             "training_done_loss": float(done_loss.detach().cpu()),
+            "training_mean_mse_weight": float(mean_mse_weight),
+            "training_reward_loss_weight": float(reward_loss_weight),
+            "training_done_loss_weight": float(done_loss_weight),
         }
 
 
@@ -197,3 +216,31 @@ def sample_mdn(logmix: torch.Tensor, mean: torch.Tensor, logstd: torch.Tensor) -
     selected_mean = torch.gather(mean, -1, gather).squeeze(-1)
     selected_logstd = torch.gather(logstd, -1, gather).squeeze(-1)
     return selected_mean + selected_logstd.exp() * torch.randn_like(selected_mean)
+
+
+def load_world_model_config(checkpoint_dir: str | Path) -> dict:
+    path = Path(checkpoint_dir) / "world_model_config.json"
+    if not path.exists():
+        return {}
+    with path.open() as f:
+        return json.load(f)
+
+
+def make_vae_from_config(config: dict | None = None) -> TorchGridcraftVAE:
+    vae_config = (config or {}).get("vae", {})
+    return TorchGridcraftVAE(
+        z_size=int(vae_config.get("z_size", 64)),
+        hidden_size=int(vae_config.get("hidden_size", 512)),
+        kl_tolerance=float(vae_config.get("kl_tolerance", 0.5)),
+    )
+
+
+def make_rnn_from_config(config: dict | None = None) -> TorchGridcraftRNN:
+    vae_config = (config or {}).get("vae", {})
+    rnn_config = (config or {}).get("rnn", {})
+    return TorchGridcraftRNN(
+        z_size=int(rnn_config.get("z_size", vae_config.get("z_size", 64))),
+        action_size=int(rnn_config.get("action_size", ACTION_SIZE)),
+        rnn_size=int(rnn_config.get("rnn_size", 128)),
+        num_mixture=int(rnn_config.get("num_mixture", 5)),
+    )

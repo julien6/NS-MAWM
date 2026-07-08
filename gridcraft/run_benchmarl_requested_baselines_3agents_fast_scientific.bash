@@ -12,6 +12,15 @@ cd "$(dirname "$0")"
 # keeping vectorization, larger minibatches, periodic evaluation, and shorter
 # videos. Override any variable from the shell for runtime probes.
 
+PYTHON_BIN="${PYTHON_BIN:-../.venv/bin/python}"
+if [[ "${AUTO_RESOURCE_PROFILE:-0}" == "1" && "${RESOURCE_PROFILE_APPLIED:-0}" != "1" ]]; then
+  RESOURCE_PROFILE="${RESOURCE_PROFILE:-spark_max}"
+  echo "[resource-profile] applying ${RESOURCE_PROFILE} to fast scientific baseline campaign"
+  eval "$("$PYTHON_BIN" resource_profile.py --profile "$RESOURCE_PROFILE" --target campaign --format shell)"
+  "$PYTHON_BIN" resource_profile.py --profile "$RESOURCE_PROFILE" --target campaign --format summary >&2 || true
+  export RESOURCE_PROFILE_APPLIED=1
+fi
+
 export NUM_AGENTS="${NUM_AGENTS:-3}"
 
 # World model.
@@ -22,6 +31,24 @@ export VAE_STEPS="${VAE_STEPS:-50000}"
 export RNN_STEPS="${RNN_STEPS:-50000}"
 export WM_BATCH_SIZE="${WM_BATCH_SIZE:-4096}"
 export WM_NUM_WORKERS="${WM_NUM_WORKERS:-8}"
+export WM_SEQ_LEN="${WM_SEQ_LEN:-32}"
+export VAE_Z_SIZE="${VAE_Z_SIZE:-64}"
+export VAE_HIDDEN_SIZE="${VAE_HIDDEN_SIZE:-512}"
+export VAE_KL_TOLERANCE="${VAE_KL_TOLERANCE:-0.5}"
+export RNN_SIZE="${RNN_SIZE:-128}"
+export RNN_NUM_MIXTURE="${RNN_NUM_MIXTURE:-5}"
+export WM_MEAN_MSE_WEIGHT="${WM_MEAN_MSE_WEIGHT:-10.0}"
+export WM_REWARD_LOSS_WEIGHT="${WM_REWARD_LOSS_WEIGHT:-1.0}"
+export WM_DONE_LOSS_WEIGHT="${WM_DONE_LOSS_WEIGHT:-1.0}"
+export WM_LEARNING_RATE="${WM_LEARNING_RATE:-0.001}"
+export LAMBDA_SYM="${LAMBDA_SYM:-1.0}"
+export LAMBDA_RESIDUAL="${LAMBDA_RESIDUAL:-0.25}"
+export HPO_RESULTS_DIR="${HPO_RESULTS_DIR:-hpo_results/world_model}"
+export REUSE_WM_HPO_CONFIG="${REUSE_WM_HPO_CONFIG:-1}"
+export REQUIRE_WM_HPO="${REQUIRE_WM_HPO:-0}"
+export MARL_HPO_RESULTS_DIR="${MARL_HPO_RESULTS_DIR:-hpo_results/marl}"
+export REUSE_MARL_HPO_CONFIG="${REUSE_MARL_HPO_CONFIG:-1}"
+export REQUIRE_MARL_HPO="${REQUIRE_MARL_HPO:-0}"
 export WM_EVAL_EVERY="${WM_EVAL_EVERY:-2500}"
 export WM_VIDEO_EVERY="${WM_VIDEO_EVERY:-5000}"
 export WM_HORIZONS="${WM_HORIZONS:-1 5 10 25 50 100}"
@@ -50,4 +77,7 @@ export VIDEO_MAX_STEPS="${VIDEO_MAX_STEPS:-75}"
 export VIDEO_FPS="${VIDEO_FPS:-10}"
 
 echo "Launching fast scientific Gridcraft baselines with NUM_AGENTS=${NUM_AGENTS}"
+echo "World Model defaults/HPO fallback: z=${VAE_Z_SIZE}, vae_hidden=${VAE_HIDDEN_SIZE}, rnn=${RNN_SIZE}, mixtures=${RNN_NUM_MIXTURE}, seq_len=${WM_SEQ_LEN}, reward_w=${WM_REWARD_LOSS_WEIGHT}, done_w=${WM_DONE_LOSS_WEIGHT}"
+echo "World Model HPO registry: ${HPO_RESULTS_DIR} (reuse=${REUSE_WM_HPO_CONFIG}, require=${REQUIRE_WM_HPO})"
+echo "MARL HPO registry: ${MARL_HPO_RESULTS_DIR} (reuse=${REUSE_MARL_HPO_CONFIG}, require=${REQUIRE_MARL_HPO})"
 exec ./run_benchmarl_requested_baselines.bash

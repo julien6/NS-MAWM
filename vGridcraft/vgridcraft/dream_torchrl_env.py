@@ -60,15 +60,16 @@ class GridcraftDreamTorchRLEnv(EnvBase):
             if (parent / "gridcraft").exists():
                 sys.path.insert(0, str(parent / "gridcraft"))
                 break
-        from torch_world_model import TorchGridcraftRNN, TorchGridcraftVAE
+        from torch_world_model import load_world_model_config, make_rnn_from_config, make_vae_from_config
         from run_benchmarl_dyna_gridcraft import apply_ns_mawm_to_latent_step
 
         vae_path = self.checkpoint_dir / "vae.pt"
         rnn_path = self.checkpoint_dir / "rnn.pt"
         if not vae_path.exists() or not rnn_path.exists():
             raise FileNotFoundError(f"Missing dream world model checkpoints: {vae_path} / {rnn_path}")
-        self.vae = TorchGridcraftVAE().to(self.device)
-        self.rnn = TorchGridcraftRNN().to(self.device)
+        wm_config = load_world_model_config(self.checkpoint_dir)
+        self.vae = make_vae_from_config(wm_config).to(self.device)
+        self.rnn = make_rnn_from_config(wm_config).to(self.device)
         self.vae.load_state_dict(torch.load(vae_path, map_location=self.device))
         self.rnn.load_state_dict(torch.load(rnn_path, map_location=self.device))
         self.vae.eval()

@@ -84,6 +84,19 @@ def main() -> None:
     parser.add_argument("--vae-steps", type=int, default=5000)
     parser.add_argument("--rnn-steps", type=int, default=5000)
     parser.add_argument("--seq-len", type=int, default=32)
+    parser.add_argument("--vae-z-size", type=int, default=64)
+    parser.add_argument("--vae-hidden-size", type=int, default=512)
+    parser.add_argument("--vae-kl-tolerance", type=float, default=0.5)
+    parser.add_argument("--rnn-size", type=int, default=128)
+    parser.add_argument("--rnn-num-mixture", type=int, default=5)
+    parser.add_argument("--mean-mse-weight", type=float, default=10.0)
+    parser.add_argument("--reward-loss-weight", type=float, default=1.0)
+    parser.add_argument("--done-loss-weight", type=float, default=1.0)
+    parser.add_argument("--wm-hpo-family", default=None)
+    parser.add_argument("--wm-hpo-config-reused", type=float, default=0.0)
+    parser.add_argument("--wm-hpo-score", type=float, default=None)
+    parser.add_argument("--wm-hpo-best-run-url", default=None)
+    parser.add_argument("--wm-hpo-config-path", default=None)
     parser.add_argument("--eval-every", type=int, default=1000)
     parser.add_argument("--video-every", type=int, default=1000)
     parser.add_argument("--horizons", nargs="+", type=int, default=[1, 5, 10])
@@ -134,6 +147,12 @@ def main() -> None:
             "enabled_pstr_rules": rules_to_csv(active_pstr_rules),
             "enabled_pstr_count": len(active_pstr_rules),
             "torch_cuda_available": torch.cuda.is_available(),
+            "world_model_architecture": world_model_config_from_args(args),
+            "wm_hpo_family": args.wm_hpo_family,
+            "wm_hpo_config_reused": args.wm_hpo_config_reused,
+            "wm_hpo_score": args.wm_hpo_score,
+            "wm_hpo_best_run_url": args.wm_hpo_best_run_url,
+            "wm_hpo_config_path": args.wm_hpo_config_path,
         },
         default_group=args.baseline_id,
         default_name=run_name,
@@ -149,6 +168,14 @@ def main() -> None:
             "gridcraft_config": config.__dict__,
             "pstr_profile": pstr_profile,
             "enabled_pstr_rules": list(active_pstr_rules),
+            "world_model_architecture": world_model_config_from_args(args),
+            "wm_hpo": {
+                "family": args.wm_hpo_family,
+                "config_reused": args.wm_hpo_config_reused,
+                "score": args.wm_hpo_score,
+                "best_run_url": args.wm_hpo_best_run_url,
+                "config_path": args.wm_hpo_config_path,
+            },
         },
     )
 
@@ -202,6 +229,11 @@ def main() -> None:
                 "enabled_pstr_count": len(active_pstr_rules),
                 "empirical_determinable_ratio": float(data.get("symbolic_metadata", {}).get("empirical_determinable_ratio", 0.0)),
                 "dataset_path": str(dataset_file),
+                "wm_hpo_family": args.wm_hpo_family or "",
+                "wm_hpo_config_reused": float(args.wm_hpo_config_reused),
+                "wm_hpo_score": float(args.wm_hpo_score) if args.wm_hpo_score is not None else 0.0,
+                "wm_hpo_best_run_url": args.wm_hpo_best_run_url or "",
+                "wm_hpo_config_path": args.wm_hpo_config_path or "",
             },
             step=1,
             namespace="wm_training",
@@ -214,6 +246,7 @@ def main() -> None:
         rnn = train_rnn(z, data, args, device, checkpoint_dir, eval_dir, logger, vae, baseline, step_offset=args.vae_steps)
         print("=== World Model phase 4/5: final evaluation ===", flush=True)
         metrics, pstr_rows = evaluate_world_model(vae, rnn, data, device, horizons=args.horizons, baseline=baseline, args=args)
+        metrics["dataset_path"] = str(dataset_file)
         (eval_dir / "world_model_summary.json").write_text(json.dumps(metrics, indent=2))
         write_pstr_rvr_table(eval_dir / "pstr_rvr_table_final.json", pstr_rows)
         final_eval_step = args.vae_steps + args.rnn_steps + 1
@@ -247,8 +280,53 @@ def shared_model_root(args) -> Path:
     return root
 
 
+def world_model_config_from_args(args) -> dict:
+    return {
+        "vae": {
+            "obs_size": 550,
+            "z_size": int(args.vae_z_size),
+            "hidden_size": int(args.vae_hidden_size),
+            "kl_tolerance": float(args.vae_kl_tolerance),
+        },
+        "rnn": {
+            "z_size": int(args.vae_z_size),
+            "action_size": 15,
+            "rnn_size": int(args.rnn_size),
+            "num_mixture": int(args.rnn_num_mixture),
+        },
+        "loss": {
+            "mean_mse_weight": float(args.mean_mse_weight),
+            "reward_loss_weight": float(args.reward_loss_weight),
+            "done_loss_weight": float(args.done_loss_weight),
+        },
+    }
+
+
+def make_vae_from_args(args) -> TorchGridcraftVAE:
+    return TorchGridcraftVAE(
+        z_size=int(args.vae_z_size),
+        hidden_size=int(args.vae_hidden_size),
+        kl_tolerance=float(args.vae_kl_tolerance),
+    )
+
+
+def make_rnn_from_args(args) -> TorchGridcraftRNN:
+    return TorchGridcraftRNN(
+        z_size=int(args.vae_z_size),
+        rnn_size=int(args.rnn_size),
+        num_mixture=int(args.rnn_num_mixture),
+    )
+
+
+def save_world_model_config(checkpoint_dir: Path, args) -> None:
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    (checkpoint_dir / "world_model_config.json").write_text(
+        json.dumps(world_model_config_from_args(args), indent=2, sort_keys=True)
+    )
+
+
 def vae_cache_payload(args, dataset_file: Path, data) -> dict:
-    probe = TorchGridcraftVAE()
+    probe = make_vae_from_args(args)
     return {
         "cache_version": "vae_cache_v1",
         "dataset_file": str(Path(dataset_file).resolve()),
@@ -315,10 +393,11 @@ def load_or_train_vae(data, args, dataset_file: Path, device, checkpoint_dir: Pa
     cache_hit = bool(args.reuse_vae_cache and not args.force_vae_retrain and vae_path.exists() and cache_metadata_matches(metadata_path, payload, key))
     if cache_hit:
         print(f"[vae-cache] hit; loading VAE from {vae_path}", flush=True)
-        model = TorchGridcraftVAE().to(device)
+        model = make_vae_from_args(args).to(device)
         model.load_state_dict(torch.load(vae_path, map_location=device))
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(vae_path, checkpoint_dir / "vae.pt")
+        save_world_model_config(checkpoint_dir, args)
         logger.log(
             {
                 "vae_reused": 1,
@@ -390,7 +469,7 @@ def load_or_encode_latents(vae, data, args, cache_dir: Path, cache_key: str, dev
 
 
 def train_vae(data, args, device, checkpoint_dir: Path, logger):
-    model = TorchGridcraftVAE().to(device)
+    model = make_vae_from_args(args).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     effective_batch_size = min(args.wm_batch_size, len(RolloutDataset(data)))
     loader = DataLoader(
@@ -433,6 +512,7 @@ def train_vae(data, args, device, checkpoint_dir: Path, logger):
             progress.write(f"[world model] VAE checkpoint step={step} path={checkpoint_dir / f'vae_step_{step}.pt'}")
             torch.save(model.state_dict(), checkpoint_dir / f"vae_step_{step}.pt")
     torch.save(model.state_dict(), checkpoint_dir / "vae.pt")
+    save_world_model_config(checkpoint_dir, args)
     print(f"[world model] saved final VAE checkpoint to {checkpoint_dir / 'vae.pt'}", flush=True)
     return model
 
@@ -559,7 +639,7 @@ def attach_symbolic_dataset_targets(data, coverage: float, episode_limit: int | 
 
 
 def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logger, vae, baseline, step_offset: int = 0):
-    model = TorchGridcraftRNN().to(device)
+    model = make_rnn_from_args(args).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     z_seq, actions, rewards, dones = flatten_agent_sequences(z, data["action"], data["reward"], data["done"])
     valid = flatten_valid_agents(data.get("transition_valid"), z.shape[2] if z.ndim == 4 else 1)
@@ -620,7 +700,15 @@ def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logge
         if obs_window is not None:
             obs_window = obs_window.to(device, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
-        loss, metrics = model.loss(z_seq, action, reward, done)
+        loss, metrics = model.loss(
+            z_seq,
+            action,
+            reward,
+            done,
+            mean_mse_weight=args.mean_mse_weight,
+            reward_loss_weight=args.reward_loss_weight,
+            done_loss_weight=args.done_loss_weight,
+        )
         ns_loss, ns_metrics = symbolic_training_loss(
             vae=vae,
             rnn=model,
@@ -691,6 +779,7 @@ def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logge
                 progress.write(f"[world model] logging comparison video step={step} global_step={global_step}")
                 log_world_model_video(logger, args, args_to_config(args), vae, model, device, step=global_step)
     torch.save(model.state_dict(), checkpoint_dir / "rnn.pt")
+    save_world_model_config(checkpoint_dir, args)
     print(f"[world model] saved final RNN checkpoint to {checkpoint_dir / 'rnn.pt'}", flush=True)
     return model
 
@@ -701,8 +790,12 @@ def evaluate_world_model(vae, rnn, data, device, horizons, baseline=None, args=N
     raw_obs = all_agent_obs(observation_vectors(data, episode_limit=min(128, episodes))).to(device)
     action_data = data["action"][: raw_obs.shape[0]]
     raw_actions = normalize_action_tensor(action_data).to(device)
+    reward_data = data["reward"][: raw_obs.shape[0]]
+    done_data = data["done"][: raw_obs.shape[0]]
     flat_obs = flatten_obs_agents(raw_obs)
     actions = flatten_action_agents(raw_actions)
+    rewards = flatten_reward_agents(reward_data).to(device)
+    dones = flatten_done_agents(done_data, raw_obs.shape[2]).to(device).float()
     z = vae.encode(flat_obs.reshape(-1, flat_obs.shape[-1]), sample=False).reshape(flat_obs.shape[0], flat_obs.shape[1], -1)
     result = {}
     for horizon in horizons:
@@ -716,10 +809,23 @@ def evaluate_world_model(vae, rnn, data, device, horizons, baseline=None, args=N
         target = flat_obs[:, h]
         result[f"compounding_grid_mismatch_h{h}"] = float(grid_mismatch(decoded, target).cpu())
         result[f"compounding_self_mse_h{h}"] = float(torch.mean((decoded[:, -11:] - target[:, -11:]) ** 2).cpu())
-    pred_one, _, _, _ = rnn.step(z[:, 0], actions[:, 0], None, deterministic=True)
+    pred_one, reward_pred_one, done_logit_one, _ = rnn.step(z[:, 0], actions[:, 0], None, deterministic=True)
     decoded_one = vae.decode(pred_one)
+    target_reward = rewards[:, 0].float()
+    target_done = dones[:, 0].float()
+    reward_error = reward_pred_one - target_reward
+    done_prob = torch.sigmoid(done_logit_one)
+    done_pred = done_prob > 0.5
     result["grid_mismatch"] = float(grid_mismatch(decoded_one, flat_obs[:, 1]).cpu())
     result["self_mse"] = float(torch.mean((decoded_one[:, -11:] - flat_obs[:, 1, -11:]) ** 2).cpu())
+    result["reward_mse"] = float(torch.mean(reward_error ** 2).detach().cpu())
+    result["reward_mae"] = float(torch.mean(torch.abs(reward_error)).detach().cpu())
+    result["reward_target_abs_mean"] = float(torch.mean(torch.abs(target_reward)).detach().cpu())
+    result["reward_mae_normalized"] = result["reward_mae"] / max(result["reward_target_abs_mean"], 1.0)
+    result["done_bce"] = float(torch.nn.functional.binary_cross_entropy_with_logits(done_logit_one, target_done).detach().cpu())
+    result["done_accuracy"] = float((done_pred == target_done.bool()).float().mean().detach().cpu())
+    result["done_predicted_positive_rate"] = float(done_pred.float().mean().detach().cpu())
+    result["done_target_positive_rate"] = float(target_done.float().mean().detach().cpu())
     symbolic_metrics, pstr_rows = evaluate_symbolic_rvr(
         vae=vae,
         rnn=rnn,
@@ -737,7 +843,24 @@ def evaluate_world_model(vae, rnn, data, device, horizons, baseline=None, args=N
         result["empirical_determinable_ratio"] = float(
             result.get("pre_determinable_count", result.get("determinable_count", 0.0)) / 550.0
         )
+    result["wm_hpo_score"] = float(world_model_hpo_score(result, baseline or {}))
     return result, pstr_rows
+
+
+def world_model_hpo_score(metrics: dict, baseline: dict) -> float:
+    score = (
+        float(metrics.get("grid_mismatch", 0.0))
+        + float(metrics.get("self_mse", 0.0))
+        + float(metrics.get("reward_mae_normalized", 0.0))
+        + float(metrics.get("done_bce", 0.0))
+    )
+    variant = str(baseline.get("variant", "neural"))
+    if variant == "regularization":
+        score += float(metrics.get("rvr_pre_global", metrics.get("rvr_global", 0.0)))
+    elif variant == "residual":
+        score += float(metrics.get("rvr_post_global", metrics.get("rvr_pre_global", metrics.get("rvr_global", 0.0))))
+        score += float(metrics.get("post_determinable_mismatch", metrics.get("pre_determinable_mismatch", 0.0)))
+    return score
 
 
 def all_agent_obs(obs: torch.Tensor) -> torch.Tensor:

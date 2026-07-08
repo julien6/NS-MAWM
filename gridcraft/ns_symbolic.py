@@ -121,7 +121,7 @@ def symbolic_joint_transition(joint_obs, joint_action, memory=None, coverage=1.0
   for agent_id in agents:
     action = int(joint_action.get(agent_id, ACTION_STAY))
     proposed_shifts[agent_id] = _agent_shift(np.asarray(joint_obs[agent_id]["grid"], dtype=np.int8), action, report=report)
-  _apply_joint_collision_rules(proposed_shifts, memory, report)
+  _apply_joint_collision_rules(proposed_shifts, memory, report, joint_action)
 
   symbolic = {}
   mask = {}
@@ -137,7 +137,8 @@ def symbolic_joint_transition(joint_obs, joint_action, memory=None, coverage=1.0
     )
     _apply_global_static_query(symbolic[agent_id], mask[agent_id], memory, agent_id, proposed_shifts.get(agent_id), report)
 
-  _apply_joint_world_updates(joint_obs, joint_action, memory, report)
+  shared_updates = _apply_joint_world_updates(joint_obs, joint_action, memory, report)
+  _apply_shared_memory_updates(symbolic, mask, memory, proposed_shifts, shared_updates, report)
   _apply_joint_agent_entity_prediction(symbolic, mask, memory, proposed_shifts, report)
   for agent_id in agents:
     apply_coverage(mask[agent_id], coverage)
@@ -584,11 +585,18 @@ def _apply_global_static_query(symbolic, mask, memory, agent_id, shift, report):
     _record_rule(report, "PSTR_JOINT_GLOBAL_STATIC_QUERY", agent_id, features, "joint")
 
 
-def _apply_joint_collision_rules(shifts, memory, report):
+def _apply_joint_collision_rules(shifts, memory, report, joint_action=None):
+  blocked_agents = set()
   desired = {}
   for agent_id, shift in shifts.items():
     pos = memory.get("agent_pos", {}).get(agent_id)
-    if pos is not None and shift is not None:
+    if pos is None:
+      continue
+    action = int(joint_action.get(agent_id, ACTION_STAY)) if joint_action is not None else ACTION_STAY
+    if action in MOVE_DELTAS:
+      dx, dy = MOVE_DELTAS[action]
+      desired[agent_id] = (pos[0] + dx, pos[1] + dy)
+    elif shift is not None:
       desired[agent_id] = (pos[0] + shift[0], pos[1] + shift[1])
   for a, a_target in desired.items():
     for b, b_target in desired.items():
@@ -598,15 +606,18 @@ def _apply_joint_collision_rules(shifts, memory, report):
       b_pos = memory["agent_pos"].get(b)
       collision = a_target == b_target
       swap = a_pos is not None and b_pos is not None and a_target == b_pos and b_target == a_pos
-      if collision or swap:
+      occupied = (b_pos is not None and a_target == b_pos) or (a_pos is not None and b_target == a_pos)
+      if collision or swap or occupied:
         shifts[a] = (0, 0)
         shifts[b] = (0, 0)
-        _record_rule(report, "PSTR_JOINT_MULTI_AGENT_COLLISION", a, [], "joint")
-        _record_rule(report, "PSTR_JOINT_MULTI_AGENT_COLLISION", b, [], "joint")
+        blocked_agents.update((a, b))
+  if blocked_agents:
+    report["collision_blocked_agents"] = sorted(blocked_agents)
 
 
 def _apply_joint_agent_entity_prediction(symbolic, mask, memory, shifts, report):
   center = GRIDCRAFT_VIEW_SIZE // 2
+  collision_blocked = set(report.get("collision_blocked_agents", ()))
   next_positions = {}
   for agent_id, pos in memory.get("agent_pos", {}).items():
     shift = shifts.get(agent_id, (0, 0))
@@ -627,11 +638,14 @@ def _apply_joint_agent_entity_prediction(symbolic, mask, memory, shifts, report)
         features.append(("grid", 2, ly, lx))
     if features:
       _record_rule(report, "PSTR_JOINT_AGENT_ENTITY_PREDICTION", observer, features, "joint")
+      if observer in collision_blocked or any(other in collision_blocked for other in next_positions if other != observer):
+        _record_rule(report, "PSTR_JOINT_MULTI_AGENT_COLLISION", observer, features, "joint")
   memory["agent_pos"].update(next_positions)
 
 
 def _apply_joint_world_updates(joint_obs, joint_action, memory, report):
   center = GRIDCRAFT_VIEW_SIZE // 2
+  updates = {"blocks": {}, "entities": {}}
   for agent_id, obs in joint_obs.items():
     pos = memory.get("agent_pos", {}).get(agent_id)
     if pos is None:
@@ -642,8 +656,9 @@ def _apply_joint_world_updates(joint_obs, joint_action, memory, report):
       for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
         lx, ly = center + dx, center + dy
         if 0 <= lx < GRIDCRAFT_VIEW_SIZE and 0 <= ly < GRIDCRAFT_VIEW_SIZE and int(grid[1, ly, lx]) in (BLOCK_TREE, BLOCK_STONE):
-          memory["blocks"][(pos[0] + dx, pos[1] + dy)] = BLOCK_EMPTY
-          _record_rule(report, "PSTR_JOINT_SHARED_WORLD_UPDATE", agent_id, [], "joint")
+          key = (pos[0] + dx, pos[1] + dy)
+          memory["blocks"][key] = BLOCK_EMPTY
+          updates["blocks"][key] = BLOCK_EMPTY
           break
     if action == ACTION_PICKUP:
       for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
@@ -655,8 +670,44 @@ def _apply_joint_world_updates(joint_obs, joint_action, memory, report):
         item_pos = (pos[0] + dx, pos[1] + dy)
         memory["items"].pop(item_pos, None)
         memory["entities"].pop(item_pos, None)
-        _record_rule(report, "PSTR_JOINT_SHARED_ITEM_UPDATE", agent_id, [], "joint")
+        updates["entities"][item_pos] = ENTITY_NONE
         break
+  return updates
+
+
+def _apply_shared_memory_updates(symbolic, mask, memory, shifts, updates, report):
+  if not updates or (not updates.get("blocks") and not updates.get("entities")):
+    return
+  center = GRIDCRAFT_VIEW_SIZE // 2
+  for agent_id, obs in symbolic.items():
+    pos = memory.get("agent_pos", {}).get(agent_id)
+    if pos is None:
+      continue
+    shift = shifts.get(agent_id, (0, 0))
+    if shift is None:
+      shift = (0, 0)
+    next_pos = (pos[0] + shift[0], pos[1] + shift[1])
+    world_features = []
+    for key, block_value in updates.get("blocks", {}).items():
+      lx = center + (key[0] - next_pos[0])
+      ly = center + (key[1] - next_pos[1])
+      if 0 <= lx < GRIDCRAFT_VIEW_SIZE and 0 <= ly < GRIDCRAFT_VIEW_SIZE:
+        obs["grid"][1, ly, lx] = int(block_value)
+        mask[agent_id]["grid"][1, ly, lx] = True
+        world_features.append(("grid", 1, ly, lx))
+    if world_features:
+      _record_rule(report, "PSTR_JOINT_SHARED_WORLD_UPDATE", agent_id, world_features, "joint")
+
+    item_features = []
+    for key, entity_value in updates.get("entities", {}).items():
+      lx = center + (key[0] - next_pos[0])
+      ly = center + (key[1] - next_pos[1])
+      if 0 <= lx < GRIDCRAFT_VIEW_SIZE and 0 <= ly < GRIDCRAFT_VIEW_SIZE:
+        obs["grid"][2, ly, lx] = int(entity_value)
+        mask[agent_id]["grid"][2, ly, lx] = True
+        item_features.append(("grid", 2, ly, lx))
+    if item_features:
+      _record_rule(report, "PSTR_JOINT_SHARED_ITEM_UPDATE", agent_id, item_features, "joint")
 
 
 def _agent_shift(grid, action, report=None):

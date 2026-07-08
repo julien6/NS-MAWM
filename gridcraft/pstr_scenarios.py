@@ -632,11 +632,11 @@ def _setup_global_static_query(env: VectorizedGridcraftEnv) -> dict:
 
 def _setup_collision(env: VectorizedGridcraftEnv) -> dict:
   _clear(env)
-  env.agent_x[0, 0] = 4
+  env.agent_x[0, 0] = 5
   env.agent_y[0, 0] = 5
   env.agent_x[0, 1] = 6
   env.agent_y[0, 1] = 5
-  return {"agent_pos": {"agent_0": (-1, 0), "agent_1": (1, 0)}}
+  return {"agent_pos": {"agent_0": (0, 0), "agent_1": (1, 0)}}
 
 
 def _setup_joint_harvest_tree(env: VectorizedGridcraftEnv) -> dict:

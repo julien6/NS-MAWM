@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,7 @@ def dataset_key(config: VGridcraftConfig, episodes: int, max_steps: int, seed: i
         "episodes": int(episodes),
         "max_steps": int(max_steps),
         "seed": int(seed),
-            "version": 3,
+        "version": 4,
     }
     raw = json.dumps(payload, sort_keys=True).encode("utf-8")
     return hashlib.sha1(raw).hexdigest()[:16]
@@ -91,6 +92,8 @@ def collect_dataset(
         valid_records = []
         episode_lengths = []
         completed = 0
+        step_count = 0
+        cpu_copy_time = 0.0
         generator = torch.Generator(device=env.device)
         generator.manual_seed(seed + 991)
         print(
@@ -100,40 +103,75 @@ def collect_dataset(
             flush=True,
         )
         obs = env.reset()
-        per_env = [new_episode_buffers() for _ in range(num_envs)]
+        obs_grid_buffer = torch.empty(
+            (num_envs, max_steps, config.num_agents, 3, config.view_size, config.view_size),
+            dtype=torch.int8,
+            device=env.device,
+        )
+        obs_self_buffer = torch.empty(
+            (num_envs, max_steps, config.num_agents, 2 + config.item_classes),
+            dtype=torch.int16,
+            device=env.device,
+        )
+        action_buffer = torch.zeros((num_envs, max_steps, config.num_agents), dtype=torch.long, device=env.device)
+        reward_buffer = torch.zeros((num_envs, max_steps, config.num_agents), dtype=torch.float32, device=env.device)
+        done_buffer = torch.ones((num_envs, max_steps), dtype=torch.bool, device=env.device)
+        valid_buffer = torch.zeros((num_envs, max_steps), dtype=torch.bool, device=env.device)
+        episode_lengths_current = torch.zeros((num_envs,), dtype=torch.long, device=env.device)
+        env_arange = torch.arange(num_envs, device=env.device)
+        collection_start = time.time()
         while completed < episodes:
             actions = torch.randint(0, config.action_size, (num_envs, config.num_agents), generator=generator, device=env.device)
             next_obs, rewards, done, truncated, _ = env.step(actions)
-            terminal = done | truncated
-            full_length = torch.tensor(
-                [len(buffers["actions"]) + 1 >= max_steps for buffers in per_env],
-                dtype=torch.bool,
-                device=env.device,
-            )
+            write_step = episode_lengths_current.clamp(max=max_steps - 1)
+            active = episode_lengths_current < max_steps
+            active_envs = env_arange[active]
+            active_steps = write_step[active]
+            obs_grid_buffer[active_envs, active_steps] = obs["grid"][active_envs].to(torch.int8)
+            obs_self_buffer[active_envs, active_steps] = obs["self"][active_envs].to(torch.int16)
+            action_buffer[active_envs, active_steps] = actions[active_envs]
+            reward_buffer[active_envs, active_steps] = rewards[active_envs]
+            terminal = (done | truncated) & active
+            episode_lengths_current[active_envs] += 1
+            full_length = episode_lengths_current >= max_steps
             terminal = terminal | full_length
-
-            for env_idx in range(num_envs):
-                buffers = per_env[env_idx]
-                buffers["obs_grid"].append(obs["grid"][env_idx].detach().to(torch.int8).cpu())
-                buffers["obs_self"].append(obs["self"][env_idx].detach().to(torch.int16).cpu())
-                buffers["actions"].append(actions[env_idx].detach().cpu())
-                buffers["rewards"].append(rewards[env_idx].detach().cpu())
-                buffers["done"].append(bool(terminal[env_idx].detach().cpu()))
+            done_buffer[active_envs, active_steps] = terminal[active_envs]
+            valid_buffer[active_envs, active_steps] = True
+            step_count += int(active_envs.numel())
 
             finished = torch.nonzero(terminal, as_tuple=False).flatten()
             if finished.numel() > 0:
                 for env_idx in finished.detach().cpu().tolist():
                     if completed >= episodes:
                         break
-                    finalized = finalize_episode(per_env[env_idx], max_steps=max_steps, config=config)
-                    obs_grid_records.append(finalized["obs_grid"])
-                    obs_self_records.append(finalized["obs_self"])
-                    action_records.append(finalized["action"])
-                    reward_records.append(finalized["reward"])
-                    done_records.append(finalized["done"])
-                    valid_records.append(finalized["transition_valid"])
-                    episode_lengths.append(finalized["episode_length"])
-                    per_env[env_idx] = new_episode_buffers()
+                    length = int(episode_lengths_current[env_idx].detach().cpu())
+                    copy_start = time.time()
+                    obs_grid_record = obs_grid_buffer[env_idx].detach().cpu().clone()
+                    obs_self_record = obs_self_buffer[env_idx].detach().cpu().clone()
+                    action_record = action_buffer[env_idx].detach().cpu().clone()
+                    reward_record = reward_buffer[env_idx].detach().cpu().clone()
+                    done_record = done_buffer[env_idx].detach().cpu().clone()
+                    valid_record = valid_buffer[env_idx].detach().cpu().clone()
+                    if 0 < length < max_steps:
+                        obs_grid_record[length:] = obs_grid_record[length - 1]
+                        obs_self_record[length:] = obs_self_record[length - 1]
+                        action_record[length:] = 0
+                        reward_record[length:] = 0.0
+                        done_record[length:] = True
+                        valid_record[length:] = False
+                    obs_grid_records.append(obs_grid_record)
+                    obs_self_records.append(obs_self_record)
+                    action_records.append(action_record)
+                    reward_records.append(reward_record)
+                    done_records.append(done_record)
+                    valid_records.append(valid_record)
+                    cpu_copy_time += time.time() - copy_start
+                    episode_lengths.append(length)
+                    episode_lengths_current[env_idx] = 0
+                    done_buffer[env_idx] = True
+                    valid_buffer[env_idx] = False
+                    action_buffer[env_idx] = 0
+                    reward_buffer[env_idx] = 0.0
                     completed += 1
                     if completed == episodes or completed % max(num_envs * 10, 1) == 0:
                         print(f"[dataset] collected {completed}/{episodes} episodes", flush=True)
@@ -145,6 +183,7 @@ def collect_dataset(
 
         lengths = torch.as_tensor(episode_lengths, dtype=torch.long)
         skipped = int(episodes * max_steps - int(torch.stack(valid_records, dim=0).sum().item()))
+        elapsed = max(time.time() - collection_start, 1e-6)
         return {
             "obs_grid": torch.stack(obs_grid_records, dim=0).to(torch.int8),
             "obs_self": torch.stack(obs_self_records, dim=0).to(torch.int16),
@@ -164,6 +203,9 @@ def collect_dataset(
                 "invalid_padded_transition_count": skipped,
                 "mean_episode_length": float(lengths.float().mean().item()) if lengths.numel() else 0.0,
                 "truncation_or_done_rate": float((lengths.float() < float(max_steps)).float().mean().item()) if lengths.numel() else 0.0,
+                "collection_env_steps_per_second": float(step_count / elapsed),
+                "collection_agent_steps_per_second": float(step_count * config.num_agents / elapsed),
+                "collection_cpu_copy_time": float(cpu_copy_time),
             },
         }
     finally:
