@@ -17,15 +17,40 @@ ENTITY_ARGS=()
 if [[ -n "${WANDB_ENTITY:-}" ]]; then
   ENTITY_ARGS=(--entity "$WANDB_ENTITY")
 fi
+RUN_ENTITY_ARGS=()
+if [[ -n "${WANDB_ENTITY:-}" ]]; then
+  RUN_ENTITY_ARGS=(--wandb-entity "$WANDB_ENTITY")
+fi
 
 MARL_HPO_RESULTS_DIR="${MARL_HPO_RESULTS_DIR:-hpo_results/marl}"
 MARL_HPO_TRIALS_DIR="${MARL_HPO_TRIALS_DIR:-runs_benchmarl_marl_hpo}"
 MARL_HPO_MODE="${MARL_HPO_MODE:-standard}"
+MARL_HPO_STAGE="${MARL_HPO_STAGE:-$MARL_HPO_MODE}"
+case "$MARL_HPO_STAGE" in
+  quick) MARL_HPO_STAGE="screen" ;;
+  standard) MARL_HPO_STAGE="promote" ;;
+  serious) MARL_HPO_STAGE="final" ;;
+esac
+MARL_HPO_TOP_K="${MARL_HPO_TOP_K:-3}"
+MARL_HPO_SEEDS="${MARL_HPO_SEEDS:-${MARL_HPO_SEED:-${SEED:-1}}}"
+HPO_BENCHMARK_FIRST="${HPO_BENCHMARK_FIRST:-0}"
 MARL_HPO_FAMILIES="${MARL_HPO_FAMILIES:-masac_core mambpo_imagination}"
 FORCE_MARL_HPO="${FORCE_MARL_HPO:-0}"
+if [[ "$MARL_HPO_STAGE" == "auto" ]]; then
+  MARL_HPO_STAGE="final"
+  for family in $MARL_HPO_FAMILIES; do
+    if [[ ! -f "${MARL_HPO_RESULTS_DIR}/${family}/screen_results.json" ]]; then
+      MARL_HPO_STAGE="screen"
+      break
+    fi
+    if [[ ! -f "${MARL_HPO_RESULTS_DIR}/${family}/promoted_configs.json" ]]; then
+      MARL_HPO_STAGE="promote"
+    fi
+  done
+fi
 
-case "$MARL_HPO_MODE" in
-  quick)
+case "$MARL_HPO_STAGE" in
+  screen)
     MARL_HPO_COUNT="${MARL_HPO_COUNT:-3}"
     export MARL_HPO_NUM_ENVS="${MARL_HPO_NUM_ENVS:-16}"
     export MARL_HPO_MAX_STEPS="${MARL_HPO_MAX_STEPS:-64}"
@@ -33,16 +58,16 @@ case "$MARL_HPO_MODE" in
     export MARL_HPO_EVAL_EVERY_ITERS="${MARL_HPO_EVAL_EVERY_ITERS:-1}"
     export MARL_HPO_EVAL_EPISODES="${MARL_HPO_EVAL_EPISODES:-1}"
     ;;
-  standard)
-    MARL_HPO_COUNT="${MARL_HPO_COUNT:-20}"
+  promote)
+    MARL_HPO_COUNT="${MARL_HPO_COUNT:-${MARL_HPO_TOP_K}}"
     export MARL_HPO_NUM_ENVS="${MARL_HPO_NUM_ENVS:-128}"
     export MARL_HPO_MAX_STEPS="${MARL_HPO_MAX_STEPS:-500}"
     export MARL_HPO_MAX_ITERS="${MARL_HPO_MAX_ITERS:-200}"
     export MARL_HPO_EVAL_EVERY_ITERS="${MARL_HPO_EVAL_EVERY_ITERS:-10}"
     export MARL_HPO_EVAL_EPISODES="${MARL_HPO_EVAL_EPISODES:-4}"
     ;;
-  serious)
-    MARL_HPO_COUNT="${MARL_HPO_COUNT:-50}"
+  final)
+    MARL_HPO_COUNT="${MARL_HPO_COUNT:-${MARL_HPO_TOP_K}}"
     export MARL_HPO_NUM_ENVS="${MARL_HPO_NUM_ENVS:-512}"
     export MARL_HPO_MAX_STEPS="${MARL_HPO_MAX_STEPS:-500}"
     export MARL_HPO_MAX_ITERS="${MARL_HPO_MAX_ITERS:-1000}"
@@ -50,7 +75,7 @@ case "$MARL_HPO_MODE" in
     export MARL_HPO_EVAL_EPISODES="${MARL_HPO_EVAL_EPISODES:-4}"
     ;;
   *)
-    echo "Unsupported MARL_HPO_MODE=${MARL_HPO_MODE}; expected quick, standard, or serious." >&2
+    echo "Unsupported MARL_HPO_STAGE=${MARL_HPO_STAGE}; expected screen, promote, final, auto, quick, standard, or serious." >&2
     exit 2
     ;;
 esac
@@ -78,13 +103,20 @@ config_for_family() {
 
 echo "Gridcraft MARL HPO pipeline"
 echo "  project:       ${PROJECT}"
-echo "  mode:          ${MARL_HPO_MODE}"
+echo "  mode/stage:    ${MARL_HPO_MODE}/${MARL_HPO_STAGE}"
 echo "  count/family:  ${MARL_HPO_COUNT}"
+echo "  top-k:         ${MARL_HPO_TOP_K}"
+echo "  seeds:         ${MARL_HPO_SEEDS}"
 echo "  families:      ${MARL_HPO_FAMILIES}"
 echo "  results dir:   ${MARL_HPO_RESULTS_DIR}"
 echo "  trials dir:    ${MARL_HPO_TRIALS_DIR}"
 echo "  wm run dir:    ${MARL_HPO_WM_RUN_DIR}"
 echo "  budget:        envs=${MARL_HPO_NUM_ENVS}, max_steps=${MARL_HPO_MAX_STEPS}, max_iters=${MARL_HPO_MAX_ITERS}"
+
+if [[ "$HPO_BENCHMARK_FIRST" == "1" ]]; then
+  echo "[marl-hpo] running throughput benchmark before HPO"
+  "$PYTHON_BIN" benchmark_hpo_throughput.py --profile "${RESOURCE_PROFILE:-spark_max}" --target marl --out "${MARL_HPO_RESULTS_DIR}/throughput_report.json" || true
+fi
 
 for family in $MARL_HPO_FAMILIES; do
   best_config="${MARL_HPO_RESULTS_DIR}/${family}/best_config.json"
@@ -101,27 +133,69 @@ for family in $MARL_HPO_FAMILIES; do
     fi
   fi
 
-  sweep_config="$(config_for_family "$family")"
-  echo "[marl-hpo] ${family}: creating sweep from ${sweep_config}"
-  SWEEP_OUTPUT="$(../.venv/bin/wandb sweep --project "$PROJECT" "${ENTITY_ARGS[@]}" "$sweep_config" 2>&1)"
-  printf '%s\n' "$SWEEP_OUTPUT"
-  SWEEP_ID="$(printf '%s\n' "$SWEEP_OUTPUT" | awk '
-    /Creating sweep with ID:/ {print $NF}
-    /wandb agent/ {print $NF}
-  ' | tail -n 1)"
-  if [[ -z "$SWEEP_ID" ]]; then
-    echo "Could not parse sweep id from wandb sweep output for ${family}." >&2
-    exit 1
+  trial_glob_count="$(find "${MARL_HPO_TRIALS_DIR}/${family}" -name marl_hpo_trial_summary.json 2>/dev/null | wc -l | tr -d ' ')"
+  if [[ "$MARL_HPO_STAGE" == "screen" || "$trial_glob_count" == "0" ]]; then
+    sweep_config="$(config_for_family "$family")"
+    if [[ "$MARL_HPO_STAGE" != "screen" && "$trial_glob_count" == "0" ]]; then
+      echo "[marl-hpo] ${family}: no previous screen trials found; bootstrapping ${MARL_HPO_STAGE} with a sweep from ${sweep_config}"
+    else
+      echo "[marl-hpo] ${family}: creating screen sweep from ${sweep_config}"
+    fi
+    SWEEP_OUTPUT="$(../.venv/bin/wandb sweep --project "$PROJECT" "${ENTITY_ARGS[@]}" "$sweep_config" 2>&1)"
+    printf '%s\n' "$SWEEP_OUTPUT"
+    SWEEP_ID="$(printf '%s\n' "$SWEEP_OUTPUT" | awk '
+      /Creating sweep with ID:/ {print $NF}
+      /wandb agent/ {print $NF}
+    ' | tail -n 1)"
+    if [[ -z "$SWEEP_ID" ]]; then
+      echo "Could not parse sweep id from wandb sweep output for ${family}." >&2
+      exit 1
+    fi
+    echo "[marl-hpo] ${family}: launching ${MARL_HPO_COUNT} ${MARL_HPO_STAGE} trials (${SWEEP_ID})"
+    "$PYTHON_BIN" -m wandb agent --count "$MARL_HPO_COUNT" "$SWEEP_ID"
+  else
+    "$PYTHON_BIN" marl_hpo_registry.py write-stage-results \
+      --family "$family" \
+      --trials-root "${MARL_HPO_TRIALS_DIR}/${family}" \
+      --results-root "$MARL_HPO_RESULTS_DIR" \
+      --stage promote \
+      --top-k "$MARL_HPO_TOP_K" >/dev/null
+    promoted_path="${MARL_HPO_RESULTS_DIR}/${family}/promoted_configs.json"
+    echo "[marl-hpo] ${family}: replaying top configs from ${promoted_path}"
+    config_count="$("$PYTHON_BIN" - <<PY
+import json
+from pathlib import Path
+data=json.loads(Path("${promoted_path}").read_text())
+print(len(data.get("configs", [])))
+PY
+)"
+    if [[ "$config_count" == "0" ]]; then
+      echo "[marl-hpo] ${family}: no promoted configs available in ${promoted_path}" >&2
+      exit 2
+    fi
+    for idx in $(seq 0 $((config_count - 1))); do
+      fixed_config="$("$PYTHON_BIN" - <<PY
+import json
+from pathlib import Path
+data=json.loads(Path("${promoted_path}").read_text())
+print(json.dumps(data["configs"][${idx}], sort_keys=True))
+PY
+)"
+      for seed in $MARL_HPO_SEEDS; do
+        echo "[marl-hpo] ${family}: ${MARL_HPO_STAGE} replay config=$((idx + 1))/${config_count} seed=${seed}"
+        MARL_HPO_FIXED_CONFIG_JSON="$fixed_config" MARL_HPO_SEED="$seed" "$PYTHON_BIN" sweep_benchmarl_marl_hpo.py --hpo-family "$family" --wandb-project "$PROJECT" "${RUN_ENTITY_ARGS[@]}"
+      done
+    done
   fi
-  echo "[marl-hpo] ${family}: launching ${MARL_HPO_COUNT} trials (${SWEEP_ID})"
-  "$PYTHON_BIN" -m wandb agent --count "$MARL_HPO_COUNT" "$SWEEP_ID"
 
   echo "[marl-hpo] ${family}: selecting best local trial"
   "$PYTHON_BIN" marl_hpo_registry.py select-best \
     --family "$family" \
     --trials-root "${MARL_HPO_TRIALS_DIR}/${family}" \
     --results-root "$MARL_HPO_RESULTS_DIR" \
-    --budget-json "{\"mode\":\"${MARL_HPO_MODE}\",\"count\":${MARL_HPO_COUNT},\"num_envs\":${MARL_HPO_NUM_ENVS},\"max_steps\":${MARL_HPO_MAX_STEPS},\"max_iters\":${MARL_HPO_MAX_ITERS}}"
+    --stage "$MARL_HPO_STAGE" \
+    --top-k "$MARL_HPO_TOP_K" \
+    --budget-json "{\"mode\":\"${MARL_HPO_MODE}\",\"stage\":\"${MARL_HPO_STAGE}\",\"count\":${MARL_HPO_COUNT},\"top_k\":${MARL_HPO_TOP_K},\"seeds\":\"${MARL_HPO_SEEDS}\",\"num_envs\":${MARL_HPO_NUM_ENVS},\"max_steps\":${MARL_HPO_MAX_STEPS},\"max_iters\":${MARL_HPO_MAX_ITERS}}"
 done
 
 "$PYTHON_BIN" marl_hpo_registry.py write-summary --results-root "$MARL_HPO_RESULTS_DIR" >/dev/null

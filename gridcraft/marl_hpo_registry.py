@@ -134,6 +134,8 @@ def select_best_config(
     trials_root: str | Path,
     results_root: str | Path = DEFAULT_MARL_HPO_ROOT,
     budget: dict[str, Any] | None = None,
+    stage: str = "screen",
+    top_k: int = 3,
 ) -> dict[str, Any]:
     family = normalize_family(family)
     candidates = []
@@ -151,6 +153,13 @@ def select_best_config(
     if not candidates:
         raise FileNotFoundError(f"no valid MARL HPO trial summaries found for {family} under {trials_root}")
     candidates.sort(key=lambda item: item[0], reverse=True)
+    write_stage_results(
+        family=family,
+        candidates=[payload for _, _, payload in candidates],
+        results_root=results_root,
+        stage=stage,
+        top_k=top_k,
+    )
     score, source_path, best = candidates[0]
     out = {
         "hpo_family": family,
@@ -169,6 +178,56 @@ def select_best_config(
     with path.open("w") as handle:
         json.dump(out, handle, indent=2)
     return out
+
+
+def collect_ranked_trials(*, family: str, trials_root: str | Path) -> list[dict[str, Any]]:
+    family = normalize_family(family)
+    ranked = []
+    for path in sorted(Path(trials_root).glob("**/marl_hpo_trial_summary.json")):
+        try:
+            with path.open() as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if payload.get("hpo_family") != family:
+            continue
+        score = _as_float(payload.get("score"), default=-math.inf)
+        if math.isfinite(score):
+            payload = dict(payload)
+            payload["_source_path"] = str(path)
+            ranked.append(payload)
+    ranked.sort(key=lambda item: _as_float(item.get("score"), default=-math.inf), reverse=True)
+    return ranked
+
+
+def write_stage_results(
+    *,
+    family: str,
+    candidates: list[dict[str, Any]],
+    results_root: str | Path = DEFAULT_MARL_HPO_ROOT,
+    stage: str = "screen",
+    top_k: int = 3,
+) -> dict[str, Any]:
+    family = normalize_family(family)
+    top_k = max(1, int(top_k))
+    root = Path(results_root) / family
+    payload = {
+        "hpo_family": family,
+        "stage": stage,
+        "candidate_count": len(candidates),
+        "top_k": top_k,
+        "candidates": candidates,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if stage == "screen":
+        out_path = root / "screen_results.json"
+    else:
+        out_path = root / "promoted_configs.json"
+        payload["configs"] = [candidate.get("hyperparameters", {}) for candidate in candidates[:top_k]]
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w") as handle:
+        json.dump(payload, handle, indent=2)
+    return payload
 
 
 def write_summary(results_root: str | Path = DEFAULT_MARL_HPO_ROOT) -> dict[str, Any]:
@@ -253,6 +312,15 @@ def main() -> None:
     select.add_argument("--trials-root", required=True)
     select.add_argument("--results-root", default=str(DEFAULT_MARL_HPO_ROOT))
     select.add_argument("--budget-json", default="{}")
+    select.add_argument("--stage", default="screen")
+    select.add_argument("--top-k", type=int, default=3)
+
+    stage_results = sub.add_parser("write-stage-results")
+    stage_results.add_argument("--family", required=True, choices=MARL_HPO_FAMILIES)
+    stage_results.add_argument("--trials-root", required=True)
+    stage_results.add_argument("--results-root", default=str(DEFAULT_MARL_HPO_ROOT))
+    stage_results.add_argument("--stage", default="screen")
+    stage_results.add_argument("--top-k", type=int, default=3)
 
     summary = sub.add_parser("write-summary")
     summary.add_argument("--results-root", default=str(DEFAULT_MARL_HPO_ROOT))
@@ -276,7 +344,11 @@ def main() -> None:
             print(shell_exports(best, family))
         return
     if args.command == "select-best":
-        print(json.dumps(select_best_config(family=args.family, trials_root=args.trials_root, results_root=args.results_root, budget=json.loads(args.budget_json)), indent=2))
+        print(json.dumps(select_best_config(family=args.family, trials_root=args.trials_root, results_root=args.results_root, budget=json.loads(args.budget_json), stage=args.stage, top_k=args.top_k), indent=2))
+        return
+    if args.command == "write-stage-results":
+        ranked = collect_ranked_trials(family=args.family, trials_root=args.trials_root)
+        print(json.dumps(write_stage_results(family=args.family, candidates=ranked, results_root=args.results_root, stage=args.stage, top_k=args.top_k), indent=2))
         return
     if args.command == "write-summary":
         print(json.dumps(write_summary(args.results_root), indent=2))

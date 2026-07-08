@@ -21,7 +21,7 @@ def dataset_key(config: VGridcraftConfig, episodes: int, max_steps: int, seed: i
         "episodes": int(episodes),
         "max_steps": int(max_steps),
         "seed": int(seed),
-        "version": 4,
+        "version": 5,
     }
     raw = json.dumps(payload, sort_keys=True).encode("utf-8")
     return hashlib.sha1(raw).hexdigest()[:16]
@@ -84,13 +84,21 @@ def collect_dataset(
     config = config or VGridcraftConfig(max_steps=max_steps, seed=seed)
     env = VectorizedGridcraftEnv(num_envs=num_envs, num_agents=config.num_agents, device=device, seed=seed, config=config)
     try:
-        obs_grid_records = []
-        obs_self_records = []
-        action_records = []
-        reward_records = []
-        done_records = []
-        valid_records = []
-        episode_lengths = []
+        obs_grid_records = torch.empty(
+            (episodes, max_steps, config.num_agents, 3, config.view_size, config.view_size),
+            dtype=torch.int8,
+            device="cpu",
+        )
+        obs_self_records = torch.empty(
+            (episodes, max_steps, config.num_agents, 2 + config.item_classes),
+            dtype=torch.int16,
+            device="cpu",
+        )
+        action_records = torch.empty((episodes, max_steps, config.num_agents), dtype=torch.int16, device="cpu")
+        reward_records = torch.empty((episodes, max_steps, config.num_agents), dtype=torch.float32, device="cpu")
+        done_records = torch.empty((episodes, max_steps), dtype=torch.bool, device="cpu")
+        valid_records = torch.empty((episodes, max_steps), dtype=torch.bool, device="cpu")
+        episode_lengths = torch.empty((episodes,), dtype=torch.long, device="cpu")
         completed = 0
         step_count = 0
         cpu_copy_time = 0.0
@@ -146,27 +154,22 @@ def collect_dataset(
                         break
                     length = int(episode_lengths_current[env_idx].detach().cpu())
                     copy_start = time.time()
-                    obs_grid_record = obs_grid_buffer[env_idx].detach().cpu().clone()
-                    obs_self_record = obs_self_buffer[env_idx].detach().cpu().clone()
-                    action_record = action_buffer[env_idx].detach().cpu().clone()
-                    reward_record = reward_buffer[env_idx].detach().cpu().clone()
-                    done_record = done_buffer[env_idx].detach().cpu().clone()
-                    valid_record = valid_buffer[env_idx].detach().cpu().clone()
+                    out_idx = completed
+                    obs_grid_records[out_idx].copy_(obs_grid_buffer[env_idx].detach().cpu())
+                    obs_self_records[out_idx].copy_(obs_self_buffer[env_idx].detach().cpu())
+                    action_records[out_idx].copy_(action_buffer[env_idx].detach().cpu().to(torch.int16))
+                    reward_records[out_idx].copy_(reward_buffer[env_idx].detach().cpu())
+                    done_records[out_idx].copy_(done_buffer[env_idx].detach().cpu())
+                    valid_records[out_idx].copy_(valid_buffer[env_idx].detach().cpu())
                     if 0 < length < max_steps:
-                        obs_grid_record[length:] = obs_grid_record[length - 1]
-                        obs_self_record[length:] = obs_self_record[length - 1]
-                        action_record[length:] = 0
-                        reward_record[length:] = 0.0
-                        done_record[length:] = True
-                        valid_record[length:] = False
-                    obs_grid_records.append(obs_grid_record)
-                    obs_self_records.append(obs_self_record)
-                    action_records.append(action_record)
-                    reward_records.append(reward_record)
-                    done_records.append(done_record)
-                    valid_records.append(valid_record)
+                        obs_grid_records[out_idx, length:] = obs_grid_records[out_idx, length - 1]
+                        obs_self_records[out_idx, length:] = obs_self_records[out_idx, length - 1]
+                        action_records[out_idx, length:] = 0
+                        reward_records[out_idx, length:] = 0.0
+                        done_records[out_idx, length:] = True
+                        valid_records[out_idx, length:] = False
                     cpu_copy_time += time.time() - copy_start
-                    episode_lengths.append(length)
+                    episode_lengths[out_idx] = length
                     episode_lengths_current[env_idx] = 0
                     done_buffer[env_idx] = True
                     valid_buffer[env_idx] = False
@@ -181,16 +184,17 @@ def collect_dataset(
                     next_obs = env.observation()
             obs = next_obs
 
-        lengths = torch.as_tensor(episode_lengths, dtype=torch.long)
-        skipped = int(episodes * max_steps - int(torch.stack(valid_records, dim=0).sum().item()))
+        lengths = episode_lengths
+        valid_transition_count = int(valid_records.sum().item())
+        skipped = int(episodes * max_steps - valid_transition_count)
         elapsed = max(time.time() - collection_start, 1e-6)
         return {
-            "obs_grid": torch.stack(obs_grid_records, dim=0).to(torch.int8),
-            "obs_self": torch.stack(obs_self_records, dim=0).to(torch.int16),
-            "action": torch.stack(action_records, dim=0).long(),
-            "reward": torch.stack(reward_records, dim=0).float(),
-            "done": torch.stack(done_records, dim=0).bool(),
-            "transition_valid": torch.stack(valid_records, dim=0).bool(),
+            "obs_grid": obs_grid_records,
+            "obs_self": obs_self_records,
+            "action": action_records,
+            "reward": reward_records,
+            "done": done_records,
+            "transition_valid": valid_records,
             "episode_length": lengths,
             "metadata": {
                 "episodes": int(episodes),
@@ -198,8 +202,8 @@ def collect_dataset(
                 "num_envs": int(num_envs),
                 "seed": int(seed),
                 "config": asdict(config),
-                "storage": "tabular_compact_v3",
-                "valid_transition_count": int(torch.stack(valid_records, dim=0).sum().item()),
+                "storage": "tabular_compact_v5_preallocated_int16_actions",
+                "valid_transition_count": valid_transition_count,
                 "invalid_padded_transition_count": skipped,
                 "mean_episode_length": float(lengths.float().mean().item()) if lengths.numel() else 0.0,
                 "truncation_or_done_rate": float((lengths.float() < float(max_steps)).float().mean().item()) if lengths.numel() else 0.0,

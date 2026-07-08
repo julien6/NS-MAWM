@@ -17,15 +17,40 @@ ENTITY_ARGS=()
 if [[ -n "${WANDB_ENTITY:-}" ]]; then
   ENTITY_ARGS=(--entity "$WANDB_ENTITY")
 fi
+RUN_ENTITY_ARGS=()
+if [[ -n "${WANDB_ENTITY:-}" ]]; then
+  RUN_ENTITY_ARGS=(--wandb-entity "$WANDB_ENTITY")
+fi
 
 HPO_RESULTS_DIR="${HPO_RESULTS_DIR:-hpo_results/world_model}"
 HPO_TRIALS_DIR="${HPO_TRIALS_DIR:-runs_benchmarl_hpo}"
 HPO_MODE="${HPO_MODE:-standard}"
+HPO_STAGE="${HPO_STAGE:-$HPO_MODE}"
+case "$HPO_STAGE" in
+  quick) HPO_STAGE="screen" ;;
+  standard) HPO_STAGE="promote" ;;
+  serious) HPO_STAGE="final" ;;
+esac
+HPO_TOP_K="${HPO_TOP_K:-3}"
+HPO_SEEDS="${HPO_SEEDS:-${HPO_SEED:-${SEED:-1}}}"
+HPO_BENCHMARK_FIRST="${HPO_BENCHMARK_FIRST:-0}"
 FORCE_WM_HPO="${FORCE_WM_HPO:-0}"
 HPO_FAMILIES="${HPO_FAMILIES:-neural_k0.0 regularization_k0.3 regularization_k0.6 residual_k0.3 residual_k0.6}"
+if [[ "$HPO_STAGE" == "auto" ]]; then
+  HPO_STAGE="final"
+  for family in $HPO_FAMILIES; do
+    if [[ ! -f "${HPO_RESULTS_DIR}/${family}/screen_results.json" ]]; then
+      HPO_STAGE="screen"
+      break
+    fi
+    if [[ ! -f "${HPO_RESULTS_DIR}/${family}/promoted_configs.json" ]]; then
+      HPO_STAGE="promote"
+    fi
+  done
+fi
 
-case "$HPO_MODE" in
-  quick)
+case "$HPO_STAGE" in
+  screen)
     HPO_COUNT="${HPO_COUNT:-3}"
     export HPO_EPISODES="${HPO_EPISODES:-512}"
     export HPO_MAX_STEPS="${HPO_MAX_STEPS:-64}"
@@ -35,8 +60,8 @@ case "$HPO_MODE" in
     export HPO_EVAL_EVERY="${HPO_EVAL_EVERY:-500}"
     export HPO_HORIZONS="${HPO_HORIZONS:-1 5 10}"
     ;;
-  standard)
-    HPO_COUNT="${HPO_COUNT:-20}"
+  promote)
+    HPO_COUNT="${HPO_COUNT:-${HPO_TOP_K}}"
     export HPO_EPISODES="${HPO_EPISODES:-4096}"
     export HPO_MAX_STEPS="${HPO_MAX_STEPS:-256}"
     export HPO_NUM_ENVS="${HPO_NUM_ENVS:-256}"
@@ -45,8 +70,8 @@ case "$HPO_MODE" in
     export HPO_EVAL_EVERY="${HPO_EVAL_EVERY:-2500}"
     export HPO_HORIZONS="${HPO_HORIZONS:-1 5 10 25}"
     ;;
-  serious)
-    HPO_COUNT="${HPO_COUNT:-50}"
+  final)
+    HPO_COUNT="${HPO_COUNT:-${HPO_TOP_K}}"
     export HPO_EPISODES="${HPO_EPISODES:-30000}"
     export HPO_MAX_STEPS="${HPO_MAX_STEPS:-500}"
     export HPO_NUM_ENVS="${HPO_NUM_ENVS:-1024}"
@@ -56,7 +81,7 @@ case "$HPO_MODE" in
     export HPO_HORIZONS="${HPO_HORIZONS:-1 5 10 25 50 100}"
     ;;
   *)
-    echo "Unsupported HPO_MODE=${HPO_MODE}; expected quick, standard, or serious." >&2
+    echo "Unsupported HPO_STAGE=${HPO_STAGE}; expected screen, promote, final, auto, quick, standard, or serious." >&2
     exit 2
     ;;
 esac
@@ -86,12 +111,19 @@ config_for_family() {
 
 echo "Gridcraft World Model HPO pipeline"
 echo "  project:       ${PROJECT}"
-echo "  mode:          ${HPO_MODE}"
+echo "  mode/stage:    ${HPO_MODE}/${HPO_STAGE}"
 echo "  count/family:  ${HPO_COUNT}"
+echo "  top-k:         ${HPO_TOP_K}"
+echo "  seeds:         ${HPO_SEEDS}"
 echo "  families:      ${HPO_FAMILIES}"
 echo "  results dir:   ${HPO_RESULTS_DIR}"
 echo "  trials dir:    ${HPO_TRIALS_DIR}"
 echo "  budget:        episodes=${HPO_EPISODES}, max_steps=${HPO_MAX_STEPS}, envs=${HPO_NUM_ENVS}, vae_steps=${HPO_VAE_STEPS}, rnn_steps=${HPO_RNN_STEPS}"
+
+if [[ "$HPO_BENCHMARK_FIRST" == "1" ]]; then
+  echo "[wm-hpo] running throughput benchmark before HPO"
+  "$PYTHON_BIN" benchmark_hpo_throughput.py --profile "${RESOURCE_PROFILE:-spark_max}" --target wm --out "${HPO_RESULTS_DIR}/throughput_report.json" || true
+fi
 
 for family in $HPO_FAMILIES; do
   best_config="${HPO_RESULTS_DIR}/${family}/best_config.json"
@@ -100,27 +132,69 @@ for family in $HPO_FAMILIES; do
     continue
   fi
 
-  sweep_config="$(config_for_family "$family")"
-  echo "[wm-hpo] ${family}: creating sweep from ${sweep_config}"
-  SWEEP_OUTPUT="$(../.venv/bin/wandb sweep --project "$PROJECT" "${ENTITY_ARGS[@]}" "$sweep_config" 2>&1)"
-  printf '%s\n' "$SWEEP_OUTPUT"
-  SWEEP_ID="$(printf '%s\n' "$SWEEP_OUTPUT" | awk '
-    /Creating sweep with ID:/ {print $NF}
-    /wandb agent/ {print $NF}
-  ' | tail -n 1)"
-  if [[ -z "$SWEEP_ID" ]]; then
-    echo "Could not parse sweep id from wandb sweep output for ${family}." >&2
-    exit 1
+  trial_glob_count="$(find "${HPO_TRIALS_DIR}/${family}" -name hpo_trial_summary.json 2>/dev/null | wc -l | tr -d ' ')"
+  if [[ "$HPO_STAGE" == "screen" || "$trial_glob_count" == "0" ]]; then
+    sweep_config="$(config_for_family "$family")"
+    if [[ "$HPO_STAGE" != "screen" && "$trial_glob_count" == "0" ]]; then
+      echo "[wm-hpo] ${family}: no previous screen trials found; bootstrapping ${HPO_STAGE} with a sweep from ${sweep_config}"
+    else
+      echo "[wm-hpo] ${family}: creating screen sweep from ${sweep_config}"
+    fi
+    SWEEP_OUTPUT="$(../.venv/bin/wandb sweep --project "$PROJECT" "${ENTITY_ARGS[@]}" "$sweep_config" 2>&1)"
+    printf '%s\n' "$SWEEP_OUTPUT"
+    SWEEP_ID="$(printf '%s\n' "$SWEEP_OUTPUT" | awk '
+      /Creating sweep with ID:/ {print $NF}
+      /wandb agent/ {print $NF}
+    ' | tail -n 1)"
+    if [[ -z "$SWEEP_ID" ]]; then
+      echo "Could not parse sweep id from wandb sweep output for ${family}." >&2
+      exit 1
+    fi
+    echo "[wm-hpo] ${family}: launching ${HPO_COUNT} ${HPO_STAGE} trials (${SWEEP_ID})"
+    "$PYTHON_BIN" -m wandb agent --count "$HPO_COUNT" "$SWEEP_ID"
+  else
+    "$PYTHON_BIN" wm_hpo_registry.py write-stage-results \
+      --hpo-family "$family" \
+      --trials-root "${HPO_TRIALS_DIR}/${family}" \
+      --results-root "$HPO_RESULTS_DIR" \
+      --stage promote \
+      --top-k "$HPO_TOP_K" >/dev/null
+    promoted_path="${HPO_RESULTS_DIR}/${family}/promoted_configs.json"
+    echo "[wm-hpo] ${family}: replaying top configs from ${promoted_path}"
+    config_count="$("$PYTHON_BIN" - <<PY
+import json
+from pathlib import Path
+data=json.loads(Path("${promoted_path}").read_text())
+print(len(data.get("configs", [])))
+PY
+)"
+    if [[ "$config_count" == "0" ]]; then
+      echo "[wm-hpo] ${family}: no promoted configs available in ${promoted_path}" >&2
+      exit 2
+    fi
+    for idx in $(seq 0 $((config_count - 1))); do
+      fixed_config="$("$PYTHON_BIN" - <<PY
+import json
+from pathlib import Path
+data=json.loads(Path("${promoted_path}").read_text())
+print(json.dumps(data["configs"][${idx}], sort_keys=True))
+PY
+)"
+      for seed in $HPO_SEEDS; do
+        echo "[wm-hpo] ${family}: ${HPO_STAGE} replay config=$((idx + 1))/${config_count} seed=${seed}"
+        HPO_FIXED_CONFIG_JSON="$fixed_config" HPO_SEED="$seed" "$PYTHON_BIN" sweep_benchmarl_wm_hpo.py --hpo-family "$family" --wandb-project "$PROJECT" "${RUN_ENTITY_ARGS[@]}"
+      done
+    done
   fi
-  echo "[wm-hpo] ${family}: launching ${HPO_COUNT} trials (${SWEEP_ID})"
-  "$PYTHON_BIN" -m wandb agent --count "$HPO_COUNT" "$SWEEP_ID"
 
   echo "[wm-hpo] ${family}: selecting best local trial"
   "$PYTHON_BIN" wm_hpo_registry.py select-best \
     --hpo-family "$family" \
     --trials-root "${HPO_TRIALS_DIR}/${family}" \
     --results-root "$HPO_RESULTS_DIR" \
-    --budget-json "{\"mode\":\"${HPO_MODE}\",\"count\":${HPO_COUNT},\"episodes\":${HPO_EPISODES},\"max_steps\":${HPO_MAX_STEPS},\"num_envs\":${HPO_NUM_ENVS},\"vae_steps\":${HPO_VAE_STEPS},\"rnn_steps\":${HPO_RNN_STEPS}}"
+    --stage "$HPO_STAGE" \
+    --top-k "$HPO_TOP_K" \
+    --budget-json "{\"mode\":\"${HPO_MODE}\",\"stage\":\"${HPO_STAGE}\",\"count\":${HPO_COUNT},\"top_k\":${HPO_TOP_K},\"seeds\":\"${HPO_SEEDS}\",\"episodes\":${HPO_EPISODES},\"max_steps\":${HPO_MAX_STEPS},\"num_envs\":${HPO_NUM_ENVS},\"vae_steps\":${HPO_VAE_STEPS},\"rnn_steps\":${HPO_RNN_STEPS}}"
 done
 
 "$PYTHON_BIN" wm_hpo_registry.py write-summary --results-root "$HPO_RESULTS_DIR" >/dev/null

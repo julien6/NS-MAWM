@@ -112,13 +112,15 @@ class TorchGridcraftRNN(nn.Module):
         self.obs_head = nn.Linear(rnn_size, OBS_SIZE)
 
     def forward(self, z: torch.Tensor, actions: torch.Tensor, state=None):
-        action_oh = F.one_hot(actions.clamp(0, self.action_size - 1), self.action_size).float()
+        actions = actions.long().clamp(0, self.action_size - 1)
+        action_oh = F.one_hot(actions, self.action_size).float()
         out, next_state = self.rnn(torch.cat([z, action_oh], dim=-1), state)
         raw = self.head(out)
         return self.split_output(raw), next_state
 
     def forward_with_observation(self, z: torch.Tensor, actions: torch.Tensor, state=None):
-        action_oh = F.one_hot(actions.clamp(0, self.action_size - 1), self.action_size).float()
+        actions = actions.long().clamp(0, self.action_size - 1)
+        action_oh = F.one_hot(actions, self.action_size).float()
         out, next_state = self.rnn(torch.cat([z, action_oh], dim=-1), state)
         raw = self.head(out)
         obs = self.obs_head(out)

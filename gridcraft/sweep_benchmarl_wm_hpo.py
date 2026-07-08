@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 from wm_hpo_registry import (
@@ -61,6 +62,9 @@ def main() -> None:
 
     run = wandb.init(project=args.wandb_project, entity=args.wandb_entity, job_type="world_model_hpo")
     cfg = dict(wandb.config)
+    fixed_config = os.environ.get("HPO_FIXED_CONFIG_JSON")
+    if fixed_config:
+        cfg.update(json.loads(fixed_config))
     script_dir = Path(__file__).resolve().parent
     sys.path.insert(0, str(script_dir))
 
@@ -122,6 +126,7 @@ def main() -> None:
 
     import run_benchmarl_gridcraft
 
+    trial_start = time.time()
     old_argv = sys.argv
     old_keep_wandb_open = os.environ.get("NS_MAWM_KEEP_WANDB_OPEN")
     try:
@@ -153,10 +158,13 @@ def main() -> None:
         sweep_id=getattr(run, "sweep_id", None),
         trial_id=run.id,
     )
+    payload["trial_wall_time"] = time.time() - trial_start
+    payload["metrics"]["trial_wall_time"] = payload["trial_wall_time"]
     write_trial_summary(trial_summary_path(completed_run_dir), payload)
     if metrics:
         run.summary["hpo_family"] = hpo_family
         run.summary["wm_hpo_score"] = payload["score"]
+        run.summary["trial_wall_time"] = payload["trial_wall_time"]
         run.summary["hpo_trial_summary_path"] = str(trial_summary_path(completed_run_dir))
     wandb.finish()
 
