@@ -35,11 +35,14 @@ LAMBDA_RESIDUAL="${LAMBDA_RESIDUAL:-0.25}"
 HPO_RESULTS_DIR="${HPO_RESULTS_DIR:-hpo_results/world_model}"
 REUSE_WM_HPO_CONFIG="${REUSE_WM_HPO_CONFIG:-1}"
 REQUIRE_WM_HPO="${REQUIRE_WM_HPO:-0}"
+REQUIRED_WM_HPO_STAGE="${REQUIRED_WM_HPO_STAGE:-}"
 WM_HPO_FAMILY="${WM_HPO_FAMILY:-}"
 WM_HPO_CONFIG_REUSED="${WM_HPO_CONFIG_REUSED:-0}"
 WM_HPO_CONFIG_PATH="${WM_HPO_CONFIG_PATH:-}"
 WM_HPO_SCORE="${WM_HPO_SCORE:-}"
 WM_HPO_BEST_RUN_URL="${WM_HPO_BEST_RUN_URL:-}"
+WM_HPO_STAGE="${WM_HPO_STAGE:-}"
+WM_HPO_DATASET_CHECKSUM="${WM_HPO_DATASET_CHECKSUM:-}"
 WM_EVAL_EVERY="${WM_EVAL_EVERY:-500}"
 WM_VIDEO_EVERY="${WM_VIDEO_EVERY:-$WM_EVAL_EVERY}"
 WM_HORIZONS="${WM_HORIZONS:-1 5 10 25 50}"
@@ -113,12 +116,16 @@ MARL_MEMORY_SIZE="${MARL_MEMORY_SIZE:-1000000}"
 MARL_HPO_RESULTS_DIR="${MARL_HPO_RESULTS_DIR:-hpo_results/marl}"
 REUSE_MARL_HPO_CONFIG="${REUSE_MARL_HPO_CONFIG:-1}"
 REQUIRE_MARL_HPO="${REQUIRE_MARL_HPO:-0}"
+REQUIRED_MARL_HPO_STAGE="${REQUIRED_MARL_HPO_STAGE:-}"
 MARL_HPO_CORE_REUSED="${MARL_HPO_CORE_REUSED:-0}"
 MARL_HPO_CORE_SCORE="${MARL_HPO_CORE_SCORE:-}"
 MARL_HPO_CORE_CONFIG_PATH="${MARL_HPO_CORE_CONFIG_PATH:-}"
 MARL_HPO_IMAGINATION_REUSED="${MARL_HPO_IMAGINATION_REUSED:-0}"
 MARL_HPO_IMAGINATION_SCORE="${MARL_HPO_IMAGINATION_SCORE:-}"
 MARL_HPO_IMAGINATION_CONFIG_PATH="${MARL_HPO_IMAGINATION_CONFIG_PATH:-}"
+MARL_HPO_CORE_STAGE="${MARL_HPO_CORE_STAGE:-}"
+MARL_HPO_IMAGINATION_STAGE="${MARL_HPO_IMAGINATION_STAGE:-}"
+MARL_HPO_IMAGINATION_CHECKPOINT_CHECKSUM="${MARL_HPO_IMAGINATION_CHECKPOINT_CHECKSUM:-}"
 for legacy_marl_env in MAPPO_MINIBATCH_SIZE MAPPO_MINIBATCH_ITERS MAPPO_EVAL_EVERY_ITERS MAPPO_EVAL_EPISODES MAPPO_VIDEO_EVERY_ITERS MAPPO_HIDDEN_SIZE; do
   if [[ -n "${!legacy_marl_env:-}" ]]; then
     echo "[naming] ${legacy_marl_env} is deprecated for generic MARL settings; prefer MARL_* variables." >&2
@@ -151,6 +158,9 @@ if [[ "$MODEL_BASED" == "1" && "$REUSE_WM_HPO_CONFIG" == "1" ]]; then
   if [[ "$REQUIRE_WM_HPO" == "1" ]]; then
     HPO_EXPORT_CMD+=(--require)
   fi
+  if [[ -n "$REQUIRED_WM_HPO_STAGE" ]]; then
+    HPO_EXPORT_CMD+=(--required-stage "$REQUIRED_WM_HPO_STAGE" --num-agents "$NUM_AGENTS")
+  fi
   echo "[wm-hpo] checking best HPO config for ${BASELINE_ID} in ${HPO_RESULTS_DIR}"
   eval "$("${HPO_EXPORT_CMD[@]}")"
   if [[ "${WM_HPO_CONFIG_REUSED:-0}" == "1" ]]; then
@@ -162,6 +172,9 @@ if [[ "$REUSE_MARL_HPO_CONFIG" == "1" ]]; then
   MARL_HPO_EXPORT_CMD=("$PYTHON_BIN" marl_hpo_registry.py export-env --baseline-id "$BASELINE_ID" --downstream-algo "$MODEL_BASED_DOWNSTREAM_ALGO" --root "$MARL_HPO_RESULTS_DIR")
   if [[ "$REQUIRE_MARL_HPO" == "1" ]]; then
     MARL_HPO_EXPORT_CMD+=(--require)
+  fi
+  if [[ -n "$REQUIRED_MARL_HPO_STAGE" ]]; then
+    MARL_HPO_EXPORT_CMD+=(--required-stage "$REQUIRED_MARL_HPO_STAGE" --num-agents "$NUM_AGENTS")
   fi
   echo "[marl-hpo] checking best MARL HPO config for ${BASELINE_ID} in ${MARL_HPO_RESULTS_DIR}"
   eval "$("${MARL_HPO_EXPORT_CMD[@]}")"
@@ -220,6 +233,8 @@ WM_CMD=(
   --wm-hpo-family "${WM_HPO_FAMILY:-}"
   --wm-hpo-config-reused "${WM_HPO_CONFIG_REUSED:-0}"
   --wm-hpo-config-path "${WM_HPO_CONFIG_PATH:-}"
+  --wm-hpo-stage "${WM_HPO_STAGE:-}"
+  --wm-hpo-dataset-checksum "${WM_HPO_DATASET_CHECKSUM:-}"
   --eval-every "$WM_EVAL_EVERY"
   --video-every "$WM_VIDEO_EVERY"
   --video-max-steps "$VIDEO_MAX_STEPS"
@@ -438,6 +453,9 @@ if [[ "${MARL_CMD[1]}" == "run_benchmarl_marl_gridcraft.py" ]]; then
     --marl-hpo-core-config-path "${MARL_HPO_CORE_CONFIG_PATH:-}"
     --marl-hpo-imagination-reused "${MARL_HPO_IMAGINATION_REUSED:-0}"
     --marl-hpo-imagination-config-path "${MARL_HPO_IMAGINATION_CONFIG_PATH:-}"
+    --marl-hpo-core-stage "${MARL_HPO_CORE_STAGE:-}"
+    --marl-hpo-imagination-stage "${MARL_HPO_IMAGINATION_STAGE:-}"
+    --marl-hpo-imagination-checkpoint-checksum "${MARL_HPO_IMAGINATION_CHECKPOINT_CHECKSUM:-}"
   )
   if [[ -n "${MARL_HPO_CORE_SCORE:-}" ]]; then
     MARL_CMD+=(--marl-hpo-core-score "$MARL_HPO_CORE_SCORE")

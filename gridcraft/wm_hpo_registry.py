@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -51,6 +52,7 @@ HPO_ENV_KEYS = {
 }
 
 DEFAULT_HPO_ROOT = Path("hpo_results/world_model")
+HPO_STAGE_RANK = {"screen": 0, "promote": 1, "final": 2}
 
 
 def hpo_family_for_baseline(baseline_id: str) -> str | None:
@@ -96,6 +98,66 @@ def load_best_config(hpo_family: str, root: str | Path = DEFAULT_HPO_ROOT) -> di
     return payload
 
 
+def stage_satisfies(actual: str | None, required: str) -> bool:
+    return HPO_STAGE_RANK.get(str(actual), -1) >= HPO_STAGE_RANK[required]
+
+
+def dataset_checksum(dataset_path: str | None) -> str | None:
+    if not dataset_path:
+        return None
+    path = Path(dataset_path).expanduser()
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    provenance = f"{path.resolve()}:{stat.st_size}:{path.name}"
+    return hashlib.sha256(provenance.encode()).hexdigest()
+
+
+def validate_best_config(
+    best_config: dict[str, Any] | None,
+    *,
+    required_stage: str = "final",
+    num_agents: int | None = None,
+    require_checkpoints: bool = False,
+    minimum_budget: dict[str, Any] | None = None,
+) -> tuple[bool, str]:
+    if best_config is None:
+        return False, "best_config.json is missing"
+    if required_stage not in HPO_STAGE_RANK:
+        return False, f"unsupported required stage {required_stage!r}"
+    if not stage_satisfies(best_config.get("stage"), required_stage):
+        return False, f"stage {best_config.get('stage')!r} does not satisfy {required_stage!r}"
+    provenance = best_config.get("provenance", {})
+    if num_agents is not None and int(provenance.get("num_agents", -1)) != int(num_agents):
+        return False, f"num_agents={provenance.get('num_agents')!r} does not match {num_agents}"
+    if require_checkpoints:
+        checkpoint_dir = Path(str(best_config.get("checkpoint_dir", "")))
+        missing = [name for name in ("vae.pt", "rnn.pt") if not (checkpoint_dir / name).is_file()]
+        if missing:
+            return False, f"missing checkpoint files in {checkpoint_dir}: {', '.join(missing)}"
+    stored_dataset_checksum = best_config.get("dataset_checksum")
+    if stored_dataset_checksum:
+        current_dataset_checksum = dataset_checksum(best_config.get("dataset_path"))
+        if current_dataset_checksum != stored_dataset_checksum:
+            return False, "dataset provenance checksum does not match"
+    if minimum_budget:
+        actual_budget = best_config.get("budget", {})
+        for key, required_value in minimum_budget.items():
+            if key == "seeds":
+                required = set(str(required_value).split())
+                actual = set(str(actual_budget.get(key, "")).split())
+                if not required.issubset(actual):
+                    return False, f"budget seeds={sorted(actual)} do not include {sorted(required)}"
+                continue
+            try:
+                if float(actual_budget.get(key, -1)) < float(required_value):
+                    return False, f"budget {key}={actual_budget.get(key)!r} is below {required_value!r}"
+            except (TypeError, ValueError):
+                return False, f"budget {key}={actual_budget.get(key)!r} is invalid"
+    return True, "valid"
+
+
 def hpo_env_exports(best_config: dict[str, Any]) -> dict[str, str]:
     hyperparams = best_config.get("hyperparameters", best_config)
     exports: dict[str, str] = {}
@@ -128,6 +190,8 @@ def build_trial_summary(
     dataset_path: str | None = None,
     sweep_id: str | None = None,
     trial_id: str | None = None,
+    stage: str = "screen",
+    num_agents: int | None = None,
 ) -> dict[str, Any]:
     family = normalize_hpo_family(hpo_family)
     score = _as_float(metrics.get("wm_hpo_score", math.inf), default=math.inf)
@@ -140,6 +204,17 @@ def build_trial_summary(
         "run_dir": str(run_dir),
         "wandb_run_url": wandb_run_url,
         "dataset_path": dataset_path,
+        "dataset_checksum": dataset_checksum(dataset_path),
+        "checkpoint_dir": str(Path(run_dir) / "checkpoints"),
+        "stage": stage,
+        "provenance": {
+            "num_agents": num_agents,
+            "seed": config.get("seed"),
+            "episodes": config.get("episodes"),
+            "max_steps": config.get("max_steps"),
+            "vae_steps": config.get("vae_steps"),
+            "rnn_steps": config.get("rnn_steps"),
+        },
         "sweep_id": sweep_id,
         "trial_id": trial_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -171,7 +246,7 @@ def select_best_config(
                 payload = json.load(handle)
         except (OSError, json.JSONDecodeError):
             continue
-        if payload.get("hpo_family") != family:
+        if payload.get("hpo_family") != family or payload.get("stage") != stage:
             continue
         score = _as_float(payload.get("score"), default=math.inf)
         if math.isfinite(score):
@@ -196,6 +271,10 @@ def select_best_config(
         "best_run_dir": best.get("run_dir"),
         "best_run_url": best.get("wandb_run_url"),
         "dataset_path": best.get("dataset_path"),
+        "dataset_checksum": best.get("dataset_checksum"),
+        "checkpoint_dir": best.get("checkpoint_dir") or str(Path(best.get("run_dir", "")) / "checkpoints"),
+        "stage": stage,
+        "provenance": best.get("provenance", {}),
         "selected_from": str(source_path),
         "trial_count": len(candidates),
         "budget": budget or {},
@@ -208,7 +287,9 @@ def select_best_config(
     return best_config
 
 
-def collect_ranked_trials(*, hpo_family: str, trials_root: str | Path) -> list[dict[str, Any]]:
+def collect_ranked_trials(
+    *, hpo_family: str, trials_root: str | Path, stage: str | None = None
+) -> list[dict[str, Any]]:
     family = normalize_hpo_family(hpo_family)
     ranked = []
     for path in sorted(Path(trials_root).glob("**/hpo_trial_summary.json")):
@@ -218,6 +299,8 @@ def collect_ranked_trials(*, hpo_family: str, trials_root: str | Path) -> list[d
         except (OSError, json.JSONDecodeError):
             continue
         if payload.get("hpo_family") != family:
+            continue
+        if stage is not None and payload.get("stage") != stage:
             continue
         score = _as_float(payload.get("score"), default=math.inf)
         if math.isfinite(score):
@@ -307,6 +390,17 @@ def main() -> None:
     export_parser.add_argument("--baseline-id")
     export_parser.add_argument("--root", default=str(DEFAULT_HPO_ROOT))
     export_parser.add_argument("--require", action="store_true")
+    export_parser.add_argument("--required-stage", choices=tuple(HPO_STAGE_RANK), default=None)
+    export_parser.add_argument("--num-agents", type=int)
+
+    validate_parser = sub.add_parser("validate")
+    validate_parser.add_argument("--hpo-family", required=True)
+    validate_parser.add_argument("--root", default=str(DEFAULT_HPO_ROOT))
+    validate_parser.add_argument("--required-stage", choices=tuple(HPO_STAGE_RANK), default="final")
+    validate_parser.add_argument("--num-agents", type=int)
+    validate_parser.add_argument("--require-checkpoints", action="store_true")
+    validate_parser.add_argument("--print-checkpoint-dir", action="store_true")
+    validate_parser.add_argument("--minimum-budget-json", default="{}")
 
     select_parser = sub.add_parser("select-best")
     select_parser.add_argument("--hpo-family", required=True)
@@ -321,6 +415,7 @@ def main() -> None:
     ranked_parser.add_argument("--trials-root", required=True)
     ranked_parser.add_argument("--results-root", default=str(DEFAULT_HPO_ROOT))
     ranked_parser.add_argument("--stage", default="screen")
+    ranked_parser.add_argument("--source-stage")
     ranked_parser.add_argument("--top-k", type=int, default=3)
 
     summary_parser = sub.add_parser("write-summary")
@@ -344,15 +439,48 @@ def main() -> None:
                 raise SystemExit(2)
             print(f"echo {json.dumps(message)} >&2")
             return
+        if args.required_stage:
+            valid, reason = validate_best_config(
+                best,
+                required_stage=args.required_stage,
+                num_agents=args.num_agents,
+            )
+            if not valid:
+                message = f"[wm-hpo] incompatible config for {family}: {reason}"
+                if args.require:
+                    print(message, file=sys.stderr)
+                    raise SystemExit(2)
+                print(f"echo {json.dumps(message)} >&2")
+                return
         print(shell_exports(best))
         path = str(best_config_path(family, args.root)).replace("'", "'\"'\"'")
         print(f"export WM_HPO_FAMILY='{family}'")
         print("export WM_HPO_CONFIG_REUSED='1'")
         print(f"export WM_HPO_CONFIG_PATH='{path}'")
         print(f"export WM_HPO_SCORE='{best.get('score', '')}'")
+        print(f"export WM_HPO_STAGE='{best.get('stage', '')}'")
+        print(f"export WM_HPO_DATASET_CHECKSUM='{best.get('dataset_checksum', '')}'")
+        print(f"export WM_HPO_CHECKPOINT_DIR='{best.get('checkpoint_dir', '')}'")
         if best.get("best_run_url"):
             url = str(best["best_run_url"]).replace("'", "'\"'\"'")
             print(f"export WM_HPO_BEST_RUN_URL='{url}'")
+        return
+    if args.command == "validate":
+        best = load_best_config(args.hpo_family, args.root)
+        valid, reason = validate_best_config(
+            best,
+            required_stage=args.required_stage,
+            num_agents=args.num_agents,
+            require_checkpoints=args.require_checkpoints,
+            minimum_budget=json.loads(args.minimum_budget_json),
+        )
+        if not valid:
+            print(f"[wm-hpo] {args.hpo_family}: {reason}", file=sys.stderr)
+            raise SystemExit(2)
+        if args.print_checkpoint_dir:
+            print(best["checkpoint_dir"])
+        else:
+            print(f"[wm-hpo] {args.hpo_family}: valid")
         return
     if args.command == "select-best":
         budget = json.loads(args.budget_json)
@@ -367,7 +495,11 @@ def main() -> None:
         print(json.dumps(payload, indent=2))
         return
     if args.command == "write-stage-results":
-        ranked = collect_ranked_trials(hpo_family=args.hpo_family, trials_root=args.trials_root)
+        ranked = collect_ranked_trials(
+            hpo_family=args.hpo_family,
+            trials_root=args.trials_root,
+            stage=args.source_stage,
+        )
         payload = write_stage_results(
             family=args.hpo_family,
             candidates=ranked,

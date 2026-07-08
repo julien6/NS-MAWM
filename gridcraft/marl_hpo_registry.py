@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import sys
@@ -11,6 +12,7 @@ from typing import Any
 
 MARL_HPO_FAMILIES = ("masac_core", "mambpo_imagination")
 DEFAULT_MARL_HPO_ROOT = Path("hpo_results/marl")
+HPO_STAGE_RANK = {"screen": 0, "promote": 1, "final": 2}
 
 CORE_ENV_KEYS = {
     "frames_per_batch": "MARL_FRAMES_PER_BATCH",
@@ -65,6 +67,60 @@ def load_best_config(family: str, root: str | Path = DEFAULT_MARL_HPO_ROOT) -> d
         return json.load(handle)
 
 
+def stage_satisfies(actual: str | None, required: str) -> bool:
+    return HPO_STAGE_RANK.get(str(actual), -1) >= HPO_STAGE_RANK[required]
+
+
+def checkpoint_checksum(checkpoint_dir: str | None) -> str | None:
+    if not checkpoint_dir:
+        return None
+    root = Path(checkpoint_dir)
+    paths = [root / "vae.pt", root / "rnn.pt"]
+    if not all(path.is_file() for path in paths):
+        return None
+    payload = ":".join(f"{path.resolve()}:{path.stat().st_size}:{path.stat().st_mtime_ns}" for path in paths)
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def validate_best_config(
+    best_config: dict[str, Any] | None,
+    *,
+    required_stage: str = "final",
+    num_agents: int | None = None,
+    external_checkpoint_dir: str | None = None,
+    minimum_budget: dict[str, Any] | None = None,
+) -> tuple[bool, str]:
+    if best_config is None:
+        return False, "best_config.json is missing"
+    if not stage_satisfies(best_config.get("stage"), required_stage):
+        return False, f"stage {best_config.get('stage')!r} does not satisfy {required_stage!r}"
+    provenance = best_config.get("provenance", {})
+    if num_agents is not None and int(provenance.get("num_agents", -1)) != int(num_agents):
+        return False, f"num_agents={provenance.get('num_agents')!r} does not match {num_agents}"
+    if external_checkpoint_dir is not None:
+        expected = checkpoint_checksum(external_checkpoint_dir)
+        actual = provenance.get("external_checkpoint_checksum")
+        if expected is None:
+            return False, f"external World Model checkpoints are missing in {external_checkpoint_dir}"
+        if actual != expected:
+            return False, "external World Model checkpoint provenance does not match"
+    if minimum_budget:
+        actual_budget = best_config.get("budget", {})
+        for key, required_value in minimum_budget.items():
+            if key == "seeds":
+                required = set(str(required_value).split())
+                actual = set(str(actual_budget.get(key, "")).split())
+                if not required.issubset(actual):
+                    return False, f"budget seeds={sorted(actual)} do not include {sorted(required)}"
+                continue
+            try:
+                if float(actual_budget.get(key, -1)) < float(required_value):
+                    return False, f"budget {key}={actual_budget.get(key)!r} is below {required_value!r}"
+            except (TypeError, ValueError):
+                return False, f"budget {key}={actual_budget.get(key)!r} is invalid"
+    return True, "valid"
+
+
 def env_exports(best_config: dict[str, Any], family: str) -> dict[str, str]:
     hyperparams = best_config.get("hyperparameters", best_config)
     keys = CORE_ENV_KEYS if normalize_family(family) == "masac_core" else IMAGINATION_ENV_KEYS
@@ -86,6 +142,12 @@ def shell_exports(best_config: dict[str, Any], family: str) -> str:
     lines.append(f"export {prefix}_REUSED='1'")
     lines.append(f"export {prefix}_SCORE='{best_config.get('score', '')}'")
     lines.append(f"export {prefix}_CONFIG_PATH='{path}'")
+    lines.append(f"export {prefix}_STAGE='{best_config.get('stage', '')}'")
+    provenance = best_config.get("provenance", {})
+    lines.append(
+        f"export {prefix}_CHECKPOINT_CHECKSUM="
+        f"'{provenance.get('external_checkpoint_checksum', '')}'"
+    )
     if best_config.get("best_run_url"):
         url = str(best_config["best_run_url"]).replace("'", "'\"'\"'")
         lines.append(f"export {prefix}_BEST_RUN_URL='{url}'")
@@ -101,6 +163,9 @@ def build_trial_summary(
     wandb_run_url: str | None = None,
     trial_id: str | None = None,
     sweep_id: str | None = None,
+    stage: str = "screen",
+    num_agents: int | None = None,
+    external_checkpoint_dir: str | None = None,
 ) -> dict[str, Any]:
     family = normalize_family(family)
     score = score_from_metrics(metrics, family)
@@ -113,6 +178,13 @@ def build_trial_summary(
         "wandb_run_url": wandb_run_url,
         "trial_id": trial_id,
         "sweep_id": sweep_id,
+        "stage": stage,
+        "provenance": {
+            "num_agents": num_agents,
+            "seed": config.get("seed"),
+            "external_checkpoint_dir": external_checkpoint_dir,
+            "external_checkpoint_checksum": checkpoint_checksum(external_checkpoint_dir),
+        },
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -145,7 +217,7 @@ def select_best_config(
                 payload = json.load(handle)
         except (OSError, json.JSONDecodeError):
             continue
-        if payload.get("hpo_family") != family:
+        if payload.get("hpo_family") != family or payload.get("stage") != stage:
             continue
         score = _as_float(payload.get("score"), default=-math.inf)
         if math.isfinite(score):
@@ -171,6 +243,8 @@ def select_best_config(
         "selected_from": str(source_path),
         "trial_count": len(candidates),
         "budget": budget or {},
+        "stage": stage,
+        "provenance": best.get("provenance", {}),
         "selected_at": datetime.now(timezone.utc).isoformat(),
     }
     path = best_config_path(family, results_root)
@@ -180,7 +254,9 @@ def select_best_config(
     return out
 
 
-def collect_ranked_trials(*, family: str, trials_root: str | Path) -> list[dict[str, Any]]:
+def collect_ranked_trials(
+    *, family: str, trials_root: str | Path, stage: str | None = None
+) -> list[dict[str, Any]]:
     family = normalize_family(family)
     ranked = []
     for path in sorted(Path(trials_root).glob("**/marl_hpo_trial_summary.json")):
@@ -190,6 +266,8 @@ def collect_ranked_trials(*, family: str, trials_root: str | Path) -> list[dict[
         except (OSError, json.JSONDecodeError):
             continue
         if payload.get("hpo_family") != family:
+            continue
+        if stage is not None and payload.get("stage") != stage:
             continue
         score = _as_float(payload.get("score"), default=-math.inf)
         if math.isfinite(score):
@@ -306,6 +384,16 @@ def main() -> None:
     export.add_argument("--downstream-algo", default="mambpo")
     export.add_argument("--root", default=str(DEFAULT_MARL_HPO_ROOT))
     export.add_argument("--require", action="store_true")
+    export.add_argument("--required-stage", choices=tuple(HPO_STAGE_RANK), default=None)
+    export.add_argument("--num-agents", type=int)
+
+    validate = sub.add_parser("validate")
+    validate.add_argument("--family", required=True, choices=MARL_HPO_FAMILIES)
+    validate.add_argument("--root", default=str(DEFAULT_MARL_HPO_ROOT))
+    validate.add_argument("--required-stage", choices=tuple(HPO_STAGE_RANK), default="final")
+    validate.add_argument("--num-agents", type=int)
+    validate.add_argument("--external-checkpoint-dir")
+    validate.add_argument("--minimum-budget-json", default="{}")
 
     select = sub.add_parser("select-best")
     select.add_argument("--family", required=True, choices=MARL_HPO_FAMILIES)
@@ -320,6 +408,7 @@ def main() -> None:
     stage_results.add_argument("--trials-root", required=True)
     stage_results.add_argument("--results-root", default=str(DEFAULT_MARL_HPO_ROOT))
     stage_results.add_argument("--stage", default="screen")
+    stage_results.add_argument("--source-stage")
     stage_results.add_argument("--top-k", type=int, default=3)
 
     summary = sub.add_parser("write-summary")
@@ -340,14 +429,45 @@ def main() -> None:
                     raise SystemExit(2)
                 print(f"echo {json.dumps(message)} >&2")
                 continue
+            if args.required_stage:
+                valid, reason = validate_best_config(
+                    best,
+                    required_stage=args.required_stage,
+                    num_agents=args.num_agents,
+                )
+                if not valid:
+                    message = f"[marl-hpo] incompatible config for {family}: {reason}"
+                    if args.require:
+                        print(message, file=sys.stderr)
+                        raise SystemExit(2)
+                    print(f"echo {json.dumps(message)} >&2")
+                    continue
             best["_root"] = args.root
             print(shell_exports(best, family))
+        return
+    if args.command == "validate":
+        best = load_best_config(args.family, args.root)
+        valid, reason = validate_best_config(
+            best,
+            required_stage=args.required_stage,
+            num_agents=args.num_agents,
+            external_checkpoint_dir=args.external_checkpoint_dir,
+            minimum_budget=json.loads(args.minimum_budget_json),
+        )
+        if not valid:
+            print(f"[marl-hpo] {args.family}: {reason}", file=sys.stderr)
+            raise SystemExit(2)
+        print(f"[marl-hpo] {args.family}: valid")
         return
     if args.command == "select-best":
         print(json.dumps(select_best_config(family=args.family, trials_root=args.trials_root, results_root=args.results_root, budget=json.loads(args.budget_json), stage=args.stage, top_k=args.top_k), indent=2))
         return
     if args.command == "write-stage-results":
-        ranked = collect_ranked_trials(family=args.family, trials_root=args.trials_root)
+        ranked = collect_ranked_trials(
+            family=args.family,
+            trials_root=args.trials_root,
+            stage=args.source_stage,
+        )
         print(json.dumps(write_stage_results(family=args.family, candidates=ranked, results_root=args.results_root, stage=args.stage, top_k=args.top_k), indent=2))
         return
     if args.command == "write-summary":

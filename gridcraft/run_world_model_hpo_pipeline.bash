@@ -94,6 +94,7 @@ export HPO_NUM_AGENTS="${HPO_NUM_AGENTS:-${NUM_AGENTS:-3}}"
 export HPO_SEED="${HPO_SEED:-${SEED:-1}}"
 export HPO_WM_NUM_WORKERS="${HPO_WM_NUM_WORKERS:-${WM_NUM_WORKERS:-4}}"
 export HPO_VIDEO_EVERY="${HPO_VIDEO_EVERY:-0}"
+export HPO_CURRENT_STAGE="$HPO_STAGE"
 
 config_for_family() {
   case "$1" in
@@ -128,8 +129,16 @@ fi
 for family in $HPO_FAMILIES; do
   best_config="${HPO_RESULTS_DIR}/${family}/best_config.json"
   if [[ "$FORCE_WM_HPO" != "1" && -f "$best_config" ]]; then
-    echo "[wm-hpo] ${family}: existing best config found at ${best_config}; skipping."
-    continue
+    if "$PYTHON_BIN" wm_hpo_registry.py validate \
+      --hpo-family "$family" \
+      --root "$HPO_RESULTS_DIR" \
+      --required-stage "$HPO_STAGE" \
+      --num-agents "$HPO_NUM_AGENTS" \
+      --minimum-budget-json "{\"seeds\":\"${HPO_SEEDS}\",\"episodes\":${HPO_EPISODES},\"max_steps\":${HPO_MAX_STEPS},\"vae_steps\":${HPO_VAE_STEPS},\"rnn_steps\":${HPO_RNN_STEPS}}" >/dev/null 2>&1; then
+      echo "[wm-hpo] ${family}: compatible ${HPO_STAGE} config found at ${best_config}; skipping."
+      continue
+    fi
+    echo "[wm-hpo] ${family}: existing config is not valid for stage=${HPO_STAGE}, agents=${HPO_NUM_AGENTS}; continuing HPO."
   fi
 
   trial_glob_count="$(find "${HPO_TRIALS_DIR}/${family}" -name hpo_trial_summary.json 2>/dev/null | wc -l | tr -d ' ')"
@@ -153,11 +162,16 @@ for family in $HPO_FAMILIES; do
     echo "[wm-hpo] ${family}: launching ${HPO_COUNT} ${HPO_STAGE} trials (${SWEEP_ID})"
     "$PYTHON_BIN" -m wandb agent --count "$HPO_COUNT" "$SWEEP_ID"
   else
+    source_stage="screen"
+    if [[ "$HPO_STAGE" == "final" ]]; then
+      source_stage="promote"
+    fi
     "$PYTHON_BIN" wm_hpo_registry.py write-stage-results \
       --hpo-family "$family" \
       --trials-root "${HPO_TRIALS_DIR}/${family}" \
       --results-root "$HPO_RESULTS_DIR" \
       --stage promote \
+      --source-stage "$source_stage" \
       --top-k "$HPO_TOP_K" >/dev/null
     promoted_path="${HPO_RESULTS_DIR}/${family}/promoted_configs.json"
     echo "[wm-hpo] ${family}: replaying top configs from ${promoted_path}"

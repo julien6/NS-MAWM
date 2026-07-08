@@ -2,7 +2,7 @@ import json
 import subprocess
 import sys
 
-from wm_hpo_registry import hpo_env_exports, hpo_family_for_baseline
+from wm_hpo_registry import hpo_env_exports, hpo_family_for_baseline, validate_best_config
 
 
 def test_hpo_family_for_baseline():
@@ -65,3 +65,26 @@ def test_export_env_cli(tmp_path):
     assert "export WM_HPO_FAMILY='neural_k0.0'" in result.stdout
     assert "export VAE_Z_SIZE='96'" in result.stdout
     assert "export RNN_SIZE='384'" in result.stdout
+
+
+def test_final_validation_rejects_screen_and_requires_checkpoints(tmp_path):
+    screen = {
+        "stage": "screen",
+        "provenance": {"num_agents": 3},
+        "checkpoint_dir": str(tmp_path / "checkpoints"),
+    }
+    valid, reason = validate_best_config(
+        screen, required_stage="final", num_agents=3, require_checkpoints=True
+    )
+    assert not valid
+    assert "stage" in reason
+
+    checkpoint_dir = tmp_path / "checkpoints"
+    checkpoint_dir.mkdir()
+    (checkpoint_dir / "vae.pt").write_bytes(b"vae")
+    (checkpoint_dir / "rnn.pt").write_bytes(b"rnn")
+    final = {**screen, "stage": "final"}
+    valid, reason = validate_best_config(
+        final, required_stage="final", num_agents=3, require_checkpoints=True
+    )
+    assert valid, reason

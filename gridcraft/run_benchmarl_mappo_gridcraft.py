@@ -103,6 +103,9 @@ def main() -> None:
     parser.add_argument("--marl-hpo-imagination-reused", type=float, default=0.0)
     parser.add_argument("--marl-hpo-imagination-score", type=float, default=None)
     parser.add_argument("--marl-hpo-imagination-config-path", default=None)
+    parser.add_argument("--marl-hpo-core-stage", default=None)
+    parser.add_argument("--marl-hpo-imagination-stage", default=None)
+    parser.add_argument("--marl-hpo-imagination-checkpoint-checksum", default=None)
     args = parser.parse_args()
     warn_legacy_marl_names(args.algorithm)
 
@@ -260,6 +263,9 @@ def main() -> None:
                 "marl_hpo_imagination_reused": args.marl_hpo_imagination_reused,
                 "marl_hpo_imagination_score": args.marl_hpo_imagination_score,
                 "marl_hpo_imagination_config_path": args.marl_hpo_imagination_config_path,
+                "marl_hpo_core_stage": args.marl_hpo_core_stage,
+                "marl_hpo_imagination_stage": args.marl_hpo_imagination_stage,
+                "marl_hpo_imagination_checkpoint_checksum": args.marl_hpo_imagination_checkpoint_checksum,
                 "marl_lr": args.marl_lr,
                 "marl_gamma": args.marl_gamma,
                 "marl_polyak_tau": args.marl_polyak_tau,

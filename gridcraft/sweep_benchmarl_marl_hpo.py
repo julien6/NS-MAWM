@@ -185,6 +185,11 @@ def main() -> None:
         wandb_run_url=run.url,
         trial_id=run.id,
         sweep_id=getattr(run, "sweep_id", None),
+        stage=os.environ.get("MARL_HPO_CURRENT_STAGE", "screen"),
+        num_agents=int(selected_config["num_agents"]),
+        external_checkpoint_dir=(
+            str(Path(wm_run_dir) / "checkpoints") if family == "mambpo_imagination" else None
+        ),
     )
     payload["trial_wall_time"] = time.time() - trial_start
     payload["metrics"]["trial_wall_time"] = payload["trial_wall_time"]

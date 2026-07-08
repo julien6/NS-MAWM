@@ -148,15 +148,29 @@ def main() -> None:
         with summary_path.open() as handle:
             metrics = json.load(handle)
     dataset_path = metrics.get("dataset_path") or cfg.get("dataset_path")
+    resolved_config = {
+        **cfg,
+        "baseline_id": baseline_id,
+        "hpo_family": hpo_family,
+        "num_agents": int(cfg_value("num_agents", args.num_agents)),
+        "seed": int(cfg_value("seed", args.seed)),
+        "episodes": int(cfg_value("episodes", args.episodes)),
+        "max_steps": int(cfg_value("max_steps", args.max_steps)),
+        "num_envs": int(cfg_value("num_envs", args.num_envs)),
+        "vae_steps": int(cfg_value("vae_steps", args.vae_steps)),
+        "rnn_steps": int(cfg_value("rnn_steps", args.rnn_steps)),
+    }
     payload = build_trial_summary(
         hpo_family=hpo_family,
         run_dir=completed_run_dir,
-        config={**cfg, "baseline_id": baseline_id, "hpo_family": hpo_family},
+        config=resolved_config,
         metrics=metrics,
         wandb_run_url=run.url,
         dataset_path=dataset_path,
         sweep_id=getattr(run, "sweep_id", None),
         trial_id=run.id,
+        stage=os.environ.get("HPO_CURRENT_STAGE", "screen"),
+        num_agents=int(cfg_value("num_agents", args.num_agents)),
     )
     payload["trial_wall_time"] = time.time() - trial_start
     payload["metrics"]["trial_wall_time"] = payload["trial_wall_time"]

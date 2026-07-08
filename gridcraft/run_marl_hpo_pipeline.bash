@@ -85,6 +85,7 @@ export MARL_HPO_NUM_AGENTS="${MARL_HPO_NUM_AGENTS:-${NUM_AGENTS:-3}}"
 export MARL_HPO_SEED="${MARL_HPO_SEED:-${SEED:-1}}"
 export MARL_HPO_VIDEO_EVERY_ITERS="${MARL_HPO_VIDEO_EVERY_ITERS:-0}"
 export MARL_HPO_TRIALS_DIR
+export MARL_HPO_CURRENT_STAGE="$MARL_HPO_STAGE"
 
 if [[ -z "${MARL_HPO_WM_RUN_DIR:-}" ]]; then
   export MARL_HPO_WM_RUN_DIR="runs_benchmarl/B10_neural_k0.0_a${MARL_HPO_NUM_AGENTS}_seed${MARL_HPO_SEED}"
@@ -121,8 +122,22 @@ fi
 for family in $MARL_HPO_FAMILIES; do
   best_config="${MARL_HPO_RESULTS_DIR}/${family}/best_config.json"
   if [[ "$FORCE_MARL_HPO" != "1" && -f "$best_config" ]]; then
-    echo "[marl-hpo] ${family}: existing best config found at ${best_config}; skipping."
-    continue
+    VALIDATE_ARGS=(
+      "$PYTHON_BIN" marl_hpo_registry.py validate
+      --family "$family"
+      --root "$MARL_HPO_RESULTS_DIR"
+      --required-stage "$MARL_HPO_STAGE"
+      --num-agents "$MARL_HPO_NUM_AGENTS"
+      --minimum-budget-json "{\"seeds\":\"${MARL_HPO_SEEDS}\",\"num_envs\":${MARL_HPO_NUM_ENVS},\"max_steps\":${MARL_HPO_MAX_STEPS},\"max_iters\":${MARL_HPO_MAX_ITERS}}"
+    )
+    if [[ "$family" == "mambpo_imagination" ]]; then
+      VALIDATE_ARGS+=(--external-checkpoint-dir "${MARL_HPO_WM_RUN_DIR}/checkpoints")
+    fi
+    if "${VALIDATE_ARGS[@]}" >/dev/null 2>&1; then
+      echo "[marl-hpo] ${family}: compatible ${MARL_HPO_STAGE} config found at ${best_config}; skipping."
+      continue
+    fi
+    echo "[marl-hpo] ${family}: existing config is not valid for stage=${MARL_HPO_STAGE}, agents=${MARL_HPO_NUM_AGENTS}; continuing HPO."
   fi
   if [[ "$family" == "mambpo_imagination" ]]; then
     checkpoint_dir="${MARL_HPO_WM_RUN_DIR}/checkpoints"
@@ -154,11 +169,16 @@ for family in $MARL_HPO_FAMILIES; do
     echo "[marl-hpo] ${family}: launching ${MARL_HPO_COUNT} ${MARL_HPO_STAGE} trials (${SWEEP_ID})"
     "$PYTHON_BIN" -m wandb agent --count "$MARL_HPO_COUNT" "$SWEEP_ID"
   else
+    source_stage="screen"
+    if [[ "$MARL_HPO_STAGE" == "final" ]]; then
+      source_stage="promote"
+    fi
     "$PYTHON_BIN" marl_hpo_registry.py write-stage-results \
       --family "$family" \
       --trials-root "${MARL_HPO_TRIALS_DIR}/${family}" \
       --results-root "$MARL_HPO_RESULTS_DIR" \
       --stage promote \
+      --source-stage "$source_stage" \
       --top-k "$MARL_HPO_TOP_K" >/dev/null
     promoted_path="${MARL_HPO_RESULTS_DIR}/${family}/promoted_configs.json"
     echo "[marl-hpo] ${family}: replaying top configs from ${promoted_path}"

@@ -97,6 +97,8 @@ def main() -> None:
     parser.add_argument("--wm-hpo-score", type=float, default=None)
     parser.add_argument("--wm-hpo-best-run-url", default=None)
     parser.add_argument("--wm-hpo-config-path", default=None)
+    parser.add_argument("--wm-hpo-stage", default=None)
+    parser.add_argument("--wm-hpo-dataset-checksum", default=None)
     parser.add_argument("--eval-every", type=int, default=1000)
     parser.add_argument("--video-every", type=int, default=1000)
     parser.add_argument("--horizons", nargs="+", type=int, default=[1, 5, 10])
@@ -153,6 +155,8 @@ def main() -> None:
             "wm_hpo_score": args.wm_hpo_score,
             "wm_hpo_best_run_url": args.wm_hpo_best_run_url,
             "wm_hpo_config_path": args.wm_hpo_config_path,
+            "wm_hpo_stage": args.wm_hpo_stage,
+            "wm_hpo_dataset_checksum": args.wm_hpo_dataset_checksum,
         },
         default_group=args.baseline_id,
         default_name=run_name,
@@ -175,6 +179,8 @@ def main() -> None:
                 "score": args.wm_hpo_score,
                 "best_run_url": args.wm_hpo_best_run_url,
                 "config_path": args.wm_hpo_config_path,
+                "stage": args.wm_hpo_stage,
+                "dataset_checksum": args.wm_hpo_dataset_checksum,
             },
         },
     )

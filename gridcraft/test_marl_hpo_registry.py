@@ -3,7 +3,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from marl_hpo_registry import env_exports, families_for_baseline
+from marl_hpo_registry import (
+    checkpoint_checksum,
+    env_exports,
+    families_for_baseline,
+    validate_best_config,
+)
 
 
 def test_families_for_baseline():
@@ -57,3 +62,34 @@ def test_export_env_cli(tmp_path):
     assert "export MARL_HPO_CORE_REUSED='1'" in result.stdout
     assert "export MB_IMAGINED_HORIZON='5'" in result.stdout
     assert "export MARL_HPO_IMAGINATION_REUSED='1'" in result.stdout
+
+
+def test_mambpo_validation_tracks_external_world_model(tmp_path):
+    checkpoint_dir = tmp_path / "checkpoints"
+    checkpoint_dir.mkdir()
+    (checkpoint_dir / "vae.pt").write_bytes(b"vae")
+    (checkpoint_dir / "rnn.pt").write_bytes(b"rnn")
+    best = {
+        "stage": "final",
+        "provenance": {
+            "num_agents": 3,
+            "external_checkpoint_checksum": checkpoint_checksum(str(checkpoint_dir)),
+        },
+    }
+    valid, reason = validate_best_config(
+        best,
+        required_stage="final",
+        num_agents=3,
+        external_checkpoint_dir=str(checkpoint_dir),
+    )
+    assert valid, reason
+
+    (checkpoint_dir / "rnn.pt").write_bytes(b"different-rnn")
+    valid, reason = validate_best_config(
+        best,
+        required_stage="final",
+        num_agents=3,
+        external_checkpoint_dir=str(checkpoint_dir),
+    )
+    assert not valid
+    assert "provenance" in reason
