@@ -120,6 +120,7 @@ if [[ "$HPO_BENCHMARK_FIRST" == "1" ]]; then
 fi
 
 for family in $MARL_HPO_FAMILIES; do
+  mkdir -p "${MARL_HPO_TRIALS_DIR}/${family}"
   best_config="${MARL_HPO_RESULTS_DIR}/${family}/best_config.json"
   if [[ "$FORCE_MARL_HPO" != "1" && -f "$best_config" ]]; then
     reselection_stage="$("$PYTHON_BIN" - "$best_config" <<'PY'
@@ -177,6 +178,7 @@ PY
     if [[ -d "${MARL_HPO_TRIALS_DIR}/${family}" ]]; then
       mv "${MARL_HPO_TRIALS_DIR}/${family}" "${archive_root}/trials"
     fi
+    mkdir -p "${MARL_HPO_TRIALS_DIR}/${family}"
   fi
   if [[ "$family" == "mambpo_imagination" ]]; then
     checkpoint_dir="${MARL_HPO_WM_RUN_DIR}/checkpoints"

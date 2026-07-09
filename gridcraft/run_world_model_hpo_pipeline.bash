@@ -127,6 +127,7 @@ if [[ "$HPO_BENCHMARK_FIRST" == "1" ]]; then
 fi
 
 for family in $HPO_FAMILIES; do
+  mkdir -p "${HPO_TRIALS_DIR}/${family}"
   best_config="${HPO_RESULTS_DIR}/${family}/best_config.json"
   if [[ "$FORCE_WM_HPO" != "1" && -f "$best_config" ]]; then
     reselection_stage="$("$PYTHON_BIN" - "$best_config" <<'PY'
@@ -178,6 +179,7 @@ PY
     if [[ -d "${HPO_TRIALS_DIR}/${family}" ]]; then
       mv "${HPO_TRIALS_DIR}/${family}" "${archive_root}/trials"
     fi
+    mkdir -p "${HPO_TRIALS_DIR}/${family}"
   fi
 
   trial_glob_count="$(find "${HPO_TRIALS_DIR}/${family}" -name hpo_trial_summary.json 2>/dev/null | wc -l | tr -d ' ')"

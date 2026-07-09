@@ -171,6 +171,20 @@ def main():
                 "Reward hierarchy diagnosis/reward_complexity_spearman": analysis[
                     "reward_complexity_spearman"
                 ],
+                "Reward hierarchy diagnosis/reward_expected_level_spearman": analysis[
+                    "reward_expected_level_spearman"
+                ],
+                "Reward hierarchy diagnosis/controlled_reward_monotonic": int(
+                    analysis["controlled_reward_monotonic"]
+                ),
+                "Reward hierarchy diagnosis/controlled_complexity_monotonic": int(
+                    analysis["controlled_complexity_monotonic"]
+                ),
+                "Reward hierarchy diagnosis/controlled_level_failure_count": len(
+                    analysis["controlled_level_failures"]
+                ),
+                "Reward hierarchy diagnosis/unarmed_kills": analysis["unarmed_kills"],
+                "Reward hierarchy diagnosis/armed_kills": analysis["armed_kills"],
                 "Reward hierarchy diagnosis/summary": wandb.Table(
                     columns=list(summaries[0]) if summaries else [],
                     data=[list(row.values()) for row in summaries],
