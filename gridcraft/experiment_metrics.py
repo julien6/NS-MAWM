@@ -3,9 +3,9 @@ import numpy as np
 
 def auc(values):
   values = np.asarray(values, dtype=np.float32)
-  if values.size == 0:
+  if values.size < 2:
     return 0.0
-  return float(np.trapz(values))
+  return float(((values[:-1] + values[1:]) * 0.5).sum())
 
 
 def time_to_threshold(values, threshold):

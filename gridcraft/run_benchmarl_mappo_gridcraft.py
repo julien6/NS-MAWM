@@ -418,9 +418,7 @@ def patch_benchmarl_wandb_sections(logger_class, step_offset=0):
             curve = getattr(self, "_gridcraft_eval_reward_curve", [])
             curve.append(float(reward_value))
             self._gridcraft_eval_reward_curve = curve
-            routed["MARL Evaluation/eval_real_reward_auc"] = float(
-                np.trapz(np.asarray(curve, dtype=np.float64))
-            )
+            routed["MARL Evaluation/eval_real_reward_auc"] = curve_auc(curve)
             routed["MARL Evaluation/eval_real_reward_curve_mean"] = float(
                 np.mean(curve)
             )
@@ -437,6 +435,13 @@ def patch_benchmarl_wandb_sections(logger_class, step_offset=0):
                     logger.log_scalar(key.replace("/", "_"), value, step=routed_step)
 
     logger_class.log = routed_log
+
+
+def curve_auc(values) -> float:
+    values = np.asarray(values, dtype=np.float64)
+    if values.size < 2:
+        return 0.0
+    return float(((values[:-1] + values[1:]) * 0.5).sum())
 
 
 def route_benchmarl_metrics(metrics):

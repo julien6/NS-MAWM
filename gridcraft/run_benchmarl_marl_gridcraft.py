@@ -1,5 +1,6 @@
 from run_benchmarl_mappo_gridcraft import (  # noqa: F401
     MarlEvaluationVideoCallback,
+    curve_auc,
     infer_ns_settings,
     main,
     patch_benchmarl_wandb_sections,

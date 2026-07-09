@@ -1,4 +1,4 @@
-from run_benchmarl_marl_gridcraft import route_benchmarl_metrics
+from run_benchmarl_marl_gridcraft import curve_auc, route_benchmarl_metrics
 
 
 def test_mambpo_imagination_metrics_route_to_marl_training():
@@ -27,3 +27,9 @@ def test_hierarchy_metrics_get_dedicated_wandb_section():
     )
     assert routed["Reward hierarchy diagnosis/training_event_count_mob_kill"] == 3.0
     assert routed["Reward hierarchy diagnosis/evaluation_task_level_max"] == 8.0
+
+
+def test_curve_auc_does_not_depend_on_numpy_trapz():
+    assert curve_auc([]) == 0.0
+    assert curve_auc([5.0]) == 0.0
+    assert curve_auc([1.0, 3.0, 5.0]) == 6.0
