@@ -85,6 +85,9 @@ def main() -> None:
     parser.add_argument("--marl-alpha-init", type=float, default=1.0)
     parser.add_argument("--marl-discrete-target-entropy-weight", type=float, default=0.2)
     parser.add_argument("--marl-memory-size", type=int, default=1_000_000)
+    parser.add_argument("--save-marl-checkpoint", action="store_true", default=True)
+    parser.add_argument("--no-save-marl-checkpoint", dest="save_marl_checkpoint", action="store_false")
+    parser.add_argument("--marl-checkpoint-interval", type=int, default=0)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--save-folder", default="runs_benchmarl/native_marl")
@@ -231,6 +234,9 @@ def main() -> None:
     experiment_config.prefer_continuous_actions = False
     experiment_config.max_n_iters = args.max_iters
     experiment_config.max_n_frames = None
+    experiment_config.checkpoint_at_end = bool(args.save_marl_checkpoint)
+    experiment_config.checkpoint_interval = int(args.marl_checkpoint_interval)
+    experiment_config.keep_checkpoints_num = 3
     effective_frames_per_batch = int(args.frames_per_batch)
     if args.num_envs > 0 and effective_frames_per_batch % int(args.num_envs) != 0:
         effective_frames_per_batch = int(
