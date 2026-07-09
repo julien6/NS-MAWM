@@ -1,0 +1,9 @@
+{
+  "reward_complexity_spearman": 1.0,
+  "reward_expected_level_spearman": 1.0,
+  "controlled_level_failures": [],
+  "controlled_reward_monotonic": true,
+  "controlled_complexity_monotonic": true,
+  "unarmed_kills": 0.0,
+  "armed_kills": 18.0
+}

@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 
 from .config import VGridcraftConfig
-from .env import VectorizedGridcraftEnv
+from .env import ACTION_NAMES, EVENT_NAMES, REWARD_COMPONENT_NAMES, VectorizedGridcraftEnv
 
 try:
     from tensordict import TensorDict
@@ -41,6 +41,33 @@ class GridcraftTorchRLEnv(EnvBase):
         self.observation_spec = Composite(
             agents=Composite(
                 observation=Unbounded(shape=obs_shape, dtype=torch.float32, device=self.device),
+                action_attempts=Unbounded(
+                    shape=torch.Size([*agent_shape, len(ACTION_NAMES)]),
+                    dtype=torch.float32,
+                    device=self.device,
+                ),
+                event_success=Unbounded(
+                    shape=torch.Size([*agent_shape, len(EVENT_NAMES)]),
+                    dtype=torch.float32,
+                    device=self.device,
+                ),
+                reward_components=Unbounded(
+                    shape=torch.Size([*agent_shape, len(REWARD_COMPONENT_NAMES)]),
+                    dtype=torch.float32,
+                    device=self.device,
+                ),
+                task_level_max=Unbounded(
+                    shape=torch.Size([*agent_shape, 1]), dtype=torch.float32, device=self.device
+                ),
+                complexity_cumulative=Unbounded(
+                    shape=torch.Size([*agent_shape, 1]), dtype=torch.float32, device=self.device
+                ),
+                complexity_exponential_cumulative=Unbounded(
+                    shape=torch.Size([*agent_shape, 1]), dtype=torch.float32, device=self.device
+                ),
+                complexity_unique=Unbounded(
+                    shape=torch.Size([*agent_shape, 1]), dtype=torch.float32, device=self.device
+                ),
                 shape=agent_shape,
                 device=self.device,
             ),
@@ -98,7 +125,10 @@ class GridcraftTorchRLEnv(EnvBase):
         return TensorDict(
             {
                 "agents": TensorDict(
-                    {"observation": obs["vector"].float()},
+                    {
+                        "observation": obs["vector"].float(),
+                        **self._empty_stats(),
+                    },
                     batch_size=torch.Size([*self.batch_size, self.config.num_agents]),
                     device=self.device,
                 ),
@@ -114,13 +144,22 @@ class GridcraftTorchRLEnv(EnvBase):
         actions = tensordict.get(("agents", "action")).long()
         if actions.ndim == 3 and actions.shape[-1] == 1:
             actions = actions.squeeze(-1)
-        obs, reward, done, truncated, _ = self.v_env.step(actions)
+        obs, reward, done, truncated, info = self.v_env.step(actions)
         return TensorDict(
             {
                 "agents": TensorDict(
                     {
                         "observation": obs["vector"].float(),
                         "reward": reward.unsqueeze(-1),
+                        "action_attempts": info["action_attempts"],
+                        "event_success": info["event_success"],
+                        "reward_components": info["reward_components"],
+                        "task_level_max": info["task_level_max"].float().unsqueeze(-1),
+                        "complexity_cumulative": info["complexity_cumulative"].unsqueeze(-1),
+                        "complexity_exponential_cumulative": info[
+                            "complexity_exponential_cumulative"
+                        ].unsqueeze(-1),
+                        "complexity_unique": info["complexity_unique"].unsqueeze(-1),
                     },
                     batch_size=torch.Size([*self.batch_size, self.config.num_agents]),
                     device=self.device,
@@ -132,6 +171,34 @@ class GridcraftTorchRLEnv(EnvBase):
             batch_size=self.batch_size,
             device=self.device,
         )
+
+    def _empty_stats(self):
+        agent_shape = (*self.batch_size, self.config.num_agents)
+        return {
+            "action_attempts": torch.zeros(
+                (*agent_shape, len(ACTION_NAMES)), dtype=torch.float32, device=self.device
+            ),
+            "event_success": torch.zeros(
+                (*agent_shape, len(EVENT_NAMES)), dtype=torch.float32, device=self.device
+            ),
+            "reward_components": torch.zeros(
+                (*agent_shape, len(REWARD_COMPONENT_NAMES)),
+                dtype=torch.float32,
+                device=self.device,
+            ),
+            "task_level_max": torch.zeros(
+                (*agent_shape, 1), dtype=torch.float32, device=self.device
+            ),
+            "complexity_cumulative": torch.zeros(
+                (*agent_shape, 1), dtype=torch.float32, device=self.device
+            ),
+            "complexity_exponential_cumulative": torch.zeros(
+                (*agent_shape, 1), dtype=torch.float32, device=self.device
+            ),
+            "complexity_unique": torch.zeros(
+                (*agent_shape, 1), dtype=torch.float32, device=self.device
+            ),
+        }
 
     def _set_seed(self, seed: int | None):
         if seed is not None:

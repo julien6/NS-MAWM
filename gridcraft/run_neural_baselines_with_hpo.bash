@@ -115,7 +115,7 @@ if [[ "$DRY_RUN" != "1" ]]; then
     --root "$MARL_HPO_RESULTS_DIR" \
     --required-stage final \
     --num-agents "$NUM_AGENTS" \
-    --minimum-budget-json "{\"seeds\":\"${MARL_HPO_SEEDS}\",\"num_envs\":512,\"max_steps\":500,\"max_iters\":1000}"
+    --minimum-budget-json "{\"seeds\":\"${MARL_HPO_SEEDS}\",\"max_steps\":500,\"max_iters\":1000}"
 fi
 
 echo "=== Phase 2/6: final model-free MASAC baseline ==="
@@ -157,7 +157,7 @@ if [[ "$DRY_RUN" != "1" ]]; then
     --root "$MARL_HPO_RESULTS_DIR" \
     --required-stage final \
     --num-agents "$NUM_AGENTS" \
-    --minimum-budget-json "{\"seeds\":\"${MARL_HPO_SEEDS}\",\"num_envs\":512,\"max_steps\":500,\"max_iters\":1000}" \
+    --minimum-budget-json "{\"seeds\":\"${MARL_HPO_SEEDS}\",\"max_steps\":500,\"max_iters\":1000}" \
     --external-checkpoint-dir "${WM_HPO_RUN_DIR}/checkpoints"
 fi
 

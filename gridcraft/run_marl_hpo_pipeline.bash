@@ -122,6 +122,33 @@ fi
 for family in $MARL_HPO_FAMILIES; do
   best_config="${MARL_HPO_RESULTS_DIR}/${family}/best_config.json"
   if [[ "$FORCE_MARL_HPO" != "1" && -f "$best_config" ]]; then
+    reselection_stage="$("$PYTHON_BIN" - "$best_config" <<'PY'
+import json
+import sys
+from pathlib import Path
+payload = json.loads(Path(sys.argv[1]).read_text())
+print(payload.get("stage", "") if payload.get("selection_method") != "mean_across_seeds_v1" else "")
+PY
+)"
+    if [[ -n "$reselection_stage" ]]; then
+      reselection_budget="$("$PYTHON_BIN" - "$best_config" <<'PY'
+import json
+import sys
+from pathlib import Path
+print(json.dumps(json.loads(Path(sys.argv[1]).read_text()).get("budget", {}), separators=(",", ":")))
+PY
+)"
+      echo "[marl-hpo] ${family}: recalculating stage=${reselection_stage} selection as a mean across seeds."
+      "$PYTHON_BIN" marl_hpo_registry.py select-best \
+        --family "$family" \
+        --trials-root "${MARL_HPO_TRIALS_DIR}/${family}" \
+        --results-root "$MARL_HPO_RESULTS_DIR" \
+        --stage "$reselection_stage" \
+        --top-k "$MARL_HPO_TOP_K" \
+        --budget-json "$reselection_budget" >/dev/null
+    fi
+  fi
+  if [[ "$FORCE_MARL_HPO" != "1" && -f "$best_config" ]]; then
     VALIDATE_ARGS=(
       "$PYTHON_BIN" marl_hpo_registry.py validate
       --family "$family"

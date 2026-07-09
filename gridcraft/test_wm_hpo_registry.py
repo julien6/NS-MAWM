@@ -2,7 +2,12 @@ import json
 import subprocess
 import sys
 
-from wm_hpo_registry import hpo_env_exports, hpo_family_for_baseline, validate_best_config
+from wm_hpo_registry import (
+    hpo_env_exports,
+    hpo_family_for_baseline,
+    select_best_config,
+    validate_best_config,
+)
 
 
 def test_hpo_family_for_baseline():
@@ -70,6 +75,7 @@ def test_export_env_cli(tmp_path):
 def test_final_validation_rejects_screen_and_requires_checkpoints(tmp_path):
     screen = {
         "stage": "screen",
+        "selection_method": "mean_across_seeds_v1",
         "provenance": {"num_agents": 3},
         "checkpoint_dir": str(tmp_path / "checkpoints"),
     }
@@ -88,3 +94,38 @@ def test_final_validation_rejects_screen_and_requires_checkpoints(tmp_path):
         final, required_stage="final", num_agents=3, require_checkpoints=True
     )
     assert valid, reason
+
+
+def test_best_wm_config_uses_mean_across_seeds(tmp_path):
+    trials = tmp_path / "trials"
+    for index, (config, score) in enumerate(
+        [
+            ({"rnn_size": 128}, 0.1),
+            ({"rnn_size": 128}, 10.0),
+            ({"rnn_size": 256}, 2.0),
+            ({"rnn_size": 256}, 3.0),
+        ]
+    ):
+        path = trials / str(index)
+        path.mkdir(parents=True)
+        (path / "hpo_trial_summary.json").write_text(
+            json.dumps(
+                {
+                    "hpo_family": "neural_k0.0",
+                    "stage": "final",
+                    "score": score,
+                    "hyperparameters": config,
+                    "provenance": {"num_agents": 3},
+                    "run_dir": str(path),
+                }
+            )
+        )
+    best = select_best_config(
+        hpo_family="neural_k0.0",
+        trials_root=trials,
+        results_root=tmp_path / "results",
+        stage="final",
+    )
+    assert best["hyperparameters"]["rnn_size"] == 256
+    assert best["score"] == 2.5
+    assert best["config_trial_count"] == 2

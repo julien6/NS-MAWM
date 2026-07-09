@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "vGridcraft"))
 sys.path.insert(0, str(ROOT / "gridcraft"))
 
 from vgridcraft import VGridcraftConfig, VectorizedGridcraftEnv
+from vgridcraft.env import ACTION_SUCCESS_EVENTS, EVENT_INDEX, EVENT_NAMES, REWARD_COMPONENT_NAMES
 from pstr_profiles import active_rules_for_baseline, profile_name_from_baseline, rules_to_csv
 from benchmarl.experiment.callback import Callback
 
@@ -46,6 +47,7 @@ class MarlEvaluationVideoCallback(Callback):
 
     def on_evaluation_end(self, rollouts):
         iteration = int(self.experiment.n_iters_performed)
+        self._log_hierarchy(rollouts, prefix="evaluation")
         log_mambpo_imagined_evaluation(self.args, self.experiment, rollouts, iteration)
         if iteration <= 0:
             return
@@ -54,6 +56,14 @@ class MarlEvaluationVideoCallback(Callback):
         if iteration % int(self.args.marl_video_every_iters) != 0:
             return
         log_marl_evaluation_video(self.args, policy=self.experiment.policy, iteration=iteration)
+
+    def on_batch_collected(self, batch):
+        self._log_hierarchy([batch], prefix="training")
+
+    def _log_hierarchy(self, batches, prefix):
+        metrics = hierarchy_metrics_from_tensordicts(batches, prefix=prefix)
+        if metrics:
+            self.experiment.logger.log(metrics, step=int(self.experiment.n_iters_performed))
 
 
 def main() -> None:
@@ -407,7 +417,9 @@ def route_benchmarl_metrics(metrics):
     routed = {}
     for key, value in metrics.items():
         key = str(key)
-        if key.startswith("mambpo/"):
+        if key.startswith("hierarchy/"):
+            routed[f"Reward hierarchy diagnosis/{canonical_benchmarl_key(key.split('/', 1)[1])}"] = value
+        elif key.startswith("mambpo/"):
             routed[f"MARL Training/{canonical_mambpo_key(key)}"] = value
         elif key.startswith("train/"):
             routed[f"MARL Training/{canonical_benchmarl_key(key)}"] = value
@@ -424,6 +436,77 @@ def route_benchmarl_metrics(metrics):
         else:
             routed[f"MARL Training/{canonical_benchmarl_key(key)}"] = value
     return routed
+
+
+def hierarchy_metrics_from_tensordicts(tensordicts, prefix):
+    events = []
+    attempts = []
+    components = []
+    levels = []
+    complexity = []
+    complexity_exp = []
+    complexity_unique = []
+    for td in tensordicts:
+        for target, key in (
+            (attempts, ("next", "agents", "action_attempts")),
+            (events, ("next", "agents", "event_success")),
+            (components, ("next", "agents", "reward_components")),
+            (levels, ("next", "agents", "task_level_max")),
+            (complexity, ("next", "agents", "complexity_cumulative")),
+            (complexity_exp, ("next", "agents", "complexity_exponential_cumulative")),
+            (complexity_unique, ("next", "agents", "complexity_unique")),
+        ):
+            try:
+                target.append(td.get(key).detach().float().reshape(-1, td.get(key).shape[-1]))
+            except (KeyError, AttributeError):
+                pass
+    if not events:
+        return {}
+    event_tensor = torch.cat(events, dim=0)
+    attempt_tensor = torch.cat(attempts, dim=0) if attempts else None
+    component_tensor = torch.cat(components, dim=0)
+    result = {}
+    for index, name in enumerate(EVENT_NAMES):
+        result[f"hierarchy/{prefix}_event_count_{name}"] = float(event_tensor[:, index].sum().cpu())
+        result[f"hierarchy/{prefix}_event_rate_{name}"] = float(event_tensor[:, index].mean().cpu())
+    for index, name in enumerate(REWARD_COMPONENT_NAMES):
+        result[f"hierarchy/{prefix}_reward_{name}"] = float(component_tensor[:, index].sum().cpu())
+    if attempt_tensor is not None:
+        move_indices = [ACTION_NAMES.index(name) for name in ("move_n", "move_s", "move_w", "move_e")]
+        move_attempts = float(attempt_tensor[:, move_indices].sum().cpu())
+        move_successes = sum(
+            float(event_tensor[:, EVENT_INDEX[event]].sum().cpu())
+            for event in ("move_new_cell", "move_known_cell")
+        )
+        result[f"hierarchy/{prefix}_action_attempts_move"] = move_attempts
+        result[f"hierarchy/{prefix}_action_success_rate_move"] = (
+            move_successes / move_attempts if move_attempts > 0 else 0.0
+        )
+        for action_index, action_name in enumerate(ACTION_NAMES):
+            if action_name.startswith("move_"):
+                continue
+            attempts_count = float(attempt_tensor[:, action_index].sum().cpu())
+            result[f"hierarchy/{prefix}_action_attempts_{action_name}"] = attempts_count
+            success_events = ACTION_SUCCESS_EVENTS.get(action_name, ())
+            success_count = sum(
+                float(event_tensor[:, EVENT_INDEX[event]].sum().cpu())
+                for event in success_events
+            )
+            result[f"hierarchy/{prefix}_action_success_rate_{action_name}"] = (
+                success_count / attempts_count if attempts_count > 0 else 0.0
+            )
+    if levels:
+        result[f"hierarchy/{prefix}_task_level_max"] = float(torch.cat(levels).max().cpu())
+    for name, rows in (
+        ("complexity_cumulative", complexity),
+        ("complexity_exponential_cumulative", complexity_exp),
+        ("complexity_unique", complexity_unique),
+    ):
+        if rows:
+            values = torch.cat(rows)
+            result[f"hierarchy/{prefix}_{name}_mean"] = float(values.mean().cpu())
+            result[f"hierarchy/{prefix}_{name}_max"] = float(values.max().cpu())
+    return result
 
 
 def canonical_mambpo_key(key):

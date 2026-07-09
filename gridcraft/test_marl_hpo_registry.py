@@ -7,6 +7,7 @@ from marl_hpo_registry import (
     checkpoint_checksum,
     env_exports,
     families_for_baseline,
+    select_best_config,
     validate_best_config,
 )
 
@@ -71,6 +72,7 @@ def test_mambpo_validation_tracks_external_world_model(tmp_path):
     (checkpoint_dir / "rnn.pt").write_bytes(b"rnn")
     best = {
         "stage": "final",
+        "selection_method": "mean_across_seeds_v1",
         "provenance": {
             "num_agents": 3,
             "external_checkpoint_checksum": checkpoint_checksum(str(checkpoint_dir)),
@@ -93,3 +95,37 @@ def test_mambpo_validation_tracks_external_world_model(tmp_path):
     )
     assert not valid
     assert "provenance" in reason
+
+
+def test_best_config_uses_mean_across_seeds(tmp_path):
+    trials = tmp_path / "trials"
+    for index, (config, score) in enumerate(
+        [
+            ({"lr": 1e-4}, 100.0),
+            ({"lr": 1e-4}, -100.0),
+            ({"lr": 5e-5}, 40.0),
+            ({"lr": 5e-5}, 50.0),
+        ]
+    ):
+        path = trials / str(index)
+        path.mkdir(parents=True)
+        (path / "marl_hpo_trial_summary.json").write_text(
+            json.dumps(
+                {
+                    "hpo_family": "masac_core",
+                    "stage": "final",
+                    "score": score,
+                    "hyperparameters": config,
+                    "provenance": {"num_agents": 3},
+                }
+            )
+        )
+    best = select_best_config(
+        family="masac_core",
+        trials_root=trials,
+        results_root=tmp_path / "results",
+        stage="final",
+    )
+    assert best["hyperparameters"]["lr"] == 5e-5
+    assert best["score"] == 45.0
+    assert best["config_trial_count"] == 2

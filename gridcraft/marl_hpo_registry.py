@@ -94,6 +94,8 @@ def validate_best_config(
         return False, "best_config.json is missing"
     if not stage_satisfies(best_config.get("stage"), required_stage):
         return False, f"stage {best_config.get('stage')!r} does not satisfy {required_stage!r}"
+    if best_config.get("selection_method") != "mean_across_seeds_v1":
+        return False, "selection method is not mean_across_seeds_v1"
     provenance = best_config.get("provenance", {})
     if num_agents is not None and int(provenance.get("num_agents", -1)) != int(num_agents):
         return False, f"num_agents={provenance.get('num_agents')!r} does not match {num_agents}"
@@ -232,16 +234,34 @@ def select_best_config(
         stage=stage,
         top_k=top_k,
     )
-    score, source_path, best = candidates[0]
+    grouped: dict[str, list[tuple[float, Path, dict[str, Any]]]] = {}
+    for candidate in candidates:
+        key = _config_key(candidate[2].get("hyperparameters", {}))
+        grouped.setdefault(key, []).append(candidate)
+    ranked_groups = sorted(
+        grouped.values(),
+        key=lambda rows: sum(row[0] for row in rows) / len(rows),
+        reverse=True,
+    )
+    best_group = ranked_groups[0]
+    score = sum(row[0] for row in best_group) / len(best_group)
+    score_std = float(
+        math.sqrt(sum((row[0] - score) ** 2 for row in best_group) / len(best_group))
+    )
+    _, source_path, best = max(best_group, key=lambda row: row[0])
     out = {
         "hpo_family": family,
         "score": score,
+        "score_std": score_std,
+        "seed_scores": [row[0] for row in best_group],
+        "selection_method": "mean_across_seeds_v1",
         "hyperparameters": best.get("hyperparameters", {}),
         "metrics": best.get("metrics", {}),
         "best_run_dir": best.get("run_dir"),
         "best_run_url": best.get("wandb_run_url"),
         "selected_from": str(source_path),
         "trial_count": len(candidates),
+        "config_trial_count": len(best_group),
         "budget": budget or {},
         "stage": stage,
         "provenance": best.get("provenance", {}),
@@ -301,7 +321,7 @@ def write_stage_results(
         out_path = root / "screen_results.json"
     else:
         out_path = root / "promoted_configs.json"
-        payload["configs"] = [candidate.get("hyperparameters", {}) for candidate in candidates[:top_k]]
+        payload["configs"] = _unique_configs(candidates, top_k)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w") as handle:
         json.dump(payload, handle, indent=2)
@@ -368,6 +388,25 @@ def _as_float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _config_key(config: dict[str, Any]) -> str:
+    return json.dumps(config, sort_keys=True, separators=(",", ":"))
+
+
+def _unique_configs(candidates: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    configs = []
+    seen = set()
+    for candidate in candidates:
+        config = candidate.get("hyperparameters", {})
+        key = _config_key(config)
+        if key in seen:
+            continue
+        seen.add(key)
+        configs.append(config)
+        if len(configs) >= limit:
+            break
+    return configs
 
 
 def main() -> None:

@@ -129,6 +129,33 @@ fi
 for family in $HPO_FAMILIES; do
   best_config="${HPO_RESULTS_DIR}/${family}/best_config.json"
   if [[ "$FORCE_WM_HPO" != "1" && -f "$best_config" ]]; then
+    reselection_stage="$("$PYTHON_BIN" - "$best_config" <<'PY'
+import json
+import sys
+from pathlib import Path
+payload = json.loads(Path(sys.argv[1]).read_text())
+print(payload.get("stage", "") if payload.get("selection_method") != "mean_across_seeds_v1" else "")
+PY
+)"
+    if [[ -n "$reselection_stage" ]]; then
+      reselection_budget="$("$PYTHON_BIN" - "$best_config" <<'PY'
+import json
+import sys
+from pathlib import Path
+print(json.dumps(json.loads(Path(sys.argv[1]).read_text()).get("budget", {}), separators=(",", ":")))
+PY
+)"
+      echo "[wm-hpo] ${family}: recalculating stage=${reselection_stage} selection as a mean across seeds."
+      "$PYTHON_BIN" wm_hpo_registry.py select-best \
+        --hpo-family "$family" \
+        --trials-root "${HPO_TRIALS_DIR}/${family}" \
+        --results-root "$HPO_RESULTS_DIR" \
+        --stage "$reselection_stage" \
+        --top-k "$HPO_TOP_K" \
+        --budget-json "$reselection_budget" >/dev/null
+    fi
+  fi
+  if [[ "$FORCE_WM_HPO" != "1" && -f "$best_config" ]]; then
     if "$PYTHON_BIN" wm_hpo_registry.py validate \
       --hpo-family "$family" \
       --root "$HPO_RESULTS_DIR" \
