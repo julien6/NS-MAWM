@@ -44,6 +44,8 @@ parameters:
     value: 1.0
   discrete_target_entropy_weight:
     value: 0.2
+  entropy_profile:
+    value: standard
   memory_size:
     value: 1000000
   mb_imagined_horizon:

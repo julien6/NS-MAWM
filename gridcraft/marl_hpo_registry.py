@@ -29,6 +29,7 @@ CORE_ENV_KEYS = {
     "polyak_tau": "MARL_POLYAK_TAU",
     "alpha_init": "MARL_ALPHA_INIT",
     "discrete_target_entropy_weight": "MARL_DISCRETE_TARGET_ENTROPY_WEIGHT",
+    "entropy_profile": "MARL_ENTROPY_PROFILE",
     "memory_size": "MARL_MEMORY_SIZE",
 }
 
@@ -366,6 +367,48 @@ def write_summary(results_root: str | Path = DEFAULT_MARL_HPO_ROOT) -> dict[str,
 
 
 def score_from_metrics(metrics: dict[str, Any], family: str) -> float:
+    temp_reward = first_metric(
+        metrics,
+        "Policy hierarchy evaluation/temp_0.25/episode_return_mean",
+        "Policy hierarchy evaluation/temp_0.25_episode_return_mean",
+    )
+    if temp_reward is not None:
+        score = _as_float(temp_reward, default=-1e9)
+        task_level = _as_float(
+            first_metric(
+                metrics,
+                "Policy hierarchy evaluation/temp_0.25/task_level_max",
+                "Policy hierarchy evaluation/temp_0.25_task_level_max",
+            ),
+            default=0.0,
+        )
+        dominant_rate = _as_float(
+            first_metric(
+                metrics,
+                "Policy hierarchy evaluation/temp_0.25/dominant_action_rate",
+                "Policy hierarchy evaluation/temp_0.25_dominant_action_rate",
+            ),
+            default=0.0,
+        )
+        entropy = _as_float(
+            first_metric(
+                metrics,
+                "Policy hierarchy evaluation/temp_0.25/policy_entropy_mean",
+                "Policy hierarchy evaluation/temp_0.25_policy_entropy_mean",
+            ),
+            default=0.0,
+        )
+        score += 10.0 * task_level
+        if dominant_rate > 0.8:
+            score -= 100.0 * (dominant_rate - 0.8)
+        if task_level < 4.0 and entropy < 0.2:
+            score -= 25.0 * (0.2 - entropy)
+        if normalize_family(family) == "mambpo_imagination":
+            gap = abs(_as_float(first_metric(metrics, "MARL Evaluation/real_imagined_reward_gap"), default=0.0))
+            failed = _as_float(first_metric(metrics, "MARL Evaluation/eval_imagined_generation_failed"), default=0.0)
+            score -= 0.1 * gap + 1000.0 * failed
+        return float(score)
+
     eval_reward = first_metric(metrics, "MARL Evaluation/eval_agents_reward_episode_reward_mean", "eval/agents/reward/episode_reward_mean")
     if eval_reward is None:
         eval_reward = first_metric(metrics, "MARL Evaluation/eval_reward_episode_reward_mean", "eval/reward/episode_reward_mean")

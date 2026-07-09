@@ -29,6 +29,7 @@ ENV_OVERRIDES = {
     "polyak_tau": ("MARL_HPO_POLYAK_TAU", float),
     "alpha_init": ("MARL_HPO_ALPHA_INIT", float),
     "discrete_target_entropy_weight": ("MARL_HPO_DISCRETE_TARGET_ENTROPY_WEIGHT", float),
+    "entropy_profile": ("MARL_HPO_ENTROPY_PROFILE", str),
     "memory_size": ("MARL_HPO_MEMORY_SIZE", int),
     "mb_imagined_horizon": ("MARL_HPO_MB_IMAGINED_HORIZON", int),
     "mb_imagined_branches": ("MARL_HPO_MB_IMAGINED_BRANCHES", int),
@@ -36,6 +37,78 @@ ENV_OVERRIDES = {
     "mb_world_model_batch_size": ("MARL_HPO_MB_WORLD_MODEL_BATCH_SIZE", int),
     "mb_world_model_train_epochs": ("MARL_HPO_MB_WORLD_MODEL_TRAIN_EPOCHS", int),
 }
+
+
+def _latest_checkpoint(run_dir: Path) -> Path | None:
+    checkpoints = sorted(
+        run_dir.glob("**/checkpoints/checkpoint_*.pt"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    return checkpoints[0] if checkpoints else None
+
+
+def _run_posthoc_policy_eval(
+    *,
+    script_dir: Path,
+    run_dir: Path,
+    selected_config: dict,
+    baseline_id: str,
+) -> dict[str, float | int | str]:
+    checkpoint = _latest_checkpoint(run_dir)
+    if checkpoint is None:
+        return {"Policy hierarchy evaluation/posthoc_failed": 1.0}
+    modes = os.environ.get(
+        "MARL_HPO_POLICY_EVAL_MODES",
+        "deterministic,mode,temp_0.25,sampled",
+    )
+    episodes = int(os.environ.get("MARL_HPO_POLICY_EVAL_EPISODES", str(selected_config["eval_episodes"])))
+    out_dir = run_dir / "policy_hierarchy_eval"
+    import evaluate_trained_policies_hierarchy
+
+    old_argv = sys.argv
+    try:
+        sys.argv = [
+            "evaluate_trained_policies_hierarchy.py",
+            "--checkpoint",
+            str(checkpoint),
+            "--baseline-id",
+            baseline_id,
+            "--seed",
+            str(selected_config["seed"]),
+            "--num-agents",
+            str(selected_config["num_agents"]),
+            "--episodes",
+            str(episodes),
+            "--max-steps",
+            str(selected_config["max_steps"]),
+            "--modes",
+            modes,
+            "--device",
+            str(selected_config["device"]),
+            "--out-dir",
+            str(out_dir),
+        ]
+        evaluate_trained_policies_hierarchy.main()
+    finally:
+        sys.argv = old_argv
+    summary_path = out_dir / "policy_hierarchy_eval_summary.json"
+    if not summary_path.exists():
+        return {"Policy hierarchy evaluation/posthoc_failed": 1.0}
+    with summary_path.open() as handle:
+        rows = json.load(handle)
+    metrics: dict[str, float | int | str] = {
+        "Policy hierarchy evaluation/posthoc_failed": 0.0,
+        "Policy hierarchy evaluation/posthoc_checkpoint": str(checkpoint),
+    }
+    for row in rows:
+        mode = row.get("mode", "unknown")
+        for key, value in row.items():
+            if key == "mode":
+                continue
+            if isinstance(value, (int, float, str, bool)) or value is None:
+                metrics[f"Policy hierarchy evaluation/{mode}/{key}"] = value
+    return metrics
 
 
 def main() -> None:
@@ -100,6 +173,7 @@ def main() -> None:
         "polyak_tau": cfg_value("polyak_tau", 0.005),
         "alpha_init": cfg_value("alpha_init", 1.0),
         "discrete_target_entropy_weight": cfg_value("discrete_target_entropy_weight", 0.2),
+        "entropy_profile": cfg_value("entropy_profile", "standard"),
         "memory_size": cfg_value("memory_size", 1_000_000),
         "mb_world_model_train_epochs": cfg_value("mb_world_model_train_epochs", 0 if family == "mambpo_imagination" else 5),
         "mb_world_model_batch_size": cfg_value("mb_world_model_batch_size", 256),
@@ -130,6 +204,7 @@ def main() -> None:
         "--marl-polyak-tau", str(selected_config["polyak_tau"]),
         "--marl-alpha-init", str(selected_config["alpha_init"]),
         "--marl-discrete-target-entropy-weight", str(selected_config["discrete_target_entropy_weight"]),
+        "--marl-entropy-profile", str(selected_config["entropy_profile"]),
         "--marl-memory-size", str(selected_config["memory_size"]),
         "--mb-world-model-train-epochs", str(selected_config["mb_world_model_train_epochs"]),
         "--mb-world-model-batch-size", str(selected_config["mb_world_model_batch_size"]),
@@ -177,6 +252,25 @@ def main() -> None:
         with summary_files[-1].open() as handle:
             local_summary = json.load(handle)
         metrics.update(local_summary.get("metrics", {}))
+    try:
+        posthoc_metrics = _run_posthoc_policy_eval(
+            script_dir=script_dir,
+            run_dir=summary_root,
+            selected_config=selected_config,
+            baseline_id=baseline_id,
+        )
+        metrics.update(posthoc_metrics)
+        numeric_posthoc = {
+            key: value
+            for key, value in posthoc_metrics.items()
+            if isinstance(value, (int, float))
+        }
+        if numeric_posthoc:
+            wandb.log(numeric_posthoc)
+    except Exception as exc:
+        metrics["Policy hierarchy evaluation/posthoc_failed"] = 1.0
+        metrics["Policy hierarchy evaluation/posthoc_error"] = repr(exc)
+        wandb.log({"Policy hierarchy evaluation/posthoc_failed": 1.0})
     payload = build_trial_summary(
         family=family,
         run_dir=summary_root,

@@ -41,9 +41,11 @@ parameters:
   polyak_tau:
     values: [0.002, 0.005, 0.01]
   alpha_init:
-    values: [0.2, 0.5, 1.0]
+    values: [0.05, 0.1, 0.2, 0.5, 1.0]
   discrete_target_entropy_weight:
-    values: [0.1, 0.2, 0.5]
+    values: [0.01, 0.05, 0.1, 0.2]
+  entropy_profile:
+    values: [standard, anneal, low_entropy_finetune]
   memory_size:
     values: [250000, 500000, 1000000]
 command:

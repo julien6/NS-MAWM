@@ -112,6 +112,12 @@ MARL_GAMMA="${MARL_GAMMA:-0.99}"
 MARL_POLYAK_TAU="${MARL_POLYAK_TAU:-0.005}"
 MARL_ALPHA_INIT="${MARL_ALPHA_INIT:-1.0}"
 MARL_DISCRETE_TARGET_ENTROPY_WEIGHT="${MARL_DISCRETE_TARGET_ENTROPY_WEIGHT:-0.2}"
+MARL_ENTROPY_PROFILE="${MARL_ENTROPY_PROFILE:-standard}"
+MARL_TARGET_ENTROPY_WEIGHT_START="${MARL_TARGET_ENTROPY_WEIGHT_START:-}"
+MARL_TARGET_ENTROPY_WEIGHT_END="${MARL_TARGET_ENTROPY_WEIGHT_END:-}"
+MARL_ALPHA_INIT_START="${MARL_ALPHA_INIT_START:-}"
+MARL_ALPHA_INIT_END="${MARL_ALPHA_INIT_END:-}"
+MARL_FINETUNE_ITERS="${MARL_FINETUNE_ITERS:-0}"
 MARL_MEMORY_SIZE="${MARL_MEMORY_SIZE:-1000000}"
 MARL_HPO_RESULTS_DIR="${MARL_HPO_RESULTS_DIR:-hpo_results/marl}"
 REUSE_MARL_HPO_CONFIG="${REUSE_MARL_HPO_CONFIG:-1}"
@@ -448,6 +454,8 @@ if [[ "${MARL_CMD[1]}" == "run_benchmarl_marl_gridcraft.py" ]]; then
     --marl-polyak-tau "$MARL_POLYAK_TAU"
     --marl-alpha-init "$MARL_ALPHA_INIT"
     --marl-discrete-target-entropy-weight "$MARL_DISCRETE_TARGET_ENTROPY_WEIGHT"
+    --marl-entropy-profile "$MARL_ENTROPY_PROFILE"
+    --marl-finetune-iters "$MARL_FINETUNE_ITERS"
     --marl-memory-size "$MARL_MEMORY_SIZE"
     --marl-hpo-core-reused "${MARL_HPO_CORE_REUSED:-0}"
     --marl-hpo-core-config-path "${MARL_HPO_CORE_CONFIG_PATH:-}"
@@ -462,6 +470,18 @@ if [[ "${MARL_CMD[1]}" == "run_benchmarl_marl_gridcraft.py" ]]; then
   fi
   if [[ -n "${MARL_HPO_IMAGINATION_SCORE:-}" ]]; then
     MARL_CMD+=(--marl-hpo-imagination-score "$MARL_HPO_IMAGINATION_SCORE")
+  fi
+  if [[ -n "$MARL_TARGET_ENTROPY_WEIGHT_START" ]]; then
+    MARL_CMD+=(--marl-target-entropy-weight-start "$MARL_TARGET_ENTROPY_WEIGHT_START")
+  fi
+  if [[ -n "$MARL_TARGET_ENTROPY_WEIGHT_END" ]]; then
+    MARL_CMD+=(--marl-target-entropy-weight-end "$MARL_TARGET_ENTROPY_WEIGHT_END")
+  fi
+  if [[ -n "$MARL_ALPHA_INIT_START" ]]; then
+    MARL_CMD+=(--marl-alpha-init-start "$MARL_ALPHA_INIT_START")
+  fi
+  if [[ -n "$MARL_ALPHA_INIT_END" ]]; then
+    MARL_CMD+=(--marl-alpha-init-end "$MARL_ALPHA_INIT_END")
   fi
 fi
 

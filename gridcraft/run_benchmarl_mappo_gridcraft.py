@@ -59,6 +59,14 @@ class MarlEvaluationVideoCallback(Callback):
 
     def on_batch_collected(self, batch):
         self._log_hierarchy([batch], prefix="training")
+        self.experiment.logger.log(
+            {
+                "MARL Training/entropy_profile_phase_index": entropy_profile_phase_index(
+                    self.args.marl_entropy_profile_phase
+                ),
+            },
+            step=int(self.experiment.n_iters_performed),
+        )
 
     def _log_hierarchy(self, batches, prefix):
         metrics = hierarchy_metrics_from_tensordicts(batches, prefix=prefix)
@@ -84,6 +92,16 @@ def main() -> None:
     parser.add_argument("--marl-polyak-tau", type=float, default=0.005)
     parser.add_argument("--marl-alpha-init", type=float, default=1.0)
     parser.add_argument("--marl-discrete-target-entropy-weight", type=float, default=0.2)
+    parser.add_argument(
+        "--marl-entropy-profile",
+        choices=["standard", "anneal", "low_entropy_finetune"],
+        default=os.environ.get("MARL_ENTROPY_PROFILE", "standard"),
+    )
+    parser.add_argument("--marl-target-entropy-weight-start", type=float, default=None)
+    parser.add_argument("--marl-target-entropy-weight-end", type=float, default=None)
+    parser.add_argument("--marl-alpha-init-start", type=float, default=None)
+    parser.add_argument("--marl-alpha-init-end", type=float, default=None)
+    parser.add_argument("--marl-finetune-iters", type=int, default=0)
     parser.add_argument("--marl-memory-size", type=int, default=1_000_000)
     parser.add_argument("--save-marl-checkpoint", action="store_true", default=True)
     parser.add_argument("--no-save-marl-checkpoint", dest="save_marl_checkpoint", action="store_false")
@@ -120,6 +138,7 @@ def main() -> None:
     parser.add_argument("--marl-hpo-imagination-stage", default=None)
     parser.add_argument("--marl-hpo-imagination-checkpoint-checksum", default=None)
     args = parser.parse_args()
+    resolve_entropy_profile(args)
     warn_legacy_marl_names(args.algorithm)
 
     try:
@@ -219,7 +238,11 @@ def main() -> None:
         f"wm_checkpoint_dir={checkpoint_dir} "
         f"external_wm={int(args.algorithm in {'mb_mappo', 'mambpo'} and bool(args.wm_run_dir))} "
         f"num_agents={args.num_agents} "
-        f"seed={args.seed}",
+        f"seed={args.seed} "
+        f"entropy_profile={args.marl_entropy_profile} "
+        f"entropy_phase={args.marl_entropy_profile_phase} "
+        f"alpha_init={args.marl_alpha_init} "
+        f"target_entropy_weight={args.marl_discrete_target_entropy_weight}",
         flush=True,
     )
     on_policy = algorithm_config.on_policy()
@@ -289,6 +312,13 @@ def main() -> None:
                 "marl_polyak_tau": args.marl_polyak_tau,
                 "marl_alpha_init": args.marl_alpha_init,
                 "marl_discrete_target_entropy_weight": args.marl_discrete_target_entropy_weight,
+                "marl_entropy_profile": args.marl_entropy_profile,
+                "marl_entropy_profile_phase": args.marl_entropy_profile_phase,
+                "marl_target_entropy_weight_start": args.marl_target_entropy_weight_start,
+                "marl_target_entropy_weight_end": args.marl_target_entropy_weight_end,
+                "marl_alpha_init_start": args.marl_alpha_init_start,
+                "marl_alpha_init_end": args.marl_alpha_init_end,
+                "marl_finetune_iters": args.marl_finetune_iters,
                 "marl_memory_size": args.marl_memory_size,
                 "marl_frames_per_batch": args.frames_per_batch,
                 "marl_effective_frames_per_batch": effective_frames_per_batch,
@@ -351,6 +381,45 @@ def warn_legacy_marl_names(algorithm: str) -> None:
         )
 
 
+def resolve_entropy_profile(args) -> None:
+    args.marl_entropy_profile_phase = "standard"
+    if args.marl_entropy_profile == "standard":
+        return
+    if args.marl_entropy_profile == "anneal":
+        args.marl_entropy_profile_phase = "anneal_static_consolidation_v1"
+        args.marl_alpha_init = (
+            args.marl_alpha_init_end
+            if args.marl_alpha_init_end is not None
+            else min(args.marl_alpha_init, 0.2)
+        )
+        args.marl_discrete_target_entropy_weight = (
+            args.marl_target_entropy_weight_end
+            if args.marl_target_entropy_weight_end is not None
+            else min(args.marl_discrete_target_entropy_weight, 0.05)
+        )
+        return
+    if args.marl_entropy_profile == "low_entropy_finetune":
+        args.marl_entropy_profile_phase = "low_entropy_static_consolidation_v1"
+        args.marl_alpha_init = (
+            args.marl_alpha_init_end
+            if args.marl_alpha_init_end is not None
+            else min(args.marl_alpha_init, 0.05)
+        )
+        args.marl_discrete_target_entropy_weight = (
+            args.marl_target_entropy_weight_end
+            if args.marl_target_entropy_weight_end is not None
+            else min(args.marl_discrete_target_entropy_weight, 0.01)
+        )
+
+
+def entropy_profile_phase_index(phase: str) -> float:
+    return {
+        "standard": 0.0,
+        "anneal_static_consolidation_v1": 1.0,
+        "low_entropy_static_consolidation_v1": 2.0,
+    }.get(str(phase), -1.0)
+
+
 def write_marl_run_summary(args, experiment) -> None:
     effective_frames_per_batch = int(args.frames_per_batch)
     if args.num_envs > 0 and effective_frames_per_batch % int(args.num_envs) != 0:
@@ -394,6 +463,13 @@ def write_marl_run_summary(args, experiment) -> None:
                     "polyak_tau": args.marl_polyak_tau,
                     "alpha_init": args.marl_alpha_init,
                     "discrete_target_entropy_weight": args.marl_discrete_target_entropy_weight,
+                    "entropy_profile": args.marl_entropy_profile,
+                    "entropy_profile_phase": args.marl_entropy_profile_phase,
+                    "target_entropy_weight_start": args.marl_target_entropy_weight_start,
+                    "target_entropy_weight_end": args.marl_target_entropy_weight_end,
+                    "alpha_init_start": args.marl_alpha_init_start,
+                    "alpha_init_end": args.marl_alpha_init_end,
+                    "finetune_iters": args.marl_finetune_iters,
                     "memory_size": args.marl_memory_size,
                     "mb_imagined_horizon": args.mb_imagined_horizon,
                     "mb_imagined_branches": args.mb_imagined_branches,
