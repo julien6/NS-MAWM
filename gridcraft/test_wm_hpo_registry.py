@@ -2,6 +2,7 @@ import json
 import subprocess
 import sys
 
+from experiment_versions import version_provenance
 from wm_hpo_registry import (
     hpo_env_exports,
     hpo_family_for_baseline,
@@ -76,7 +77,7 @@ def test_final_validation_rejects_screen_and_requires_checkpoints(tmp_path):
     screen = {
         "stage": "screen",
         "selection_method": "mean_across_seeds_v1",
-        "provenance": {"num_agents": 3},
+        "provenance": {"num_agents": 3, **version_provenance()},
         "checkpoint_dir": str(tmp_path / "checkpoints"),
     }
     valid, reason = validate_best_config(
@@ -94,6 +95,20 @@ def test_final_validation_rejects_screen_and_requires_checkpoints(tmp_path):
         final, required_stage="final", num_agents=3, require_checkpoints=True
     )
     assert valid, reason
+
+
+def test_wm_hpo_rejects_pre_hierarchy_reward_provenance():
+    valid, reason = validate_best_config(
+        {
+            "stage": "final",
+            "selection_method": "mean_across_seeds_v1",
+            "provenance": {"num_agents": 3},
+        },
+        required_stage="final",
+        num_agents=3,
+    )
+    assert not valid
+    assert "version" in reason
 
 
 def test_best_wm_config_uses_mean_across_seeds(tmp_path):
@@ -115,7 +130,7 @@ def test_best_wm_config_uses_mean_across_seeds(tmp_path):
                     "stage": "final",
                     "score": score,
                     "hyperparameters": config,
-                    "provenance": {"num_agents": 3},
+                        "provenance": {"num_agents": 3, **version_provenance()},
                     "run_dir": str(path),
                 }
             )

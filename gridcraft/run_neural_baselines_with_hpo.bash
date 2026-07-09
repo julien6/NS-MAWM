@@ -13,6 +13,9 @@ MARL_HPO_RESULTS_DIR="${MARL_HPO_RESULTS_DIR:-hpo_results/marl}"
 FORCE_WM_HPO="${FORCE_WM_HPO:-0}"
 FORCE_MARL_HPO="${FORCE_MARL_HPO:-0}"
 DRY_RUN="${DRY_RUN:-0}"
+RUN_HIERARCHY_DIAGNOSTIC="${RUN_HIERARCHY_DIAGNOSTIC:-1}"
+LEGACY_POLICY_CHECKPOINTS="${LEGACY_POLICY_CHECKPOINTS:-}"
+HIERARCHY_DIAGNOSTIC_DIR="${HIERARCHY_DIAGNOSTIC_DIR:-reward_hierarchy_diagnosis_v2}"
 
 export NUM_AGENTS HPO_SEEDS MARL_HPO_SEEDS HPO_RESULTS_DIR MARL_HPO_RESULTS_DIR
 export MODEL_FREE_DOWNSTREAM_ALGO=masac
@@ -105,8 +108,34 @@ echo "  force WM HPO:       ${FORCE_WM_HPO}"
 echo "  force MARL HPO:     ${FORCE_MARL_HPO}"
 echo "  WM HPO registry:    ${HPO_RESULTS_DIR}"
 echo "  MARL HPO registry:  ${MARL_HPO_RESULTS_DIR}"
+echo "  dynamics version:   gridcraft_dynamics_v2_armed_combat"
+echo "  reward version:     gridcraft_reward_v2_team_milestones"
 
-echo "=== Phase 1/6: mandatory MASAC core HPO ==="
+echo "=== Phase 1/7: validate task hierarchy and reward ==="
+if [[ "$RUN_HIERARCHY_DIAGNOSTIC" == "1" ]]; then
+  diagnostic_command=(
+    "$PYTHON_BIN" diagnose_gridcraft_task_hierarchy.py
+    --protocol all
+    --seeds 1 2 3
+    --num-agents "$NUM_AGENTS"
+    --controlled-steps 8
+    --natural-steps 200
+    --out-dir "$HIERARCHY_DIAGNOSTIC_DIR"
+    --strict
+  )
+  if [[ -n "$LEGACY_POLICY_CHECKPOINTS" ]]; then
+    read -r -a legacy_checkpoints <<< "$LEGACY_POLICY_CHECKPOINTS"
+    diagnostic_command+=(--policy-checkpoints "${legacy_checkpoints[@]}")
+  fi
+  if [[ "${WANDB_FLAG---wandb}" == "--wandb" ]]; then
+    diagnostic_command+=(--wandb)
+  fi
+  run_command "${diagnostic_command[@]}"
+else
+  echo "[orchestrator] hierarchy diagnostic explicitly disabled"
+fi
+
+echo "=== Phase 2/7: mandatory MASAC core HPO ==="
 run_marl_hpo_stages masac_core
 
 if [[ "$DRY_RUN" != "1" ]]; then
@@ -118,13 +147,13 @@ if [[ "$DRY_RUN" != "1" ]]; then
     --minimum-budget-json "{\"seeds\":\"${MARL_HPO_SEEDS}\",\"max_steps\":500,\"max_iters\":1000}"
 fi
 
-echo "=== Phase 2/6: final model-free MASAC baseline ==="
+echo "=== Phase 3/7: final model-free MASAC baseline ==="
 run_final_baseline B00_model-free-control
 
-echo "=== Phase 3/6: mandatory neural World Model HPO ==="
+echo "=== Phase 4/7: mandatory neural World Model HPO ==="
 run_wm_hpo_stages
 
-echo "=== Phase 4/6: validate selected neural World Model checkpoint ==="
+echo "=== Phase 5/7: validate selected neural World Model checkpoint ==="
 if [[ "$DRY_RUN" == "1" ]]; then
   print_command "$PYTHON_BIN" wm_hpo_registry.py validate \
     --hpo-family neural_k0.0 \
@@ -148,7 +177,7 @@ else
   echo "[orchestrator] MAMBPO HPO will use external World Model at ${WM_CHECKPOINT_DIR}"
 fi
 
-echo "=== Phase 5/6: mandatory MAMBPO imagination HPO ==="
+echo "=== Phase 6/7: mandatory MAMBPO imagination HPO ==="
 run_marl_hpo_stages mambpo_imagination "$WM_HPO_RUN_DIR"
 
 if [[ "$DRY_RUN" != "1" ]]; then
@@ -161,7 +190,7 @@ if [[ "$DRY_RUN" != "1" ]]; then
     --external-checkpoint-dir "${WM_HPO_RUN_DIR}/checkpoints"
 fi
 
-echo "=== Phase 6/6: final neural World Model + MAMBPO baseline ==="
+echo "=== Phase 7/7: final neural World Model + MAMBPO baseline ==="
 run_final_baseline B10_neural_k0.0
 
 echo "=== Completed B00/B10 mandatory-HPO campaign ==="

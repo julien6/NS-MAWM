@@ -127,7 +127,12 @@ import json
 import sys
 from pathlib import Path
 payload = json.loads(Path(sys.argv[1]).read_text())
-print(payload.get("stage", "") if payload.get("selection_method") != "mean_across_seeds_v1" else "")
+provenance = payload.get("provenance", {})
+current = (
+    provenance.get("environment_dynamics_version") == "gridcraft_dynamics_v2_armed_combat"
+    and provenance.get("reward_schema_version") == "gridcraft_reward_v2_team_milestones"
+)
+print(payload.get("stage", "") if current and payload.get("selection_method") != "mean_across_seeds_v1" else "")
 PY
 )"
     if [[ -n "$reselection_stage" ]]; then
@@ -164,7 +169,14 @@ PY
       echo "[marl-hpo] ${family}: compatible ${MARL_HPO_STAGE} config found at ${best_config}; skipping."
       continue
     fi
-    echo "[marl-hpo] ${family}: existing config is not valid for stage=${MARL_HPO_STAGE}, agents=${MARL_HPO_NUM_AGENTS}; continuing HPO."
+    echo "[marl-hpo] ${family}: existing config is not valid for stage=${MARL_HPO_STAGE}, agents=${MARL_HPO_NUM_AGENTS}; archiving pre-fix results."
+    archive_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    archive_root="${MARL_HPO_RESULTS_DIR}/pre_reward_hierarchy_fix/${archive_stamp}/${family}"
+    mkdir -p "$archive_root"
+    mv "$best_config" "${archive_root}/best_config.json"
+    if [[ -d "${MARL_HPO_TRIALS_DIR}/${family}" ]]; then
+      mv "${MARL_HPO_TRIALS_DIR}/${family}" "${archive_root}/trials"
+    fi
   fi
   if [[ "$family" == "mambpo_imagination" ]]; then
     checkpoint_dir="${MARL_HPO_WM_RUN_DIR}/checkpoints"

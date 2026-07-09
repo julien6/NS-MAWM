@@ -63,6 +63,11 @@ def parse_args():
     parser.add_argument("--wandb-project", default="ns-mawm-gridcraft")
     parser.add_argument("--wandb-name", default="gridcraft-reward-hierarchy-diagnosis")
     parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit non-zero unless controlled rewards/complexities are monotonic and no unarmed kill occurs.",
+    )
+    parser.add_argument(
         "--policy-checkpoints",
         nargs="*",
         default=[],
@@ -187,6 +192,18 @@ def main():
         wandb_run.finish()
     print(json.dumps(analysis, indent=2))
     print(f"Wrote diagnostic outputs to {out_dir.resolve()}")
+    if args.strict:
+        failures = []
+        if analysis["controlled_level_failures"]:
+            failures.append("controlled policies did not reach their expected levels")
+        if not analysis["controlled_reward_monotonic"]:
+            failures.append("controlled cumulative reward is not strictly monotonic")
+        if not analysis["controlled_complexity_monotonic"]:
+            failures.append("controlled complexity is not strictly monotonic")
+        if analysis["unarmed_kills"] != 0:
+            failures.append(f"observed {analysis['unarmed_kills']} unarmed kills")
+        if failures:
+            raise SystemExit("Hierarchy validation failed: " + "; ".join(failures))
 
 
 def run_episode(policy, protocol, seed, num_agents, max_steps, device):
@@ -196,7 +213,7 @@ def run_episode(policy, protocol, seed, num_agents, max_steps, device):
         num_agents=num_agents,
         max_steps=max_steps,
         seed=seed,
-        mob_spawn_rate=0 if protocol == "controlled" else 10,
+        mob_spawn_rate=0 if protocol == "controlled" else 25,
         mob_move_prob=0.0 if protocol == "controlled" else 0.8,
         tree_apple_drop_chance=0.0 if protocol == "controlled" else 0.5,
     )
@@ -277,6 +294,7 @@ def run_episode(policy, protocol, seed, num_agents, max_steps, device):
     }
     kill_reward = summary["reward_attack_hit"] + summary["reward_mob_kill"]
     summary["kill_reward_fraction"] = kill_reward / max(abs(cumulative_reward), 1e-8)
+    add_reward_categories(summary)
     return rows, summary
 
 
@@ -557,7 +575,39 @@ def rows_from_learned_rollout(rollout, label, seed):
     }
     kill_reward = summary["reward_attack_hit"] + summary["reward_mob_kill"]
     summary["kill_reward_fraction"] = kill_reward / max(abs(cumulative_reward), 1e-8)
+    add_reward_categories(summary)
     return rows, summary
+
+
+def add_reward_categories(summary):
+    summary["reward_category_milestone"] = summary.get("reward_milestone", 0.0)
+    summary["reward_category_combat"] = (
+        summary.get("reward_attack_hit", 0.0) + summary.get("reward_mob_kill", 0.0)
+    )
+    summary["reward_category_exploration_craft"] = sum(
+        summary.get(f"reward_{name}", 0.0)
+        for name in (
+            "exploration",
+            "harvest_wood",
+            "harvest_apple",
+            "harvest_stone",
+            "pickup_item",
+            "eat_apple",
+            "craft_plank",
+            "craft_stick",
+            "craft_wood_tool",
+            "craft_stone_tool",
+        )
+    )
+    summary["reward_category_penalties"] = sum(
+        summary.get(f"reward_{name}", 0.0)
+        for name in ("mob_damage", "starvation_damage", "episode_death")
+    )
+    summary["reward_category_dense"] = sum(
+        max(summary.get(f"reward_{name}", 0.0), 0.0)
+        for name in REWARD_COMPONENT_NAMES
+        if name != "milestone"
+    )
 
 
 def monotonic_policy_means(rows, key):

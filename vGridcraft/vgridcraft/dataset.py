@@ -21,7 +21,7 @@ def dataset_key(config: VGridcraftConfig, episodes: int, max_steps: int, seed: i
         "episodes": int(episodes),
         "max_steps": int(max_steps),
         "seed": int(seed),
-        "version": 5,
+        "version": 6,
     }
     raw = json.dumps(payload, sort_keys=True).encode("utf-8")
     return hashlib.sha1(raw).hexdigest()[:16]
@@ -202,7 +202,9 @@ def collect_dataset(
                 "num_envs": int(num_envs),
                 "seed": int(seed),
                 "config": asdict(config),
-                "storage": "tabular_compact_v5_preallocated_int16_actions",
+                "storage": "tabular_compact_v6_hierarchical_reward",
+                "environment_dynamics_version": config.environment_dynamics_version,
+                "reward_schema_version": config.reward_schema_version,
                 "valid_transition_count": valid_transition_count,
                 "invalid_padded_transition_count": skipped,
                 "mean_episode_length": float(lengths.float().mean().item()) if lengths.numel() else 0.0,

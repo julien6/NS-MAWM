@@ -3,6 +3,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from experiment_versions import version_provenance
 from marl_hpo_registry import (
     checkpoint_checksum,
     env_exports,
@@ -76,6 +77,7 @@ def test_mambpo_validation_tracks_external_world_model(tmp_path):
         "provenance": {
             "num_agents": 3,
             "external_checkpoint_checksum": checkpoint_checksum(str(checkpoint_dir)),
+            **version_provenance(),
         },
     }
     valid, reason = validate_best_config(
@@ -97,6 +99,20 @@ def test_mambpo_validation_tracks_external_world_model(tmp_path):
     assert "provenance" in reason
 
 
+def test_marl_hpo_rejects_pre_hierarchy_reward_provenance():
+    valid, reason = validate_best_config(
+        {
+            "stage": "final",
+            "selection_method": "mean_across_seeds_v1",
+            "provenance": {"num_agents": 3},
+        },
+        required_stage="final",
+        num_agents=3,
+    )
+    assert not valid
+    assert "version" in reason
+
+
 def test_best_config_uses_mean_across_seeds(tmp_path):
     trials = tmp_path / "trials"
     for index, (config, score) in enumerate(
@@ -116,7 +132,7 @@ def test_best_config_uses_mean_across_seeds(tmp_path):
                     "stage": "final",
                     "score": score,
                     "hyperparameters": config,
-                    "provenance": {"num_agents": 3},
+                        "provenance": {"num_agents": 3, **version_provenance()},
                 }
             )
         )

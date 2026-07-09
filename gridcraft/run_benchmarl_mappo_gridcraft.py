@@ -267,6 +267,8 @@ def main() -> None:
             "config": {
                 "baseline_id": args.baseline_id,
                 "algorithm": args.algorithm,
+                "environment_dynamics_version": VGridcraftConfig.environment_dynamics_version,
+                "reward_schema_version": VGridcraftConfig.reward_schema_version,
                 "marl_hpo_core_reused": args.marl_hpo_core_reused,
                 "marl_hpo_core_score": args.marl_hpo_core_score,
                 "marl_hpo_core_config_path": args.marl_hpo_core_config_path,
@@ -372,6 +374,8 @@ def write_marl_run_summary(args, experiment) -> None:
             {
                 "baseline_id": args.baseline_id,
                 "algorithm": args.algorithm,
+                "environment_dynamics_version": VGridcraftConfig.environment_dynamics_version,
+                "reward_schema_version": VGridcraftConfig.reward_schema_version,
                 "metrics": metrics,
                 "hyperparameters": {
                     "frames_per_batch": args.frames_per_batch,
@@ -402,6 +406,28 @@ def patch_benchmarl_wandb_sections(logger_class, step_offset=0):
 
     def routed_log(self, dict_to_log, step=None):
         routed = route_benchmarl_metrics(dict_to_log)
+        reward_keys = (
+            "MARL Evaluation/eval_agents_reward_episode_reward_mean",
+            "MARL Evaluation/eval_reward_episode_reward_mean",
+        )
+        reward_value = next(
+            (routed[key] for key in reward_keys if key in routed),
+            None,
+        )
+        if reward_value is not None:
+            curve = getattr(self, "_gridcraft_eval_reward_curve", [])
+            curve.append(float(reward_value))
+            self._gridcraft_eval_reward_curve = curve
+            routed["MARL Evaluation/eval_real_reward_auc"] = float(
+                np.trapz(np.asarray(curve, dtype=np.float64))
+            )
+            routed["MARL Evaluation/eval_real_reward_curve_mean"] = float(
+                np.mean(curve)
+            )
+            routed["MARL Evaluation/eval_real_reward_stability_std"] = float(
+                np.std(curve[-5:])
+            )
+            routed["MARL Evaluation/eval_real_reward_point_count"] = float(len(curve))
         routed_step = None if step is None else int(step_offset) + int(step)
         for logger in self.loggers:
             if logger.__class__.__name__ == "WandbLogger":
@@ -471,6 +497,41 @@ def hierarchy_metrics_from_tensordicts(tensordicts, prefix):
         result[f"hierarchy/{prefix}_event_rate_{name}"] = float(event_tensor[:, index].mean().cpu())
     for index, name in enumerate(REWARD_COMPONENT_NAMES):
         result[f"hierarchy/{prefix}_reward_{name}"] = float(component_tensor[:, index].sum().cpu())
+    component_index = {name: index for index, name in enumerate(REWARD_COMPONENT_NAMES)}
+    milestone = component_tensor[:, component_index["milestone"]]
+    combat = sum(
+        component_tensor[:, component_index[name]]
+        for name in ("attack_hit", "mob_kill")
+    )
+    exploration_craft = sum(
+        component_tensor[:, component_index[name]]
+        for name in (
+            "exploration",
+            "harvest_wood",
+            "harvest_apple",
+            "harvest_stone",
+            "pickup_item",
+            "eat_apple",
+            "craft_plank",
+            "craft_stick",
+            "craft_wood_tool",
+            "craft_stone_tool",
+        )
+    )
+    penalties = sum(
+        component_tensor[:, component_index[name]]
+        for name in ("mob_damage", "starvation_damage", "episode_death")
+    )
+    positive_without_milestone = component_tensor.clamp_min(0).sum(dim=1) - milestone.clamp_min(0)
+    result[f"hierarchy/{prefix}_reward_dense"] = float(
+        positive_without_milestone.sum().cpu()
+    )
+    result[f"hierarchy/{prefix}_reward_milestone"] = float(milestone.sum().cpu())
+    result[f"hierarchy/{prefix}_reward_combat"] = float(combat.sum().cpu())
+    result[f"hierarchy/{prefix}_reward_exploration_craft"] = float(
+        exploration_craft.sum().cpu()
+    )
+    result[f"hierarchy/{prefix}_reward_penalties"] = float(penalties.sum().cpu())
     if attempt_tensor is not None:
         move_indices = [ACTION_NAMES.index(name) for name in ("move_n", "move_s", "move_w", "move_e")]
         move_attempts = float(attempt_tensor[:, move_indices].sum().cpu())

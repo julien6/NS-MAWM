@@ -103,6 +103,7 @@ REWARD_COMPONENT_NAMES = (
     "mob_damage",
     "starvation_damage",
     "episode_death",
+    "milestone",
 )
 
 EVENT_LEVELS = {
@@ -191,6 +192,11 @@ class VectorizedGridcraftEnv:
         self.complexity_exponential_cumulative = torch.zeros((e, a), dtype=torch.float32, device=d)
         self.complexity_unique = torch.zeros((e, a), dtype=torch.float32, device=d)
         self.unlocked_task_levels = torch.zeros((e, a, 9), dtype=torch.bool, device=d)
+        self.team_unlocked_task_levels = torch.zeros((e, 9), dtype=torch.bool, device=d)
+        self.pending_team_levels = torch.zeros((e, 9), dtype=torch.bool, device=d)
+        self.rewarded_event_counts = torch.zeros(
+            (e, a, len(REWARD_COMPONENT_NAMES)), dtype=torch.long, device=d
+        )
         self.last_action_attempts = torch.zeros((e, a, len(ACTION_NAMES)), dtype=torch.float32, device=d)
         self.last_event_success = torch.zeros((e, a, len(EVENT_NAMES)), dtype=torch.float32, device=d)
         self.last_reward_components = torch.zeros(
@@ -248,6 +254,9 @@ class VectorizedGridcraftEnv:
         self.complexity_exponential_cumulative[env_ids] = 0
         self.complexity_unique[env_ids] = 0
         self.unlocked_task_levels[env_ids] = False
+        self.team_unlocked_task_levels[env_ids] = False
+        self.pending_team_levels[env_ids] = False
+        self.rewarded_event_counts[env_ids] = 0
         self.last_action_attempts[env_ids] = 0
         self.last_event_success[env_ids] = 0
         self.last_reward_components[env_ids] = 0
@@ -258,8 +267,6 @@ class VectorizedGridcraftEnv:
             self.agent_x[env_ids, agent_idx] = x
             self.agent_y[env_ids, agent_idx] = y
             self.visited[env_ids, agent_idx, y, x] = True
-        for mob_idx in range(min(cfg.max_mobs // 2, 2)):
-            self._spawn_mobs(env_ids, mob_idx)
         return self.observation()
 
     def step(self, actions: torch.Tensor) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
@@ -270,6 +277,7 @@ class VectorizedGridcraftEnv:
         self.last_action_attempts.zero_()
         self.last_event_success.zero_()
         self.last_reward_components.zero_()
+        self.pending_team_levels.zero_()
         self.last_action_attempts.scatter_(2, actions.unsqueeze(-1), self.alive.float().unsqueeze(-1))
         self.step_count += 1
         for agent_idx in range(self.num_agents):
@@ -283,23 +291,25 @@ class VectorizedGridcraftEnv:
         self._move_mobs()
         self._resolve_mob_attacks(rewards)
         self._handle_hunger(rewards)
+        self._apply_team_milestones(rewards)
         self.mob_alive &= self.mob_hp > 0
         done = ~self.alive.any(dim=1)
         truncated = self.step_count >= cfg.max_steps
-        survival = self.alive.float() * cfg.survival_reward
-        rewards += survival
-        self.last_reward_components[..., REWARD_COMPONENT_INDEX["survival"]] += survival
-        if bool(done.any()):
-            done_envs = torch.nonzero(done, as_tuple=False).flatten()
-            rewards[done_envs] -= 100.0
-            self.last_reward_components[
-                done_envs, :, REWARD_COMPONENT_INDEX["episode_death"]
-            ] -= 100.0
         died = alive_before & ~self.alive
         died_envs, died_agents = torch.nonzero(died, as_tuple=True)
+        if died_envs.numel() > 0:
+            death_penalty = float(cfg.death_penalty)
+            rewards[died_envs, died_agents] -= death_penalty
+            self.last_reward_components[
+                died_envs, died_agents, REWARD_COMPONENT_INDEX["episode_death"]
+            ] -= death_penalty
         self._record_event_pairs(died_envs, died_agents, "death")
         if cfg.mob_spawn_rate > 0:
-            spawn_envs = torch.nonzero((self.step_count % cfg.mob_spawn_rate) == 0, as_tuple=False).flatten()
+            spawn_envs = torch.nonzero(
+                (self.step_count >= cfg.mob_spawn_grace_steps)
+                & ((self.step_count - cfg.mob_spawn_grace_steps) % cfg.mob_spawn_rate == 0),
+                as_tuple=False,
+            ).flatten()
             for env_id in spawn_envs.tolist():
                 free = torch.nonzero(~self.mob_alive[env_id], as_tuple=False).flatten()
                 if free.numel() > 0:
@@ -316,6 +326,10 @@ class VectorizedGridcraftEnv:
             "complexity_cumulative": self.complexity_cumulative.clone(),
             "complexity_exponential_cumulative": self.complexity_exponential_cumulative.clone(),
             "complexity_unique": self.complexity_unique.clone(),
+            "team_task_level_max": (
+                self.team_unlocked_task_levels.long()
+                * torch.arange(9, device=self.device).unsqueeze(0)
+            ).max(dim=1).values,
         }
 
     def observation(self) -> dict[str, torch.Tensor]:
@@ -536,13 +550,12 @@ class VectorizedGridcraftEnv:
         self.agent_x[env_ids, agent_idx] = nx[env_ids]
         self.agent_y[env_ids, agent_idx] = ny[env_ids]
         self.visited[env_ids, agent_idx, ny[env_ids], nx[env_ids]] = True
-        rewards[env_ids, agent_idx] += old_new.float() * self.config.new_cell_reward
         new_envs = env_ids[old_new]
         known_envs = env_ids[~old_new]
         self._record_event(new_envs, agent_idx, "move_new_cell")
         self._record_event(known_envs, agent_idx, "move_known_cell")
-        self._record_reward(
-            new_envs, agent_idx, "exploration", self.config.new_cell_reward
+        self._award_dense(
+            rewards, new_envs, agent_idx, "exploration", self.config.new_cell_reward
         )
         self._mark_task_level(new_envs, agent_idx, 1)
         self._charge_hunger(env_ids, agent_idx, "move")
@@ -576,18 +589,17 @@ class VectorizedGridcraftEnv:
         stone_envs = target_envs[target_block == BLOCK_STONE]
         if tree_envs.numel() > 0:
             self.inventory[tree_envs, agent_idx, ITEM_WOOD] += 1
-            rewards[tree_envs, agent_idx] += self.config.harvest_wood_reward
             self._record_event(tree_envs, agent_idx, "harvest_wood")
-            self._record_reward(
-                tree_envs, agent_idx, "harvest_wood", self.config.harvest_wood_reward
+            self._award_dense(
+                rewards, tree_envs, agent_idx, "harvest_wood", self.config.harvest_wood_reward
             )
             self._mark_task_level(tree_envs, agent_idx, 2)
             apple = torch.rand((tree_envs.numel(),), generator=self.generator, device=self.device) < self.config.tree_apple_drop_chance
             apple_envs = tree_envs[apple]
             self.inventory[apple_envs, agent_idx, ITEM_APPLE] += 1
-            rewards[apple_envs, agent_idx] += self.config.harvest_tree_apple_reward
             self._record_event(apple_envs, agent_idx, "harvest_apple")
-            self._record_reward(
+            self._award_dense(
+                rewards,
                 apple_envs,
                 agent_idx,
                 "harvest_apple",
@@ -595,10 +607,9 @@ class VectorizedGridcraftEnv:
             )
         if stone_envs.numel() > 0:
             self.inventory[stone_envs, agent_idx, ITEM_STONE] += 1
-            rewards[stone_envs, agent_idx] += self.config.harvest_stone_reward
             self._record_event(stone_envs, agent_idx, "harvest_stone")
-            self._record_reward(
-                stone_envs, agent_idx, "harvest_stone", self.config.harvest_stone_reward
+            self._award_dense(
+                rewards, stone_envs, agent_idx, "harvest_stone", self.config.harvest_stone_reward
             )
             self._mark_task_level(stone_envs, agent_idx, 6)
         self._charge_hunger(target_envs, agent_idx, "harvest")
@@ -618,9 +629,9 @@ class VectorizedGridcraftEnv:
         count = self.item_count[target_envs, item_slot]
         agent_index = torch.full_like(target_envs, int(agent_idx))
         self.inventory.index_put_((target_envs, agent_index, item_type), count, accumulate=True)
-        rewards.index_put_((target_envs, agent_index), count.float() * self.config.pickup_item_reward, accumulate=True)
         self._record_event(target_envs, agent_idx, "pickup_item")
-        self._record_reward(
+        self._award_dense(
+            rewards,
             target_envs,
             agent_idx,
             "pickup_item",
@@ -636,6 +647,14 @@ class VectorizedGridcraftEnv:
         envs = torch.nonzero((action == 7) & self.alive[:, agent_idx], as_tuple=False).flatten()
         if envs.numel() == 0:
             return
+        equipped_all = self.equipped[envs, agent_idx]
+        armed = torch.isin(
+            equipped_all,
+            torch.tensor([ITEM_WOOD_SWORD, ITEM_STONE_SWORD], device=self.device),
+        )
+        envs = envs[armed]
+        if envs.numel() == 0:
+            return
         x = self.agent_x[envs, agent_idx][:, None]
         y = self.agent_y[envs, agent_idx][:, None]
         adjacent = self.mob_alive[envs] & ((self.mob_x[envs] - x).abs() + (self.mob_y[envs] - y).abs() == 1)
@@ -647,33 +666,29 @@ class VectorizedGridcraftEnv:
         target_mobs = first[has_target]
         self.last_attack_step[target_envs, agent_idx] = self.step_count[target_envs]
         self._charge_hunger(target_envs, agent_idx, "attack")
-        rewards[target_envs, agent_idx] += self.config.attack_hit_reward
         self._record_event(target_envs, agent_idx, "attack_hit")
-        self._record_reward(
-            target_envs, agent_idx, "attack_hit", self.config.attack_hit_reward
+        self._award_dense(
+            rewards, target_envs, agent_idx, "attack_hit", self.config.attack_hit_reward
         )
         equipped = self.equipped[target_envs, agent_idx]
-        damage = torch.full_like(equipped, 2)
-        damage = torch.where(equipped == ITEM_WOOD_SWORD, torch.full_like(damage, 3), damage)
-        damage = torch.where(equipped == ITEM_STONE_SWORD, torch.full_like(damage, 4), damage)
+        damage = torch.where(
+            equipped == ITEM_STONE_SWORD,
+            torch.full_like(equipped, self.config.stone_sword_damage),
+            torch.full_like(equipped, self.config.wood_sword_damage),
+        )
         self.mob_hp[target_envs, target_mobs] -= damage
         killed = self.mob_hp[target_envs, target_mobs] <= 0
         killed_envs = target_envs[killed]
         killed_mobs = target_mobs[killed]
         if killed_envs.numel() > 0:
             self.mob_alive[killed_envs, killed_mobs] = False
-            rewards[killed_envs, agent_idx] += self.config.mob_kill_reward
             self._record_event(killed_envs, agent_idx, "mob_kill")
-            self._record_reward(
-                killed_envs, agent_idx, "mob_kill", self.config.mob_kill_reward
+            self._award_dense(
+                rewards, killed_envs, agent_idx, "mob_kill", self.config.mob_kill_reward
             )
             killed_equipped = equipped[killed]
-            armed = torch.isin(
-                killed_equipped,
-                torch.tensor([ITEM_WOOD_SWORD, ITEM_STONE_SWORD], device=self.device),
-            )
-            self._record_event(killed_envs[armed], agent_idx, "mob_kill_armed")
-            self._record_event(killed_envs[~armed], agent_idx, "mob_kill_unarmed")
+            armed = torch.ones_like(killed_equipped, dtype=torch.bool)
+            self._record_event(killed_envs, agent_idx, "mob_kill_armed")
             self._mark_task_level(killed_envs, agent_idx, 8)
             drop = torch.rand((killed_envs.numel(),), generator=self.generator, device=self.device) < self.config.item_drop_chance
             for env_id, mob_idx in zip(killed_envs[drop].tolist(), killed_mobs[drop].tolist()):
@@ -684,9 +699,10 @@ class VectorizedGridcraftEnv:
         envs = torch.nonzero(can, as_tuple=False).flatten()
         self.inventory[envs, agent_idx, ITEM_APPLE] -= 1
         self.hunger[envs, agent_idx] = (self.hunger[envs, agent_idx] + 6).clamp(max=self.config.hunger_max)
-        rewards[envs, agent_idx] += self.config.eat_apple_reward
         self._record_event(envs, agent_idx, "eat_apple")
-        self._record_reward(envs, agent_idx, "eat_apple", self.config.eat_apple_reward)
+        self._award_dense(
+            rewards, envs, agent_idx, "eat_apple", self.config.eat_apple_reward
+        )
 
     def _apply_craft(self, agent_idx: int, action: torch.Tensor, rewards: torch.Tensor) -> None:
         for action_id, (inputs, output, reward_name) in CRAFT_ACTIONS.items():
@@ -709,11 +725,10 @@ class VectorizedGridcraftEnv:
             self.inventory[envs, agent_idx, out_item] += out_count
             if out_item in (ITEM_WOOD_SWORD, ITEM_STONE_SWORD, ITEM_WOOD_PICKAXE, ITEM_STONE_PICKAXE):
                 self.equipped[envs, agent_idx] = out_item
-            rewards[envs, agent_idx] += self._craft_reward(reward_name)
             event_name = f"craft_{reward_name}"
             reward_value = self._craft_reward(reward_name)
             self._record_event(envs, agent_idx, event_name)
-            self._record_reward(envs, agent_idx, event_name, reward_value)
+            self._award_dense(rewards, envs, agent_idx, event_name, reward_value)
             if reward_name in ("wood_tool", "stone_tool"):
                 self._record_event(envs, agent_idx, "tool_equipped")
             self._mark_task_level(envs, agent_idx, self._craft_task_level(reward_name))
@@ -746,6 +761,7 @@ class VectorizedGridcraftEnv:
             return
         level_tensor = torch.full((envs.numel(),), int(level), dtype=torch.long, device=self.device)
         self.task_level_max[envs, agent_idx] = torch.maximum(self.task_level_max[envs, agent_idx], level_tensor)
+        self.pending_team_levels[envs, int(level)] = True
 
     def _record_event(
         self,
@@ -819,6 +835,58 @@ class VectorizedGridcraftEnv:
             accumulate=True,
         )
 
+    def _award_dense(
+        self,
+        rewards: torch.Tensor,
+        envs: torch.Tensor,
+        agent_idx: int,
+        component: str,
+        values: float | torch.Tensor,
+    ) -> None:
+        if envs.numel() == 0:
+            return
+        component_idx = REWARD_COMPONENT_INDEX[component]
+        agents = torch.full_like(envs, int(agent_idx))
+        under_cap = (
+            self.rewarded_event_counts[envs, agents, component_idx]
+            < self.config.dense_reward_event_cap
+        )
+        envs = envs[under_cap]
+        agents = agents[under_cap]
+        if envs.numel() == 0:
+            return
+        if not torch.is_tensor(values):
+            values = torch.full(
+                (under_cap.numel(),), float(values), dtype=torch.float32, device=self.device
+            )
+        else:
+            values = values.to(self.device).float()
+        values = values[under_cap]
+        rewards.index_put_((envs, agents), values, accumulate=True)
+        self.rewarded_event_counts[envs, agents, component_idx] += 1
+        self._record_reward(envs, agent_idx, component, values)
+
+    def _apply_team_milestones(self, rewards: torch.Tensor) -> None:
+        milestone_component = REWARD_COMPONENT_INDEX["milestone"]
+        for level in range(1, 9):
+            event_indices = [
+                EVENT_INDEX[name] for name, event_level in EVENT_LEVELS.items()
+                if event_level == level
+            ]
+            if not event_indices:
+                continue
+            reached = (
+                self.last_event_success[:, :, event_indices].sum(dim=(1, 2)) > 0
+            ) | self.pending_team_levels[:, level]
+            newly_reached = reached & ~self.team_unlocked_task_levels[:, level]
+            envs = torch.nonzero(newly_reached, as_tuple=False).flatten()
+            if envs.numel() == 0:
+                continue
+            self.team_unlocked_task_levels[envs, level] = True
+            per_agent = float(self.config.task_milestone_rewards[level]) / self.num_agents
+            rewards[envs] += per_agent
+            self.last_reward_components[envs, :, milestone_component] += per_agent
+
     def _move_mobs(self) -> None:
         # Batched random wandering. It preserves collision constraints and is the
         # fast path needed for rollout diversity; exact pathfinding can be added
@@ -856,16 +924,19 @@ class VectorizedGridcraftEnv:
             if envs.numel() > 0:
                 can = self.alive[envs] & (self.hunger[envs] == cfg.hunger_max) & (self.hp[envs] < cfg.hp_max)
                 self.hp[envs] = torch.where(can, (self.hp[envs] + 1).clamp(max=cfg.hp_max), self.hp[envs])
-                rewards[envs] += can.float() * cfg.health_regen_reward
                 regen_env_rows, regen_agents = torch.nonzero(can, as_tuple=True)
                 regen_envs = envs[regen_env_rows]
                 self._record_event_pairs(regen_envs, regen_agents, "health_regen")
-                if regen_envs.numel() > 0:
-                    self.last_reward_components[
-                        regen_envs,
-                        regen_agents,
-                        REWARD_COMPONENT_INDEX["health_regen"],
-                    ] += cfg.health_regen_reward
+                if regen_envs.numel() > 0 and cfg.health_regen_reward:
+                    for agent_idx in range(self.num_agents):
+                        agent_envs = regen_envs[regen_agents == agent_idx]
+                        self._award_dense(
+                            rewards,
+                            agent_envs,
+                            agent_idx,
+                            "health_regen",
+                            cfg.health_regen_reward,
+                        )
         if cfg.hunger_decay_ticks <= 0:
             return
         envs = torch.nonzero((self.step_count % cfg.hunger_decay_ticks) == 0, as_tuple=False).flatten()

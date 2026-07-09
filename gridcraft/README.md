@@ -275,6 +275,38 @@ baselines by default:
 ./run_benchmarl_requested_baselines.bash
 ```
 
+### Hierarchical-reward B00/B10 protocol
+
+Gridcraft dynamics version `gridcraft_dynamics_v2_armed_combat` requires an
+equipped sword to damage a mob and delays mob spawning for the first 50 steps.
+Reward schema `gridcraft_reward_v2_team_milestones` gives a shared one-time
+milestone of `1, 2, 4, ..., 128` for task levels 1 through 8. Repeated successes
+receive only a small dense reward, capped at ten rewarded occurrences per event
+and episode. There is no survival reward.
+
+Run the validated B00/B10 comparison with mandatory staged HPO:
+
+```bash
+AUTO_RESOURCE_PROFILE=1 RESOURCE_PROFILE=spark_max \
+SEEDS="1 2 3" NUM_AGENTS=3 \
+HPO_SEEDS="1 2 3" MARL_HPO_SEEDS="1 2 3" \
+./run_neural_baselines_with_hpo.bash
+```
+
+The script first runs the controlled and natural hierarchy diagnostic in
+strict mode. It stops before HPO if rewards are not monotonic with scripted
+task complexity or if an unarmed kill occurs. HPO records from older dynamics
+or reward versions are rejected and archived under
+`hpo_results/*/pre_reward_hierarchy_fix/`.
+
+Optional old BenchMARL checkpoints can be evaluated behaviorally under the new
+environment without treating their returns as comparable:
+
+```bash
+LEGACY_POLICY_CHECKPOINTS="/path/to/b00.pt /path/to/b10.pt" \
+./run_neural_baselines_with_hpo.bash
+```
+
 The legacy `run_baseline.py --policy-baseline all` path remains available for
 debugging older experiments, but it is no longer the recommended baseline path.
 

@@ -10,6 +10,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    from .experiment_versions import validate_version_provenance, version_provenance
+except ImportError:
+    from experiment_versions import validate_version_provenance, version_provenance
+
 
 HPO_FAMILIES = (
     "neural_k0.0",
@@ -131,6 +136,9 @@ def validate_best_config(
     if best_config.get("selection_method") != "mean_across_seeds_v1":
         return False, "selection method is not mean_across_seeds_v1"
     provenance = best_config.get("provenance", {})
+    versions_valid, versions_reason = validate_version_provenance(provenance)
+    if not versions_valid:
+        return False, versions_reason
     if num_agents is not None and int(provenance.get("num_agents", -1)) != int(num_agents):
         return False, f"num_agents={provenance.get('num_agents')!r} does not match {num_agents}"
     if require_checkpoints:
@@ -216,6 +224,7 @@ def build_trial_summary(
             "max_steps": config.get("max_steps"),
             "vae_steps": config.get("vae_steps"),
             "rnn_steps": config.get("rnn_steps"),
+            **version_provenance(),
         },
         "sweep_id": sweep_id,
         "trial_id": trial_id,
@@ -249,6 +258,8 @@ def select_best_config(
         except (OSError, json.JSONDecodeError):
             continue
         if payload.get("hpo_family") != family or payload.get("stage") != stage:
+            continue
+        if not validate_version_provenance(payload.get("provenance", {}))[0]:
             continue
         score = _as_float(payload.get("score"), default=math.inf)
         if math.isfinite(score):
@@ -318,6 +329,8 @@ def collect_ranked_trials(
         except (OSError, json.JSONDecodeError):
             continue
         if payload.get("hpo_family") != family:
+            continue
+        if not validate_version_provenance(payload.get("provenance", {}))[0]:
             continue
         if stage is not None and payload.get("stage") != stage:
             continue

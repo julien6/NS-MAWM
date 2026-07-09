@@ -104,8 +104,8 @@ def test_pickup_predicts_adjacent_item_collection():
   agent_symbolic = symbolic["agent_0"]
   agent_mask = mask["agent_0"]
   assert agent_symbolic["grid"][2, 3, 3] == ENTITY_AGENT
-  assert agent_symbolic["grid"][2, 3, 4] == ENTITY_ITEM
-  assert not agent_mask["grid"][2, 3, 4]
+  assert agent_symbolic["grid"][2, 3, 4] == 0
+  assert agent_mask["grid"][2, 3, 4]
   assert agent_symbolic["self"][2 + ITEM_STONE] == 2
   assert agent_mask["self"][2 + ITEM_STONE]
   assert "PSTR_INDIV_PICKUP_ITEM" in report["rules"]

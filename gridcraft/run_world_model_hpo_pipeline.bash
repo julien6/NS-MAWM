@@ -134,7 +134,12 @@ import json
 import sys
 from pathlib import Path
 payload = json.loads(Path(sys.argv[1]).read_text())
-print(payload.get("stage", "") if payload.get("selection_method") != "mean_across_seeds_v1" else "")
+provenance = payload.get("provenance", {})
+current = (
+    provenance.get("environment_dynamics_version") == "gridcraft_dynamics_v2_armed_combat"
+    and provenance.get("reward_schema_version") == "gridcraft_reward_v2_team_milestones"
+)
+print(payload.get("stage", "") if current and payload.get("selection_method") != "mean_across_seeds_v1" else "")
 PY
 )"
     if [[ -n "$reselection_stage" ]]; then
@@ -165,7 +170,14 @@ PY
       echo "[wm-hpo] ${family}: compatible ${HPO_STAGE} config found at ${best_config}; skipping."
       continue
     fi
-    echo "[wm-hpo] ${family}: existing config is not valid for stage=${HPO_STAGE}, agents=${HPO_NUM_AGENTS}; continuing HPO."
+    echo "[wm-hpo] ${family}: existing config is not valid for stage=${HPO_STAGE}, agents=${HPO_NUM_AGENTS}; archiving pre-fix results."
+    archive_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    archive_root="${HPO_RESULTS_DIR}/pre_reward_hierarchy_fix/${archive_stamp}/${family}"
+    mkdir -p "$archive_root"
+    mv "$best_config" "${archive_root}/best_config.json"
+    if [[ -d "${HPO_TRIALS_DIR}/${family}" ]]; then
+      mv "${HPO_TRIALS_DIR}/${family}" "${archive_root}/trials"
+    fi
   fi
 
   trial_glob_count="$(find "${HPO_TRIALS_DIR}/${family}" -name hpo_trial_summary.json 2>/dev/null | wc -l | tr -d ' ')"

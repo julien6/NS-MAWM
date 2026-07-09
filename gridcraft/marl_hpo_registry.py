@@ -9,6 +9,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    from .experiment_versions import validate_version_provenance, version_provenance
+except ImportError:
+    from experiment_versions import validate_version_provenance, version_provenance
+
 
 MARL_HPO_FAMILIES = ("masac_core", "mambpo_imagination")
 DEFAULT_MARL_HPO_ROOT = Path("hpo_results/marl")
@@ -97,6 +102,9 @@ def validate_best_config(
     if best_config.get("selection_method") != "mean_across_seeds_v1":
         return False, "selection method is not mean_across_seeds_v1"
     provenance = best_config.get("provenance", {})
+    versions_valid, versions_reason = validate_version_provenance(provenance)
+    if not versions_valid:
+        return False, versions_reason
     if num_agents is not None and int(provenance.get("num_agents", -1)) != int(num_agents):
         return False, f"num_agents={provenance.get('num_agents')!r} does not match {num_agents}"
     if external_checkpoint_dir is not None:
@@ -186,6 +194,7 @@ def build_trial_summary(
             "seed": config.get("seed"),
             "external_checkpoint_dir": external_checkpoint_dir,
             "external_checkpoint_checksum": checkpoint_checksum(external_checkpoint_dir),
+            **version_provenance(),
         },
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -220,6 +229,8 @@ def select_best_config(
         except (OSError, json.JSONDecodeError):
             continue
         if payload.get("hpo_family") != family or payload.get("stage") != stage:
+            continue
+        if not validate_version_provenance(payload.get("provenance", {}))[0]:
             continue
         score = _as_float(payload.get("score"), default=-math.inf)
         if math.isfinite(score):
@@ -286,6 +297,8 @@ def collect_ranked_trials(
         except (OSError, json.JSONDecodeError):
             continue
         if payload.get("hpo_family") != family:
+            continue
+        if not validate_version_provenance(payload.get("provenance", {}))[0]:
             continue
         if stage is not None and payload.get("stage") != stage:
             continue
@@ -356,7 +369,18 @@ def score_from_metrics(metrics: dict[str, Any], family: str) -> float:
     eval_reward = first_metric(metrics, "MARL Evaluation/eval_agents_reward_episode_reward_mean", "eval/agents/reward/episode_reward_mean")
     if eval_reward is None:
         eval_reward = first_metric(metrics, "MARL Evaluation/eval_reward_episode_reward_mean", "eval/reward/episode_reward_mean")
-    score = _as_float(eval_reward, default=-1e9)
+    final_reward = _as_float(eval_reward, default=-1e9)
+    curve_mean = _as_float(
+        first_metric(metrics, "MARL Evaluation/eval_real_reward_curve_mean"),
+        default=final_reward,
+    )
+    stability = abs(
+        _as_float(
+            first_metric(metrics, "MARL Evaluation/eval_real_reward_stability_std"),
+            default=0.0,
+        )
+    )
+    score = 0.5 * final_reward + 0.5 * curve_mean - 0.1 * stability
     if normalize_family(family) == "mambpo_imagination":
         gap = abs(_as_float(first_metric(metrics, "MARL Evaluation/real_imagined_reward_gap"), default=0.0))
         failed = _as_float(first_metric(metrics, "MARL Evaluation/eval_imagined_generation_failed"), default=0.0)

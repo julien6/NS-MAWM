@@ -6,7 +6,7 @@ from pathlib import Path
 import torch
 
 from vgridcraft.config import VGridcraftConfig
-from vgridcraft.dataset import collect_dataset
+from vgridcraft.dataset import collect_dataset, dataset_key
 from vgridcraft.env import BLOCK_EMPTY, BLOCK_TREE, ITEM_APPLE, ITEM_WOOD, VectorizedGridcraftEnv
 
 
@@ -61,6 +61,19 @@ def test_collect_dataset_reports_vectorized_collection_metrics():
     assert "collection_cpu_copy_time" in data["metadata"]
 
 
+def test_dataset_key_changes_with_dynamics_and_reward_versions():
+    base = VGridcraftConfig(num_agents=1)
+    changed_reward = VGridcraftConfig(
+        num_agents=1, reward_schema_version="different_reward"
+    )
+    changed_dynamics = VGridcraftConfig(
+        num_agents=1, environment_dynamics_version="different_dynamics"
+    )
+    key = dataset_key(base, episodes=4, max_steps=5, seed=1)
+    assert key != dataset_key(changed_reward, episodes=4, max_steps=5, seed=1)
+    assert key != dataset_key(changed_dynamics, episodes=4, max_steps=5, seed=1)
+
+
 def test_vectorized_harvest_tree_updates_block_and_inventory():
     config = VGridcraftConfig(num_agents=1, max_steps=10, seed=23, tree_apple_drop_chance=0.0)
     env = VectorizedGridcraftEnv(num_envs=3, num_agents=1, device="cpu", seed=23, config=config)
@@ -105,9 +118,10 @@ def test_vectorized_attack_hits_adjacent_mob():
         env.agent_y[:, 0] = 5
         env.mob_alive[:] = False
         env.mob_alive[:, 0] = True
-        env.mob_hp[:, 0] = 2
+        env.mob_hp[:, 0] = config.wood_sword_damage
         env.mob_x[:, 0] = env.agent_x[:, 0] + 1
         env.mob_y[:, 0] = env.agent_y[:, 0]
+        env.equipped[:, 0] = 4
         env.step(torch.full((2, 1), 7, dtype=torch.long))
         assert not bool(env.mob_alive[:, 0].any())
     finally:

@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 @dataclass
 class VGridcraftConfig:
+    environment_dynamics_version: str = "gridcraft_dynamics_v2_armed_combat"
+    reward_schema_version: str = "gridcraft_reward_v2_team_milestones"
     width: int = 16
     height: int = 16
     num_agents: int = 1
@@ -26,8 +28,9 @@ class VGridcraftConfig:
     harvest_hunger_cost_interval: int = 3
     attack_hunger_cost_interval: int = 3
 
-    mob_spawn_rate: int = 10
-    max_mobs: int = 6
+    mob_spawn_grace_steps: int = 50
+    mob_spawn_rate: int = 25
+    max_mobs: int = 3
     mob_damage: int = 2
     mob_hp: int = 10
     mob_aggro_radius: int = 6
@@ -37,20 +40,35 @@ class VGridcraftConfig:
     item_drop_chance: float = 0.2
     tree_apple_drop_chance: float = 0.5
 
-    survival_reward: float = 0.001
+    survival_reward: float = 0.0
     new_cell_reward: float = 0.01
-    harvest_wood_reward: float = 1.0
-    harvest_tree_apple_reward: float = 2.0
-    harvest_stone_reward: float = 128.0
-    pickup_item_reward: float = 1.0
-    eat_apple_reward: float = 2.0
-    health_regen_reward: float = 1.0
-    attack_hit_reward: float = 32.0
-    mob_kill_reward: float = 1024.0
-    craft_plank_reward: float = 8.0
-    craft_stick_reward: float = 16.0
-    craft_wood_tool_reward: float = 64.0
-    craft_stone_tool_reward: float = 512.0
+    harvest_wood_reward: float = 0.02
+    harvest_tree_apple_reward: float = 0.02
+    harvest_stone_reward: float = 0.32
+    pickup_item_reward: float = 0.02
+    eat_apple_reward: float = 0.02
+    health_regen_reward: float = 0.0
+    attack_hit_reward: float = 0.0
+    mob_kill_reward: float = 1.28
+    craft_plank_reward: float = 0.04
+    craft_stick_reward: float = 0.08
+    craft_wood_tool_reward: float = 0.16
+    craft_stone_tool_reward: float = 0.64
+    dense_reward_event_cap: int = 10
+    death_penalty: float = 16.0
+    wood_sword_damage: int = 3
+    stone_sword_damage: int = 4
+    task_milestone_rewards: tuple[float, ...] = (
+        0.0,
+        1.0,
+        2.0,
+        4.0,
+        8.0,
+        16.0,
+        32.0,
+        64.0,
+        128.0,
+    )
 
     craft_anywhere: bool = True
 
