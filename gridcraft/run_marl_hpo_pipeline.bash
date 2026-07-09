@@ -4,6 +4,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 PYTHON_BIN="${PYTHON_BIN:-../.venv/bin/python}"
+USER_SET_MARL_HPO_NUM_ENVS="${MARL_HPO_NUM_ENVS+x}"
+USER_SET_MARL_HPO_FRAMES_PER_BATCH="${MARL_HPO_FRAMES_PER_BATCH+x}"
+USER_SET_MARL_HPO_TRAIN_BATCH_SIZE="${MARL_HPO_TRAIN_BATCH_SIZE+x}"
 if [[ "${AUTO_RESOURCE_PROFILE:-0}" == "1" && "${RESOURCE_PROFILE_APPLIED:-0}" != "1" ]]; then
   RESOURCE_PROFILE="${RESOURCE_PROFILE:-spark_max}"
   echo "[resource-profile] applying ${RESOURCE_PROFILE} to MARL HPO"
@@ -52,7 +55,17 @@ fi
 case "$MARL_HPO_STAGE" in
   screen)
     MARL_HPO_COUNT="${MARL_HPO_COUNT:-3}"
-    export MARL_HPO_NUM_ENVS="${MARL_HPO_NUM_ENVS:-16}"
+    if [[ -z "$USER_SET_MARL_HPO_NUM_ENVS" ]]; then
+      export MARL_HPO_NUM_ENVS="${MARL_HPO_SCREEN_NUM_ENVS:-256}"
+    else
+      export MARL_HPO_NUM_ENVS
+    fi
+    if [[ -z "$USER_SET_MARL_HPO_FRAMES_PER_BATCH" ]]; then
+      export MARL_HPO_FRAMES_PER_BATCH="${MARL_HPO_SCREEN_FRAMES_PER_BATCH:-4096}"
+    fi
+    if [[ -z "$USER_SET_MARL_HPO_TRAIN_BATCH_SIZE" ]]; then
+      export MARL_HPO_TRAIN_BATCH_SIZE="${MARL_HPO_SCREEN_TRAIN_BATCH_SIZE:-512}"
+    fi
     export MARL_HPO_MAX_STEPS="${MARL_HPO_MAX_STEPS:-64}"
     export MARL_HPO_MAX_ITERS="${MARL_HPO_MAX_ITERS:-2}"
     export MARL_HPO_EVAL_EVERY_ITERS="${MARL_HPO_EVAL_EVERY_ITERS:-1}"
@@ -197,14 +210,23 @@ PY
     else
       echo "[marl-hpo] ${family}: creating screen sweep from ${sweep_config}"
     fi
-    SWEEP_OUTPUT="$(../.venv/bin/wandb sweep --project "$PROJECT" "${ENTITY_ARGS[@]}" "$sweep_config" 2>&1)"
-    printf '%s\n' "$SWEEP_OUTPUT"
-    SWEEP_ID="$(printf '%s\n' "$SWEEP_OUTPUT" | awk '
+    sweep_output_file="$(mktemp)"
+    set +e
+    ../.venv/bin/wandb sweep --project "$PROJECT" "${ENTITY_ARGS[@]}" "$sweep_config" 2>&1 | tee "$sweep_output_file"
+    sweep_status="${PIPESTATUS[0]}"
+    set -e
+    if [[ "$sweep_status" != "0" ]]; then
+      echo "[marl-hpo] wandb sweep failed with status ${sweep_status}." >&2
+      echo "[marl-hpo] output was saved to ${sweep_output_file}" >&2
+      exit "$sweep_status"
+    fi
+    SWEEP_ID="$(awk '
       /Creating sweep with ID:/ {print $NF}
       /wandb agent/ {print $NF}
-    ' | tail -n 1)"
+    ' "$sweep_output_file" | tail -n 1)"
     if [[ -z "$SWEEP_ID" ]]; then
       echo "Could not parse sweep id from wandb sweep output for ${family}." >&2
+      echo "[marl-hpo] output was saved to ${sweep_output_file}" >&2
       exit 1
     fi
     echo "[marl-hpo] ${family}: launching ${MARL_HPO_COUNT} ${MARL_HPO_STAGE} trials (${SWEEP_ID})"
