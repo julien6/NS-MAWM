@@ -8,6 +8,7 @@ from marl_hpo_registry import (
     checkpoint_checksum,
     env_exports,
     families_for_baseline,
+    score_from_metrics,
     select_best_config,
     validate_best_config,
 )
@@ -21,11 +22,23 @@ def test_families_for_baseline():
 
 
 def test_env_exports_core_and_imagination():
-    core = {"hyperparameters": {"lr": 5e-5, "gamma": 0.99, "frames_per_batch": 8192}}
+    core = {
+        "hyperparameters": {
+            "model_type": "lstm",
+            "lstm_layers": 2,
+            "lstm_dropout": 0.0,
+            "lr": 5e-5,
+            "gamma": 0.99,
+            "frames_per_batch": 8192,
+        }
+    }
     imagination = {"hyperparameters": {"mb_imagined_horizon": 3, "mb_lambda_imagined": 0.7}}
     assert env_exports(core, "masac_core")["MARL_LR"] == "5e-05"
     assert env_exports(core, "masac_core")["MARL_GAMMA"] == "0.99"
     assert env_exports(core, "masac_core")["MARL_FRAMES_PER_BATCH"] == "8192"
+    assert env_exports(core, "masac_core")["MARL_MODEL"] == "lstm"
+    assert env_exports(core, "masac_core")["MARL_LSTM_LAYERS"] == "2"
+    assert env_exports(core, "masac_core")["MARL_LSTM_DROPOUT"] == "0.0"
     assert env_exports(imagination, "mambpo_imagination")["MB_IMAGINED_HORIZON"] == "3"
     assert env_exports(imagination, "mambpo_imagination")["MB_LAMBDA_IMAGINED"] == "0.7"
 
@@ -111,6 +124,54 @@ def test_marl_hpo_rejects_pre_hierarchy_reward_provenance():
     )
     assert not valid
     assert "version" in reason
+
+
+def test_marl_hpo_rejects_wrong_model_type():
+    best = {
+        "stage": "final",
+        "selection_method": "mean_across_seeds_v1",
+        "hyperparameters": {"model_type": "mlp"},
+        "provenance": {"num_agents": 3, **version_provenance()},
+    }
+    valid, reason = validate_best_config(
+        best,
+        required_stage="final",
+        num_agents=3,
+        required_model_type="lstm",
+    )
+    assert not valid
+    assert "model_type" in reason
+
+
+def test_marl_hpo_score_prioritizes_temp_05_policy_quality():
+    weak_temp_05 = {
+        "Policy hierarchy evaluation/temp_0.5/episode_return_mean": 0.0,
+        "Policy hierarchy evaluation/temp_0.5/task_level_max": 2.0,
+        "Policy hierarchy evaluation/temp_0.5/event_count_tool_equipped": 0.0,
+        "Policy hierarchy evaluation/temp_0.25/episode_return_mean": 1000.0,
+        "Policy hierarchy evaluation/temp_0.25/task_level_max": 8.0,
+    }
+    strong_temp_05 = {
+        "Policy hierarchy evaluation/temp_0.5/episode_return_mean": 10.0,
+        "Policy hierarchy evaluation/temp_0.5/task_level_max": 5.0,
+        "Policy hierarchy evaluation/temp_0.5/event_count_tool_equipped": 4.0,
+        "Policy hierarchy evaluation/temp_0.25/episode_return_mean": -1000.0,
+        "Policy hierarchy evaluation/temp_0.25/task_level_max": 0.0,
+    }
+    assert score_from_metrics(strong_temp_05, "masac_core") > score_from_metrics(weak_temp_05, "masac_core")
+
+
+def test_marl_hpo_score_penalizes_temp_05_action_collapse():
+    base = {
+        "Policy hierarchy evaluation/temp_0.5/episode_return_mean": 50.0,
+        "Policy hierarchy evaluation/temp_0.5/task_level_max": 5.0,
+        "Policy hierarchy evaluation/temp_0.5/dominant_action_rate": 0.5,
+    }
+    collapsed = {
+        **base,
+        "Policy hierarchy evaluation/temp_0.5/dominant_action_rate": 0.9,
+    }
+    assert score_from_metrics(base, "masac_core") > score_from_metrics(collapsed, "masac_core")
 
 
 def test_best_config_uses_mean_across_seeds(tmp_path):

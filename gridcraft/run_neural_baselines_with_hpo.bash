@@ -20,6 +20,12 @@ HIERARCHY_DIAGNOSTIC_DIR="${HIERARCHY_DIAGNOSTIC_DIR:-reward_hierarchy_diagnosis
 export NUM_AGENTS HPO_SEEDS MARL_HPO_SEEDS HPO_RESULTS_DIR MARL_HPO_RESULTS_DIR
 export MODEL_FREE_DOWNSTREAM_ALGO=masac
 export MODEL_BASED_DOWNSTREAM_ALGO=mambpo
+export MARL_MODEL="${MARL_MODEL:-lstm}"
+export MARL_LSTM_LAYERS="${MARL_LSTM_LAYERS:-1}"
+export MARL_LSTM_DROPOUT="${MARL_LSTM_DROPOUT:-0.0}"
+export MARL_HPO_REQUIRED_MODEL_TYPE="${MARL_HPO_REQUIRED_MODEL_TYPE:-$MARL_MODEL}"
+export MARL_HPO_POLICY_EVAL_MODES="${MARL_HPO_POLICY_EVAL_MODES:-deterministic,mode,temp_1.0,temp_0.5,temp_0.25,temp_0.1,sampled}"
+export POLICY_HIERARCHY_EVAL_MODES="${POLICY_HIERARCHY_EVAL_MODES:-deterministic,mode,temp_1.0,temp_0.5,temp_0.25,temp_0.1,sampled}"
 export REUSE_WM_HPO_CONFIG=1
 export REUSE_MARL_HPO_CONFIG=1
 export REQUIRE_WM_HPO=1
@@ -106,6 +112,8 @@ echo "  WM HPO seeds:       ${HPO_SEEDS}"
 echo "  MARL HPO seeds:     ${MARL_HPO_SEEDS}"
 echo "  force WM HPO:       ${FORCE_WM_HPO}"
 echo "  force MARL HPO:     ${FORCE_MARL_HPO}"
+echo "  MARL model:         ${MARL_MODEL}"
+echo "  policy eval modes:  ${POLICY_HIERARCHY_EVAL_MODES}"
 echo "  WM HPO registry:    ${HPO_RESULTS_DIR}"
 echo "  MARL HPO registry:  ${MARL_HPO_RESULTS_DIR}"
 echo "  dynamics version:   gridcraft_dynamics_v2_armed_combat"
@@ -144,7 +152,8 @@ if [[ "$DRY_RUN" != "1" ]]; then
     --root "$MARL_HPO_RESULTS_DIR" \
     --required-stage final \
     --num-agents "$NUM_AGENTS" \
-    --minimum-budget-json "{\"seeds\":\"${MARL_HPO_SEEDS}\",\"max_steps\":500,\"max_iters\":1000}"
+    --required-model-type "$MARL_HPO_REQUIRED_MODEL_TYPE" \
+    --minimum-budget-json "{\"seeds\":\"${MARL_HPO_SEEDS}\",\"max_steps\":500,\"max_iters\":500}"
 fi
 
 echo "=== Phase 3/7: final model-free MASAC baseline ==="
@@ -186,7 +195,8 @@ if [[ "$DRY_RUN" != "1" ]]; then
     --root "$MARL_HPO_RESULTS_DIR" \
     --required-stage final \
     --num-agents "$NUM_AGENTS" \
-    --minimum-budget-json "{\"seeds\":\"${MARL_HPO_SEEDS}\",\"max_steps\":500,\"max_iters\":1000}" \
+    --required-model-type "$MARL_HPO_REQUIRED_MODEL_TYPE" \
+    --minimum-budget-json "{\"seeds\":\"${MARL_HPO_SEEDS}\",\"max_steps\":500,\"max_iters\":500}" \
     --external-checkpoint-dir "${WM_HPO_RUN_DIR}/checkpoints"
 fi
 

@@ -63,7 +63,7 @@ def _run_posthoc_policy_eval(
         return {"Policy hierarchy evaluation/posthoc_failed": 1.0}
     modes = os.environ.get(
         "MARL_HPO_POLICY_EVAL_MODES",
-        "deterministic,mode,temp_0.25,sampled",
+        "deterministic,mode,temp_1.0,temp_0.5,temp_0.25,temp_0.1,sampled",
     )
     episodes = int(os.environ.get("MARL_HPO_POLICY_EVAL_EPISODES", str(selected_config["eval_episodes"])))
     out_dir = run_dir / "policy_hierarchy_eval"

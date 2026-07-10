@@ -30,6 +30,10 @@ DRY_RUN="${DRY_RUN:-0}"
 CONTINUE_ON_ERROR="${CONTINUE_ON_ERROR:-0}"
 CAMPAIGN_LOG_DIR="${CAMPAIGN_LOG_DIR:-campaign_logs}"
 RESUME_COMPLETED="${RESUME_COMPLETED:-1}"
+RUN_POLICY_HIERARCHY_EVAL="${RUN_POLICY_HIERARCHY_EVAL:-0}"
+POLICY_HIERARCHY_EVAL_MODES="${POLICY_HIERARCHY_EVAL_MODES:-deterministic,mode,temp_1.0,temp_0.5,temp_0.25,temp_0.1,sampled}"
+POLICY_HIERARCHY_EVAL_EPISODES="${POLICY_HIERARCHY_EVAL_EPISODES:-16}"
+POLICY_HIERARCHY_EVAL_MAX_STEPS="${POLICY_HIERARCHY_EVAL_MAX_STEPS:-500}"
 
 # World model defaults. These are intended for serious experimental runs, not
 # smoke tests. They are deliberately expensive and should be launched on Spark
@@ -133,6 +137,7 @@ if [[ "$MODEL_BASED_DOWNSTREAM_ALGO" == "imagined_mappo" ]]; then
   echo "Note: imagined_mappo now runs native BenchMARL MAPPO inside GridcraftDreamTorchRLEnv."
 fi
 echo "Videos: wm_every=${WM_VIDEO_EVERY}, marl_every_iters=${MARL_VIDEO_EVERY_ITERS}, max_steps=${VIDEO_MAX_STEPS}, fps=${VIDEO_FPS}"
+echo "Policy hierarchy posthoc eval: ${RUN_POLICY_HIERARCHY_EVAL} modes=${POLICY_HIERARCHY_EVAL_MODES}"
 echo "Campaign logs: ${CAMPAIGN_LOG_DIR}"
 echo "Continue on error: ${CONTINUE_ON_ERROR}"
 echo "Resume completed: ${RESUME_COMPLETED}"
@@ -238,6 +243,28 @@ for seed in $SEEDS; do
         continue
       fi
       exit "$status"
+    fi
+    if [[ "$RUN_POLICY_HIERARCHY_EVAL" == "1" && "$DRY_RUN" != "1" ]]; then
+      latest_checkpoint="$(
+        find runs_benchmarl/native_marl -path '*/checkpoints/checkpoint_*.pt' -printf '%T@ %p\n' 2>/dev/null \
+          | sort -nr \
+          | awk '{sub(/^[^ ]+ /, ""); print; exit}'
+      )"
+      if [[ -z "$latest_checkpoint" ]]; then
+        echo "No MARL checkpoint found for posthoc policy hierarchy evaluation." >&2
+        exit 2
+      fi
+      echo "=== Posthoc policy hierarchy eval: ${baseline}, seed ${seed}, checkpoint=${latest_checkpoint} ==="
+      env "CHECKPOINT_SEED_${seed}=$latest_checkpoint" \
+      BASELINE_ID="$baseline" \
+      SEEDS="$seed" \
+      NUM_AGENTS="$NUM_AGENTS" \
+      DEVICE="$DEVICE" \
+      EVAL_POLICY_MODES="$POLICY_HIERARCHY_EVAL_MODES" \
+      EVAL_EPISODES="$POLICY_HIERARCHY_EVAL_EPISODES" \
+      EVAL_MAX_STEPS="$POLICY_HIERARCHY_EVAL_MAX_STEPS" \
+      WANDB_FLAG="$WANDB_FLAG" \
+      ./evaluate_trained_policies_hierarchy.bash
     fi
     if [[ "$DRY_RUN" != "1" ]]; then
       date -Is > "$completion_marker"

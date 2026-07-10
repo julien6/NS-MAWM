@@ -23,7 +23,7 @@ MARL_LSTM_COMPILE="${MARL_LSTM_COMPILE:-0}"
 FORCE_MARL_HPO="${FORCE_MARL_HPO:-0}"
 MARL_HPO_FAMILIES="${MARL_HPO_FAMILIES:-masac_core}"
 MARL_HPO_SEEDS="${MARL_HPO_SEEDS:-1 2 3}"
-MARL_HPO_POLICY_EVAL_MODES="${MARL_HPO_POLICY_EVAL_MODES:-deterministic,mode,temp_0.25,temp_0.1,sampled}"
+MARL_HPO_POLICY_EVAL_MODES="${MARL_HPO_POLICY_EVAL_MODES:-deterministic,mode,temp_1.0,temp_0.5,temp_0.25,temp_0.1,sampled}"
 MARL_HPO_POLICY_EVAL_EPISODES="${MARL_HPO_POLICY_EVAL_EPISODES:-8}"
 
 # Stage budgets. These can be overridden independently from the shell.

@@ -397,38 +397,56 @@ def write_summary(results_root: str | Path = DEFAULT_MARL_HPO_ROOT) -> dict[str,
 def score_from_metrics(metrics: dict[str, Any], family: str) -> float:
     temp_reward = first_metric(
         metrics,
-        "Policy hierarchy evaluation/temp_0.25/episode_return_mean",
-        "Policy hierarchy evaluation/temp_0.25_episode_return_mean",
+        "Policy hierarchy evaluation/temp_0.5/episode_return_mean",
+        "Policy hierarchy evaluation/temp_0.5_episode_return_mean",
     )
     if temp_reward is not None:
         score = _as_float(temp_reward, default=-1e9)
         task_level = _as_float(
             first_metric(
                 metrics,
-                "Policy hierarchy evaluation/temp_0.25/task_level_max",
-                "Policy hierarchy evaluation/temp_0.25_task_level_max",
+                "Policy hierarchy evaluation/temp_0.5/task_level_max",
+                "Policy hierarchy evaluation/temp_0.5_task_level_max",
+            ),
+            default=0.0,
+        )
+        tool_equipped = _as_float(
+            first_metric(
+                metrics,
+                "Policy hierarchy evaluation/temp_0.5/event_count_tool_equipped",
+                "Policy hierarchy evaluation/temp_0.5_event_count_tool_equipped",
+            ),
+            default=0.0,
+        )
+        stone_tool = _as_float(
+            first_metric(
+                metrics,
+                "Policy hierarchy evaluation/temp_0.5/event_count_craft_stone_tool",
+                "Policy hierarchy evaluation/temp_0.5_event_count_craft_stone_tool",
             ),
             default=0.0,
         )
         dominant_rate = _as_float(
             first_metric(
                 metrics,
-                "Policy hierarchy evaluation/temp_0.25/dominant_action_rate",
-                "Policy hierarchy evaluation/temp_0.25_dominant_action_rate",
+                "Policy hierarchy evaluation/temp_0.5/dominant_action_rate",
+                "Policy hierarchy evaluation/temp_0.5_dominant_action_rate",
             ),
             default=0.0,
         )
         entropy = _as_float(
             first_metric(
                 metrics,
-                "Policy hierarchy evaluation/temp_0.25/policy_entropy_mean",
-                "Policy hierarchy evaluation/temp_0.25_policy_entropy_mean",
+                "Policy hierarchy evaluation/temp_0.5/policy_entropy_mean",
+                "Policy hierarchy evaluation/temp_0.5_policy_entropy_mean",
             ),
             default=0.0,
         )
         score += 10.0 * task_level
-        if dominant_rate > 0.8:
-            score -= 100.0 * (dominant_rate - 0.8)
+        score += 0.5 * tool_equipped
+        score += 1.0 * stone_tool
+        if dominant_rate > 0.5:
+            score -= 20.0 * (dominant_rate - 0.5)
         if task_level < 4.0 and entropy < 0.2:
             score -= 25.0 * (0.2 - entropy)
         if normalize_family(family) == "mambpo_imagination":
