@@ -16,6 +16,7 @@ WANDB_FLAG="${WANDB_FLAG---wandb}"
 WANDB_PROJECT="${WANDB_PROJECT:-ns-mawm-gridcraft}"
 OUT_DIR="${OUT_DIR:-policy_hierarchy_eval}"
 CHECKPOINT_ROOT="${CHECKPOINT_ROOT:-runs_benchmarl/native_marl}"
+ALLOW_CHECKPOINT_FALLBACK="${ALLOW_CHECKPOINT_FALLBACK:-0}"
 
 find_latest_checkpoint() {
   local seed="$1"
@@ -46,12 +47,14 @@ find_latest_checkpoint() {
     printf '%s\n' "$checkpoint"
     return 0
   fi
-  checkpoint="$(
-    find "$CHECKPOINT_ROOT" -path "*/checkpoints/checkpoint_*.pt" -printf '%T@ %p\n' 2>/dev/null \
-      | sort -nr \
-      | awk '{sub(/^[^ ]+ /, ""); print; exit}'
-  )"
-  if [[ -n "$checkpoint" ]]; then
+  if [[ "$ALLOW_CHECKPOINT_FALLBACK" == "1" ]]; then
+    checkpoint="$(
+      find "$CHECKPOINT_ROOT" -path "*/checkpoints/checkpoint_*.pt" -printf '%T@ %p\n' 2>/dev/null \
+        | sort -nr \
+        | awk '{sub(/^[^ ]+ /, ""); print; exit}'
+    )"
+  fi
+  if [[ -n "${checkpoint:-}" ]]; then
     printf '%s\n' "$checkpoint"
     return 0
   fi

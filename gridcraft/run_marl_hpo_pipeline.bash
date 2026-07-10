@@ -37,6 +37,8 @@ case "$MARL_HPO_STAGE" in
 esac
 MARL_HPO_TOP_K="${MARL_HPO_TOP_K:-3}"
 MARL_HPO_SEEDS="${MARL_HPO_SEEDS:-${MARL_HPO_SEED:-${SEED:-1}}}"
+MARL_HPO_REQUIRED_MODEL_TYPE="${MARL_HPO_REQUIRED_MODEL_TYPE:-${MARL_HPO_MODEL:-${MARL_MODEL:-lstm}}}"
+export MARL_HPO_MODEL="${MARL_HPO_MODEL:-$MARL_HPO_REQUIRED_MODEL_TYPE}"
 HPO_BENCHMARK_FIRST="${HPO_BENCHMARK_FIRST:-0}"
 MARL_HPO_FAMILIES="${MARL_HPO_FAMILIES:-masac_core mambpo_imagination}"
 FORCE_MARL_HPO="${FORCE_MARL_HPO:-0}"
@@ -129,7 +131,11 @@ echo "  families:      ${MARL_HPO_FAMILIES}"
 echo "  results dir:   ${MARL_HPO_RESULTS_DIR}"
 echo "  trials dir:    ${MARL_HPO_TRIALS_DIR}"
 echo "  wm run dir:    ${MARL_HPO_WM_RUN_DIR}"
+echo "  model type:    ${MARL_HPO_REQUIRED_MODEL_TYPE:-any}"
 echo "  budget:        envs=${MARL_HPO_NUM_ENVS}, max_steps=${MARL_HPO_MAX_STEPS}, max_iters=${MARL_HPO_MAX_ITERS}"
+if [[ -n "$MARL_HPO_REQUIRED_MODEL_TYPE" ]]; then
+  echo "  model filter:  ${MARL_HPO_REQUIRED_MODEL_TYPE}"
+fi
 
 if [[ "$HPO_BENCHMARK_FIRST" == "1" ]]; then
   echo "[marl-hpo] running throughput benchmark before HPO"
@@ -168,6 +174,7 @@ PY
         --results-root "$MARL_HPO_RESULTS_DIR" \
         --stage "$reselection_stage" \
         --top-k "$MARL_HPO_TOP_K" \
+        ${MARL_HPO_REQUIRED_MODEL_TYPE:+--required-model-type "$MARL_HPO_REQUIRED_MODEL_TYPE"} \
         --budget-json "$reselection_budget" >/dev/null
     fi
   fi
@@ -180,6 +187,9 @@ PY
       --num-agents "$MARL_HPO_NUM_AGENTS"
       --minimum-budget-json "{\"seeds\":\"${MARL_HPO_SEEDS}\",\"num_envs\":${MARL_HPO_NUM_ENVS},\"max_steps\":${MARL_HPO_MAX_STEPS},\"max_iters\":${MARL_HPO_MAX_ITERS}}"
     )
+    if [[ -n "$MARL_HPO_REQUIRED_MODEL_TYPE" ]]; then
+      VALIDATE_ARGS+=(--required-model-type "$MARL_HPO_REQUIRED_MODEL_TYPE")
+    fi
     if [[ "$family" == "mambpo_imagination" ]]; then
       VALIDATE_ARGS+=(--external-checkpoint-dir "${MARL_HPO_WM_RUN_DIR}/checkpoints")
     fi
@@ -239,7 +249,8 @@ PY
       --results-root "$MARL_HPO_RESULTS_DIR" \
       --stage promote \
       --source-stage "$source_stage" \
-      --top-k "$MARL_HPO_TOP_K" >/dev/null
+      --top-k "$MARL_HPO_TOP_K" \
+      ${MARL_HPO_REQUIRED_MODEL_TYPE:+--required-model-type "$MARL_HPO_REQUIRED_MODEL_TYPE"} >/dev/null
     promoted_path="${MARL_HPO_RESULTS_DIR}/${family}/promoted_configs.json"
     echo "[marl-hpo] ${family}: replaying top configs from ${promoted_path}"
     config_count="$("$PYTHON_BIN" - <<PY
@@ -275,6 +286,7 @@ PY
     --results-root "$MARL_HPO_RESULTS_DIR" \
     --stage "$MARL_HPO_STAGE" \
     --top-k "$MARL_HPO_TOP_K" \
+    ${MARL_HPO_REQUIRED_MODEL_TYPE:+--required-model-type "$MARL_HPO_REQUIRED_MODEL_TYPE"} \
     --budget-json "{\"mode\":\"${MARL_HPO_MODE}\",\"stage\":\"${MARL_HPO_STAGE}\",\"count\":${MARL_HPO_COUNT},\"top_k\":${MARL_HPO_TOP_K},\"seeds\":\"${MARL_HPO_SEEDS}\",\"num_envs\":${MARL_HPO_NUM_ENVS},\"max_steps\":${MARL_HPO_MAX_STEPS},\"max_iters\":${MARL_HPO_MAX_ITERS}}"
 done
 

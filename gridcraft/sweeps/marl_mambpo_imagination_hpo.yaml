@@ -32,8 +32,14 @@ parameters:
     value: 1024
   optimizer_steps:
     value: 4
+  model_type:
+    value: lstm
   hidden_size:
     value: 256
+  lstm_layers:
+    value: 1
+  lstm_dropout:
+    value: 0.0
   lr:
     value: 0.00005
   gamma:

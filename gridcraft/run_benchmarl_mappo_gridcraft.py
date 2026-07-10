@@ -86,7 +86,11 @@ def main() -> None:
     parser.add_argument("--marl-eval-every-iters", "--mappo-eval-every-iters", dest="marl_eval_every_iters", type=int, default=25)
     parser.add_argument("--marl-eval-episodes", "--mappo-eval-episodes", dest="marl_eval_episodes", type=int, default=4)
     parser.add_argument("--marl-video-every-iters", "--mappo-video-every-iters", dest="marl_video_every_iters", type=int, default=250)
+    parser.add_argument("--marl-model", choices=["mlp", "lstm"], default=os.environ.get("MARL_MODEL", "lstm"))
     parser.add_argument("--marl-hidden-size", "--mappo-hidden-size", dest="marl_hidden_size", type=int, default=256)
+    parser.add_argument("--marl-lstm-layers", type=int, default=int(os.environ.get("MARL_LSTM_LAYERS", "1")))
+    parser.add_argument("--marl-lstm-dropout", type=float, default=float(os.environ.get("MARL_LSTM_DROPOUT", "0.0")))
+    parser.add_argument("--marl-lstm-compile", action="store_true", default=os.environ.get("MARL_LSTM_COMPILE", "0") == "1")
     parser.add_argument("--marl-lr", type=float, default=5e-5)
     parser.add_argument("--marl-gamma", type=float, default=0.99)
     parser.add_argument("--marl-polyak-tau", type=float, default=0.005)
@@ -146,6 +150,7 @@ def main() -> None:
         from benchmarl.environments import GridcraftTask
         from benchmarl.experiment import Experiment, ExperimentConfig
         from benchmarl.experiment.logger import Logger as BenchmarlLogger
+        from benchmarl.models.lstm import LstmConfig
         from benchmarl.models.mlp import MlpConfig
     except ImportError as exc:
         raise SystemExit(
@@ -239,6 +244,7 @@ def main() -> None:
         f"external_wm={int(args.algorithm in {'mb_mappo', 'mambpo'} and bool(args.wm_run_dir))} "
         f"num_agents={args.num_agents} "
         f"seed={args.seed} "
+        f"marl_model={args.marl_model} "
         f"entropy_profile={args.marl_entropy_profile} "
         f"entropy_phase={args.marl_entropy_profile_phase} "
         f"alpha_init={args.marl_alpha_init} "
@@ -324,7 +330,11 @@ def main() -> None:
                 "marl_effective_frames_per_batch": effective_frames_per_batch,
                 "marl_train_batch_size": args.marl_train_batch_size,
                 "marl_optimizer_steps": args.marl_optimizer_steps,
+                "marl_model": args.marl_model,
                 "marl_hidden_size": args.marl_hidden_size,
+                "marl_lstm_layers": args.marl_lstm_layers,
+                "marl_lstm_dropout": args.marl_lstm_dropout,
+                "marl_lstm_compile": int(bool(args.marl_lstm_compile)),
                 "mb_imagined_horizon": args.mb_imagined_horizon,
                 "mb_imagined_branches": args.mb_imagined_branches,
                 "mb_lambda_imagined": args.mb_lambda_imagined,
@@ -333,8 +343,30 @@ def main() -> None:
     save_folder = (ROOT / "gridcraft" / args.save_folder).resolve()
     save_folder.mkdir(parents=True, exist_ok=True)
     experiment_config.save_folder = str(save_folder)
-    model_config = MlpConfig(num_cells=[args.marl_hidden_size, args.marl_hidden_size], activation_class=nn.Tanh, layer_class=nn.Linear)
-    critic_model_config = MlpConfig(num_cells=[args.marl_hidden_size, args.marl_hidden_size], activation_class=nn.Tanh, layer_class=nn.Linear)
+    if args.marl_model == "lstm":
+        model_config = LstmConfig(
+            hidden_size=args.marl_hidden_size,
+            n_layers=args.marl_lstm_layers,
+            bias=True,
+            dropout=args.marl_lstm_dropout,
+            compile=bool(args.marl_lstm_compile),
+            mlp_num_cells=[args.marl_hidden_size],
+            mlp_layer_class=nn.Linear,
+            mlp_activation_class=nn.Tanh,
+        )
+        critic_model_config = LstmConfig(
+            hidden_size=args.marl_hidden_size,
+            n_layers=args.marl_lstm_layers,
+            bias=True,
+            dropout=args.marl_lstm_dropout,
+            compile=bool(args.marl_lstm_compile),
+            mlp_num_cells=[args.marl_hidden_size],
+            mlp_layer_class=nn.Linear,
+            mlp_activation_class=nn.Tanh,
+        )
+    else:
+        model_config = MlpConfig(num_cells=[args.marl_hidden_size, args.marl_hidden_size], activation_class=nn.Tanh, layer_class=nn.Linear)
+        critic_model_config = MlpConfig(num_cells=[args.marl_hidden_size, args.marl_hidden_size], activation_class=nn.Tanh, layer_class=nn.Linear)
     experiment = Experiment(
         task=task,
         algorithm_config=algorithm_config,

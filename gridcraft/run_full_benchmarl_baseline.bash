@@ -106,7 +106,11 @@ MARL_OPTIMIZER_STEPS="${MARL_OPTIMIZER_STEPS:-${MAPPO_MINIBATCH_ITERS:-2}}"
 MARL_EVAL_EVERY_ITERS="${MARL_EVAL_EVERY_ITERS:-${MAPPO_EVAL_EVERY_ITERS:-25}}"
 MARL_EVAL_EPISODES="${MARL_EVAL_EPISODES:-${MAPPO_EVAL_EPISODES:-4}}"
 MARL_VIDEO_EVERY_ITERS="${MARL_VIDEO_EVERY_ITERS:-${MAPPO_VIDEO_EVERY_ITERS:-250}}"
+MARL_MODEL="${MARL_MODEL:-lstm}"
 MARL_HIDDEN_SIZE="${MARL_HIDDEN_SIZE:-${MAPPO_HIDDEN_SIZE:-256}}"
+MARL_LSTM_LAYERS="${MARL_LSTM_LAYERS:-1}"
+MARL_LSTM_DROPOUT="${MARL_LSTM_DROPOUT:-0.0}"
+MARL_LSTM_COMPILE="${MARL_LSTM_COMPILE:-0}"
 MARL_LR="${MARL_LR:-0.00005}"
 MARL_GAMMA="${MARL_GAMMA:-0.99}"
 MARL_POLYAK_TAU="${MARL_POLYAK_TAU:-0.005}"
@@ -182,6 +186,7 @@ if [[ "$REUSE_MARL_HPO_CONFIG" == "1" ]]; then
   if [[ -n "$REQUIRED_MARL_HPO_STAGE" ]]; then
     MARL_HPO_EXPORT_CMD+=(--required-stage "$REQUIRED_MARL_HPO_STAGE" --num-agents "$NUM_AGENTS")
   fi
+  MARL_HPO_EXPORT_CMD+=(--required-model-type "$MARL_MODEL")
   echo "[marl-hpo] checking best MARL HPO config for ${BASELINE_ID} in ${MARL_HPO_RESULTS_DIR}"
   eval "$("${MARL_HPO_EXPORT_CMD[@]}")"
   if [[ "${MARL_HPO_CORE_REUSED:-0}" == "1" ]]; then
@@ -293,7 +298,10 @@ if [[ "$MODEL_BASED" == "1" ]]; then
       --marl-eval-every-iters "$MARL_EVAL_EVERY_ITERS"
       --marl-eval-episodes "$MARL_EVAL_EPISODES"
       --marl-video-every-iters "$MARL_VIDEO_EVERY_ITERS"
+      --marl-model "$MARL_MODEL"
       --marl-hidden-size "$MARL_HIDDEN_SIZE"
+      --marl-lstm-layers "$MARL_LSTM_LAYERS"
+      --marl-lstm-dropout "$MARL_LSTM_DROPOUT"
       --mb-world-model-train-epochs "$MB_WORLD_MODEL_TRAIN_EPOCHS"
       --mb-world-model-batch-size "$MB_WORLD_MODEL_BATCH_SIZE"
       --mb-world-model-hidden-size "$MB_WORLD_MODEL_HIDDEN_SIZE"
@@ -326,7 +334,10 @@ if [[ "$MODEL_BASED" == "1" ]]; then
       --marl-eval-every-iters "$MARL_EVAL_EVERY_ITERS"
       --marl-eval-episodes "$MARL_EVAL_EPISODES"
       --marl-video-every-iters "$MARL_VIDEO_EVERY_ITERS"
+      --marl-model "$MARL_MODEL"
       --marl-hidden-size "$MARL_HIDDEN_SIZE"
+      --marl-lstm-layers "$MARL_LSTM_LAYERS"
+      --marl-lstm-dropout "$MARL_LSTM_DROPOUT"
       --mb-world-model-train-epochs "$MB_WORLD_MODEL_TRAIN_EPOCHS"
       --mb-world-model-batch-size "$MB_WORLD_MODEL_BATCH_SIZE"
       --mb-world-model-hidden-size "$MB_WORLD_MODEL_HIDDEN_SIZE"
@@ -422,6 +433,7 @@ else
   MARL_CMD=(
     "$PYTHON_BIN" run_benchmarl_marl_gridcraft.py
     --algorithm "$MODEL_FREE_DOWNSTREAM_ALGO"
+    --baseline-id "$BASELINE_ID"
     --seed "$SEED"
     --num-envs "$MARL_NUM_ENVS"
     --num-agents "$NUM_AGENTS"
@@ -433,7 +445,10 @@ else
     --marl-eval-every-iters "$MARL_EVAL_EVERY_ITERS"
     --marl-eval-episodes "$MARL_EVAL_EPISODES"
     --marl-video-every-iters "$MARL_VIDEO_EVERY_ITERS"
+    --marl-model "$MARL_MODEL"
     --marl-hidden-size "$MARL_HIDDEN_SIZE"
+    --marl-lstm-layers "$MARL_LSTM_LAYERS"
+    --marl-lstm-dropout "$MARL_LSTM_DROPOUT"
     --device "$DEVICE"
     --wandb-id "$WANDB_RUN_ID"
     --wandb-name "$RUN_NAME"
@@ -465,6 +480,9 @@ if [[ "${MARL_CMD[1]}" == "run_benchmarl_marl_gridcraft.py" ]]; then
     --marl-hpo-imagination-stage "${MARL_HPO_IMAGINATION_STAGE:-}"
     --marl-hpo-imagination-checkpoint-checksum "${MARL_HPO_IMAGINATION_CHECKPOINT_CHECKSUM:-}"
   )
+  if [[ "$MARL_LSTM_COMPILE" == "1" ]]; then
+    MARL_CMD+=(--marl-lstm-compile)
+  fi
   if [[ -n "${MARL_HPO_CORE_SCORE:-}" ]]; then
     MARL_CMD+=(--marl-hpo-core-score "$MARL_HPO_CORE_SCORE")
   fi

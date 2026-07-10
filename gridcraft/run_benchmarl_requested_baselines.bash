@@ -77,7 +77,11 @@ MARL_OPTIMIZER_STEPS="${MARL_OPTIMIZER_STEPS:-${MAPPO_MINIBATCH_ITERS:-2}}"
 MARL_EVAL_EVERY_ITERS="${MARL_EVAL_EVERY_ITERS:-${MAPPO_EVAL_EVERY_ITERS:-25}}"
 MARL_EVAL_EPISODES="${MARL_EVAL_EPISODES:-${MAPPO_EVAL_EPISODES:-4}}"
 MARL_VIDEO_EVERY_ITERS="${MARL_VIDEO_EVERY_ITERS:-${MAPPO_VIDEO_EVERY_ITERS:-250}}"
+MARL_MODEL="${MARL_MODEL:-lstm}"
 MARL_HIDDEN_SIZE="${MARL_HIDDEN_SIZE:-${MAPPO_HIDDEN_SIZE:-256}}"
+MARL_LSTM_LAYERS="${MARL_LSTM_LAYERS:-1}"
+MARL_LSTM_DROPOUT="${MARL_LSTM_DROPOUT:-0.0}"
+MARL_LSTM_COMPILE="${MARL_LSTM_COMPILE:-0}"
 MARL_LR="${MARL_LR:-0.00005}"
 MARL_GAMMA="${MARL_GAMMA:-0.99}"
 MARL_POLYAK_TAU="${MARL_POLYAK_TAU:-0.005}"
@@ -120,7 +124,7 @@ echo "World model symbolic: enabled_pstr_rules=${ENABLED_PSTR_RULES:-auto-profil
 echo "World model cache: shared_model_dir=${SHARED_MODEL_DIR}, reuse_vae=${REUSE_VAE_CACHE}, force_vae_retrain=${FORCE_VAE_RETRAIN}, reuse_latents=${REUSE_LATENT_CACHE}, force_latent_reencode=${FORCE_LATENT_REENCODE}"
 echo "World model HPO: results_dir=${HPO_RESULTS_DIR}, reuse=${REUSE_WM_HPO_CONFIG}, require=${REQUIRE_WM_HPO}"
 echo "MARL HPO: results_dir=${MARL_HPO_RESULTS_DIR}, reuse=${REUSE_MARL_HPO_CONFIG}, require=${REQUIRE_MARL_HPO}"
-echo "MARL: num_envs=${MARL_NUM_ENVS}, max_steps=${MARL_MAX_STEPS}, max_iters=${MARL_MAX_ITERS}, frames_per_batch=${MARL_FRAMES_PER_BATCH}, train_batch=${MARL_TRAIN_BATCH_SIZE}, optimizer_steps=${MARL_OPTIMIZER_STEPS}, eval_every_iters=${MARL_EVAL_EVERY_ITERS}, video_every_iters=${MARL_VIDEO_EVERY_ITERS}, hidden_size=${MARL_HIDDEN_SIZE}, model_free_downstream=${MODEL_FREE_DOWNSTREAM_ALGO}, model_based_downstream=${MODEL_BASED_DOWNSTREAM_ALGO}"
+echo "MARL: num_envs=${MARL_NUM_ENVS}, max_steps=${MARL_MAX_STEPS}, max_iters=${MARL_MAX_ITERS}, frames_per_batch=${MARL_FRAMES_PER_BATCH}, train_batch=${MARL_TRAIN_BATCH_SIZE}, optimizer_steps=${MARL_OPTIMIZER_STEPS}, eval_every_iters=${MARL_EVAL_EVERY_ITERS}, video_every_iters=${MARL_VIDEO_EVERY_ITERS}, model=${MARL_MODEL}, hidden_size=${MARL_HIDDEN_SIZE}, model_free_downstream=${MODEL_FREE_DOWNSTREAM_ALGO}, model_based_downstream=${MODEL_BASED_DOWNSTREAM_ALGO}"
 echo "MARL optimization: lr=${MARL_LR}, gamma=${MARL_GAMMA}, tau=${MARL_POLYAK_TAU}, alpha_init=${MARL_ALPHA_INIT}, discrete_entropy_w=${MARL_DISCRETE_TARGET_ENTROPY_WEIGHT}, memory=${MARL_MEMORY_SIZE}"
 echo "Model-based MARL params: wm_train_steps=${MB_WORLD_MODEL_TRAIN_EPOCHS}, wm_batch=${MB_WORLD_MODEL_BATCH_SIZE}, imagined_horizon=${MB_IMAGINED_HORIZON}, branches=${MB_IMAGINED_BRANCHES}, lambda_or_imagined_ratio=${MB_LAMBDA_IMAGINED}"
 echo "MPC-CEM: horizon=${MPC_PLANNING_HORIZON}, samples=${MPC_CEM_SAMPLES}, iters=${MPC_CEM_ITERS}, elite_frac=${MPC_CEM_ELITE_FRAC}"
@@ -201,7 +205,11 @@ for seed in $SEEDS; do
     MARL_EVAL_EVERY_ITERS="$MARL_EVAL_EVERY_ITERS" \
     MARL_EVAL_EPISODES="$MARL_EVAL_EPISODES" \
     MARL_VIDEO_EVERY_ITERS="$MARL_VIDEO_EVERY_ITERS" \
+    MARL_MODEL="$MARL_MODEL" \
     MARL_HIDDEN_SIZE="$MARL_HIDDEN_SIZE" \
+    MARL_LSTM_LAYERS="$MARL_LSTM_LAYERS" \
+    MARL_LSTM_DROPOUT="$MARL_LSTM_DROPOUT" \
+    MARL_LSTM_COMPILE="$MARL_LSTM_COMPILE" \
     MARL_LR="$MARL_LR" \
     MARL_GAMMA="$MARL_GAMMA" \
     MARL_POLYAK_TAU="$MARL_POLYAK_TAU" \

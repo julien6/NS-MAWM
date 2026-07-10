@@ -20,10 +20,13 @@ DEFAULT_MARL_HPO_ROOT = Path("hpo_results/marl")
 HPO_STAGE_RANK = {"screen": 0, "promote": 1, "final": 2}
 
 CORE_ENV_KEYS = {
+    "model_type": "MARL_MODEL",
     "frames_per_batch": "MARL_FRAMES_PER_BATCH",
     "train_batch_size": "MARL_TRAIN_BATCH_SIZE",
     "optimizer_steps": "MARL_OPTIMIZER_STEPS",
     "hidden_size": "MARL_HIDDEN_SIZE",
+    "lstm_layers": "MARL_LSTM_LAYERS",
+    "lstm_dropout": "MARL_LSTM_DROPOUT",
     "lr": "MARL_LR",
     "gamma": "MARL_GAMMA",
     "polyak_tau": "MARL_POLYAK_TAU",
@@ -93,6 +96,7 @@ def validate_best_config(
     *,
     required_stage: str = "final",
     num_agents: int | None = None,
+    required_model_type: str | None = None,
     external_checkpoint_dir: str | None = None,
     minimum_budget: dict[str, Any] | None = None,
 ) -> tuple[bool, str]:
@@ -108,6 +112,11 @@ def validate_best_config(
         return False, versions_reason
     if num_agents is not None and int(provenance.get("num_agents", -1)) != int(num_agents):
         return False, f"num_agents={provenance.get('num_agents')!r} does not match {num_agents}"
+    if required_model_type:
+        hyperparams = best_config.get("hyperparameters", best_config)
+        actual_model_type = str(hyperparams.get("model_type", "mlp"))
+        if actual_model_type != str(required_model_type):
+            return False, f"model_type={actual_model_type!r} does not match {required_model_type!r}"
     if external_checkpoint_dir is not None:
         expected = checkpoint_checksum(external_checkpoint_dir)
         actual = provenance.get("external_checkpoint_checksum")
@@ -220,6 +229,7 @@ def select_best_config(
     budget: dict[str, Any] | None = None,
     stage: str = "screen",
     top_k: int = 3,
+    required_model_type: str | None = None,
 ) -> dict[str, Any]:
     family = normalize_family(family)
     candidates = []
@@ -231,6 +241,10 @@ def select_best_config(
             continue
         if payload.get("hpo_family") != family or payload.get("stage") != stage:
             continue
+        if required_model_type:
+            actual_model_type = str(payload.get("hyperparameters", {}).get("model_type", "mlp"))
+            if actual_model_type != str(required_model_type):
+                continue
         if not validate_version_provenance(payload.get("provenance", {}))[0]:
             continue
         score = _as_float(payload.get("score"), default=-math.inf)
@@ -287,7 +301,11 @@ def select_best_config(
 
 
 def collect_ranked_trials(
-    *, family: str, trials_root: str | Path, stage: str | None = None
+    *,
+    family: str,
+    trials_root: str | Path,
+    stage: str | None = None,
+    required_model_type: str | None = None,
 ) -> list[dict[str, Any]]:
     family = normalize_family(family)
     ranked = []
@@ -303,6 +321,10 @@ def collect_ranked_trials(
             continue
         if stage is not None and payload.get("stage") != stage:
             continue
+        if required_model_type:
+            actual_model_type = str(payload.get("hyperparameters", {}).get("model_type", "mlp"))
+            if actual_model_type != str(required_model_type):
+                continue
         score = _as_float(payload.get("score"), default=-math.inf)
         if math.isfinite(score):
             payload = dict(payload)
@@ -319,8 +341,14 @@ def write_stage_results(
     results_root: str | Path = DEFAULT_MARL_HPO_ROOT,
     stage: str = "screen",
     top_k: int = 3,
+    required_model_type: str | None = None,
 ) -> dict[str, Any]:
     family = normalize_family(family)
+    if required_model_type:
+        candidates = [
+            candidate for candidate in candidates
+            if str(candidate.get("hyperparameters", {}).get("model_type", "mlp")) == str(required_model_type)
+        ]
     top_k = max(1, int(top_k))
     root = Path(results_root) / family
     payload = {
@@ -492,12 +520,14 @@ def main() -> None:
     export.add_argument("--require", action="store_true")
     export.add_argument("--required-stage", choices=tuple(HPO_STAGE_RANK), default=None)
     export.add_argument("--num-agents", type=int)
+    export.add_argument("--required-model-type", choices=("mlp", "lstm"))
 
     validate = sub.add_parser("validate")
     validate.add_argument("--family", required=True, choices=MARL_HPO_FAMILIES)
     validate.add_argument("--root", default=str(DEFAULT_MARL_HPO_ROOT))
     validate.add_argument("--required-stage", choices=tuple(HPO_STAGE_RANK), default="final")
     validate.add_argument("--num-agents", type=int)
+    validate.add_argument("--required-model-type", choices=("mlp", "lstm"))
     validate.add_argument("--external-checkpoint-dir")
     validate.add_argument("--minimum-budget-json", default="{}")
 
@@ -508,6 +538,7 @@ def main() -> None:
     select.add_argument("--budget-json", default="{}")
     select.add_argument("--stage", default="screen")
     select.add_argument("--top-k", type=int, default=3)
+    select.add_argument("--required-model-type", choices=("mlp", "lstm"))
 
     stage_results = sub.add_parser("write-stage-results")
     stage_results.add_argument("--family", required=True, choices=MARL_HPO_FAMILIES)
@@ -516,6 +547,7 @@ def main() -> None:
     stage_results.add_argument("--stage", default="screen")
     stage_results.add_argument("--source-stage")
     stage_results.add_argument("--top-k", type=int, default=3)
+    stage_results.add_argument("--required-model-type", choices=("mlp", "lstm"))
 
     summary = sub.add_parser("write-summary")
     summary.add_argument("--results-root", default=str(DEFAULT_MARL_HPO_ROOT))
@@ -540,6 +572,7 @@ def main() -> None:
                     best,
                     required_stage=args.required_stage,
                     num_agents=args.num_agents,
+                    required_model_type=args.required_model_type,
                 )
                 if not valid:
                     message = f"[marl-hpo] incompatible config for {family}: {reason}"
@@ -557,6 +590,7 @@ def main() -> None:
             best,
             required_stage=args.required_stage,
             num_agents=args.num_agents,
+            required_model_type=args.required_model_type,
             external_checkpoint_dir=args.external_checkpoint_dir,
             minimum_budget=json.loads(args.minimum_budget_json),
         )
@@ -566,15 +600,16 @@ def main() -> None:
         print(f"[marl-hpo] {args.family}: valid")
         return
     if args.command == "select-best":
-        print(json.dumps(select_best_config(family=args.family, trials_root=args.trials_root, results_root=args.results_root, budget=json.loads(args.budget_json), stage=args.stage, top_k=args.top_k), indent=2))
+        print(json.dumps(select_best_config(family=args.family, trials_root=args.trials_root, results_root=args.results_root, budget=json.loads(args.budget_json), stage=args.stage, top_k=args.top_k, required_model_type=args.required_model_type), indent=2))
         return
     if args.command == "write-stage-results":
         ranked = collect_ranked_trials(
             family=args.family,
             trials_root=args.trials_root,
             stage=args.source_stage,
+            required_model_type=args.required_model_type,
         )
-        print(json.dumps(write_stage_results(family=args.family, candidates=ranked, results_root=args.results_root, stage=args.stage, top_k=args.top_k), indent=2))
+        print(json.dumps(write_stage_results(family=args.family, candidates=ranked, results_root=args.results_root, stage=args.stage, top_k=args.top_k, required_model_type=args.required_model_type), indent=2))
         return
     if args.command == "write-summary":
         print(json.dumps(write_summary(args.results_root), indent=2))
