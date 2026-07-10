@@ -110,6 +110,16 @@ def main() -> None:
     parser.add_argument("--save-marl-checkpoint", action="store_true", default=True)
     parser.add_argument("--no-save-marl-checkpoint", dest="save_marl_checkpoint", action="store_false")
     parser.add_argument("--marl-checkpoint-interval", type=int, default=0)
+    parser.add_argument(
+        "--include-marl-buffer-in-checkpoint",
+        action="store_true",
+        default=os.environ.get("MARL_INCLUDE_BUFFER_IN_CHECKPOINT", "0") == "1",
+        help=(
+            "Include off-policy replay buffers in BenchMARL checkpoints. Disabled "
+            "by default because MASAC/MAMBPO replay buffers can make HPO checkpoints "
+            "large and fragile; policy evaluation only needs model, loss and collector state."
+        ),
+    )
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--save-folder", default="runs_benchmarl/native_marl")
@@ -266,6 +276,7 @@ def main() -> None:
     experiment_config.checkpoint_at_end = bool(args.save_marl_checkpoint)
     experiment_config.checkpoint_interval = int(args.marl_checkpoint_interval)
     experiment_config.keep_checkpoints_num = 3
+    experiment_config.exclude_buffer_from_checkpoint = not bool(args.include_marl_buffer_in_checkpoint)
     effective_frames_per_batch = int(args.frames_per_batch)
     if args.num_envs > 0 and effective_frames_per_batch % int(args.num_envs) != 0:
         effective_frames_per_batch = int(
@@ -326,6 +337,8 @@ def main() -> None:
                 "marl_alpha_init_end": args.marl_alpha_init_end,
                 "marl_finetune_iters": args.marl_finetune_iters,
                 "marl_memory_size": args.marl_memory_size,
+                "marl_include_buffer_in_checkpoint": int(bool(args.include_marl_buffer_in_checkpoint)),
+                "marl_exclude_buffer_from_checkpoint": int(bool(experiment_config.exclude_buffer_from_checkpoint)),
                 "marl_frames_per_batch": args.frames_per_batch,
                 "marl_effective_frames_per_batch": effective_frames_per_batch,
                 "marl_train_batch_size": args.marl_train_batch_size,
