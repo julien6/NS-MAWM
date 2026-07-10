@@ -1025,7 +1025,28 @@ class Experiment(CallbackNotifier):
         checkpoint_folder = self.folder_name / "checkpoints"
         checkpoint_folder.mkdir(parents=False, exist_ok=True)
         checkpoint_file = checkpoint_folder / f"checkpoint_{self.total_frames}.pt"
-        torch.save(self.state_dict(), checkpoint_file)
+        tmp_checkpoint_file = checkpoint_file.with_suffix(checkpoint_file.suffix + ".tmp")
+        state_dict = self.state_dict()
+        try:
+            torch.save(state_dict, tmp_checkpoint_file)
+        except RuntimeError as first_error:
+            tmp_checkpoint_file.unlink(missing_ok=True)
+            try:
+                torch.save(
+                    state_dict,
+                    tmp_checkpoint_file,
+                    _use_new_zipfile_serialization=False,
+                )
+                warnings.warn(
+                    "Checkpoint save with PyTorch zip serialization failed; "
+                    "saved with legacy serialization instead. Original error: "
+                    f"{first_error}",
+                    RuntimeWarning,
+                )
+            except Exception:
+                tmp_checkpoint_file.unlink(missing_ok=True)
+                raise
+        os.replace(tmp_checkpoint_file, checkpoint_file)
         self._checkpointed_files.append(checkpoint_file)
 
     def _load_experiment(self) -> Experiment:

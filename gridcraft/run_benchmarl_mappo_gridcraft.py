@@ -107,6 +107,11 @@ def main() -> None:
     parser.add_argument("--marl-alpha-init-end", type=float, default=None)
     parser.add_argument("--marl-finetune-iters", type=int, default=0)
     parser.add_argument("--marl-memory-size", type=int, default=1_000_000)
+    parser.add_argument(
+        "--restore-marl-checkpoint",
+        default=os.environ.get("RESTORE_MARL_CHECKPOINT"),
+        help="Optional BenchMARL checkpoint_*.pt to continue MARL training from.",
+    )
     parser.add_argument("--save-marl-checkpoint", action="store_true", default=True)
     parser.add_argument("--no-save-marl-checkpoint", dest="save_marl_checkpoint", action="store_false")
     parser.add_argument("--marl-checkpoint-interval", type=int, default=0)
@@ -273,6 +278,7 @@ def main() -> None:
     experiment_config.prefer_continuous_actions = False
     experiment_config.max_n_iters = args.max_iters
     experiment_config.max_n_frames = None
+    experiment_config.restore_file = args.restore_marl_checkpoint
     experiment_config.checkpoint_at_end = bool(args.save_marl_checkpoint)
     experiment_config.checkpoint_interval = int(args.marl_checkpoint_interval)
     experiment_config.keep_checkpoints_num = 3
@@ -337,6 +343,7 @@ def main() -> None:
                 "marl_alpha_init_end": args.marl_alpha_init_end,
                 "marl_finetune_iters": args.marl_finetune_iters,
                 "marl_memory_size": args.marl_memory_size,
+                "marl_restore_checkpoint": args.restore_marl_checkpoint,
                 "marl_include_buffer_in_checkpoint": int(bool(args.include_marl_buffer_in_checkpoint)),
                 "marl_exclude_buffer_from_checkpoint": int(bool(experiment_config.exclude_buffer_from_checkpoint)),
                 "marl_frames_per_batch": args.frames_per_batch,
