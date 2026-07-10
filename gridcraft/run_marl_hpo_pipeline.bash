@@ -187,15 +187,7 @@ PY
       echo "[marl-hpo] ${family}: compatible ${MARL_HPO_STAGE} config found at ${best_config}; skipping."
       continue
     fi
-    echo "[marl-hpo] ${family}: existing config is not valid for stage=${MARL_HPO_STAGE}, agents=${MARL_HPO_NUM_AGENTS}; archiving pre-fix results."
-    archive_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-    archive_root="${MARL_HPO_RESULTS_DIR}/pre_reward_hierarchy_fix/${archive_stamp}/${family}"
-    mkdir -p "$archive_root"
-    mv "$best_config" "${archive_root}/best_config.json"
-    if [[ -d "${MARL_HPO_TRIALS_DIR}/${family}" ]]; then
-      mv "${MARL_HPO_TRIALS_DIR}/${family}" "${archive_root}/trials"
-    fi
-    mkdir -p "${MARL_HPO_TRIALS_DIR}/${family}"
+    echo "[marl-hpo] ${family}: existing config is not valid for requested stage=${MARL_HPO_STAGE}; keeping prior trials and continuing stage promotion."
   fi
   if [[ "$family" == "mambpo_imagination" ]]; then
     checkpoint_dir="${MARL_HPO_WM_RUN_DIR}/checkpoints"
@@ -207,13 +199,14 @@ PY
   fi
 
   trial_glob_count="$(find "${MARL_HPO_TRIALS_DIR}/${family}" -name marl_hpo_trial_summary.json 2>/dev/null | wc -l | tr -d ' ')"
-  if [[ "$MARL_HPO_STAGE" == "screen" || "$trial_glob_count" == "0" ]]; then
+  if [[ "$MARL_HPO_STAGE" != "screen" && "$trial_glob_count" == "0" ]]; then
+    echo "[marl-hpo] ${family}: cannot run stage=${MARL_HPO_STAGE} because no prior trial summaries were found in ${MARL_HPO_TRIALS_DIR}/${family}." >&2
+    echo "[marl-hpo] Run MARL_HPO_STAGE=screen first, then MARL_HPO_STAGE=promote, then MARL_HPO_STAGE=final." >&2
+    exit 2
+  fi
+  if [[ "$MARL_HPO_STAGE" == "screen" ]]; then
     sweep_config="$(config_for_family "$family")"
-    if [[ "$MARL_HPO_STAGE" != "screen" && "$trial_glob_count" == "0" ]]; then
-      echo "[marl-hpo] ${family}: no previous screen trials found; bootstrapping ${MARL_HPO_STAGE} with a sweep from ${sweep_config}"
-    else
-      echo "[marl-hpo] ${family}: creating screen sweep from ${sweep_config}"
-    fi
+    echo "[marl-hpo] ${family}: creating screen sweep from ${sweep_config}"
     sweep_output_file="$(mktemp)"
     set +e
     ../.venv/bin/wandb sweep --project "$PROJECT" "${ENTITY_ARGS[@]}" "$sweep_config" 2>&1 | tee "$sweep_output_file"
