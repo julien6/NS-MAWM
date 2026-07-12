@@ -290,10 +290,24 @@ class _MixedReplayBuffer:
                 continue
             if (
                 real_value.ndim == model_value.ndim + 1
-                and real_value.shape[1] == 1
                 and real_value.shape[2:] == model_value.shape[1:]
             ):
-                model.set(key, model_value.unsqueeze(1))
+                seq_len = real_value.shape[1]
+                expanded_shape = (model_value.shape[0], seq_len, *model_value.shape[1:])
+                model.set(key, model_value.unsqueeze(1).expand(expanded_shape).clone())
+            elif (
+                real_value.ndim == model_value.ndim
+                and real_value.ndim >= 2
+                and model_value.shape[1] == 1
+                and real_value.shape[1] != 1
+                and real_value.shape[2:] == model_value.shape[2:]
+            ):
+                expanded_shape = (
+                    model_value.shape[0],
+                    real_value.shape[1],
+                    *model_value.shape[2:],
+                )
+                model.set(key, model_value.expand(expanded_shape).clone())
             elif (
                 real_value.ndim + 1 == model_value.ndim
                 and model_value.shape[1] == 1
