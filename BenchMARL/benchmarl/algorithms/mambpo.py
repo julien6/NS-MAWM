@@ -274,6 +274,34 @@ class _MixedReplayBuffer:
     def load_state_dict(self, state_dict):
         return self.real_buffer.load_state_dict(state_dict)
 
+    @staticmethod
+    def _align_model_batch_to_real(real: TensorDictBase, model: TensorDictBase) -> TensorDictBase:
+        model = model.select(*real.keys(True, True), strict=False)
+        for key in list(model.keys(True, True)):
+            if key not in real.keys(True, True):
+                continue
+            real_value = real.get(key)
+            model_value = model.get(key)
+            if not (
+                torch.is_tensor(real_value)
+                and torch.is_tensor(model_value)
+                and real_value.ndim != model_value.ndim
+            ):
+                continue
+            if (
+                real_value.ndim == model_value.ndim + 1
+                and real_value.shape[1] == 1
+                and real_value.shape[2:] == model_value.shape[1:]
+            ):
+                model.set(key, model_value.unsqueeze(1))
+            elif (
+                real_value.ndim + 1 == model_value.ndim
+                and model_value.shape[1] == 1
+                and real_value.shape[1:] == model_value.shape[2:]
+            ):
+                model.set(key, model_value.squeeze(1))
+        return model
+
     def sample(self):
         model_buffer = self.algorithm._model_replay_buffers.get(self.group)
         if (
@@ -316,6 +344,7 @@ class _MixedReplayBuffer:
             )
             real = self.real_buffer.sample(batch_size=n_real)
             model = model_buffer.sample(batch_size=n_model)
+        model = self._align_model_batch_to_real(real, model)
         reward_key = ("next", self.group, "reward")
         imagined_reward = (
             model.get(reward_key).float().mean().to(self.algorithm.device)
