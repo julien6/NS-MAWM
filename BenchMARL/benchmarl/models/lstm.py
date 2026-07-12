@@ -168,6 +168,18 @@ class MultiAgentLSTM(torch.nn.Module):
         assert is_init is not None, "We need to pass is_init"
         training = h_0 is None
 
+        single_transition_training = False
+        if training and input.shape == (input.shape[0], self.n_agents, self.input_size):
+            # Off-policy replay buffers can sample individual transitions instead of
+            # sequences. Treat them as length-1 sequences so MASAC/MAMBPO can use
+            # recurrent policies without requiring a sequence replay buffer.
+            single_transition_training = True
+            input = input.unsqueeze(1)
+            if is_init.ndim == 1:
+                is_init = is_init.unsqueeze(-1)
+            if is_init.ndim == 2:
+                is_init = is_init.unsqueeze(1)
+
         missing_batch = False
         if (
             not training and len(input.shape) < 3
@@ -231,6 +243,8 @@ class MultiAgentLSTM(torch.nn.Module):
             )
 
         if not training:
+            output = output.squeeze(1)
+        if single_transition_training:
             output = output.squeeze(1)
         if missing_batch:
             output = output.squeeze(0)
@@ -465,6 +479,15 @@ class Lstm(Model):
             if not self.output_has_agent_dim:
                 output = output[..., 0, :]
         else:  # Is a global input, this is a critic
+            single_transition_training = False
+            if training and input.ndim == 2:
+                single_transition_training = True
+                input = input.unsqueeze(1)
+                if is_init.ndim == 1:
+                    is_init = is_init.unsqueeze(-1)
+                if is_init.ndim == 2:
+                    is_init = is_init.unsqueeze(1)
+
             # Check input
             batch = input.shape[0]
             seq = input.shape[1]
@@ -485,6 +508,8 @@ class Lstm(Model):
                     output, _, _ = net(input, is_init, h_0, c_0)
                     outputs.append(output)
                 output = torch.stack(outputs, dim=-2)
+            if single_transition_training:
+                output = output.squeeze(1)
 
         # Mlp
         if self.output_has_agent_dim:
