@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Type
 
 import torch
-from tensordict import TensorDictBase
+from tensordict import TensorDict, TensorDictBase
 from torch import nn
 from torch.nn import functional as F
 from torchrl.data import Categorical, LazyTensorStorage, OneHot, TensorDictReplayBuffer
@@ -277,6 +277,8 @@ class _MixedReplayBuffer:
     @staticmethod
     def _align_model_batch_to_real(real: TensorDictBase, model: TensorDictBase) -> TensorDictBase:
         model = model.select(*real.keys(True, True), strict=False)
+        model_batch = torch.Size((model.batch_size[0], *real.batch_size[1:]))
+        aligned = TensorDict({}, batch_size=model_batch, device=model.device)
         for key in list(model.keys(True, True)):
             if key not in real.keys(True, True):
                 continue
@@ -285,16 +287,16 @@ class _MixedReplayBuffer:
             if not (
                 torch.is_tensor(real_value)
                 and torch.is_tensor(model_value)
-                and real_value.ndim != model_value.ndim
             ):
                 continue
+            aligned_value = model_value
             if (
                 real_value.ndim == model_value.ndim + 1
                 and real_value.shape[2:] == model_value.shape[1:]
             ):
                 seq_len = real_value.shape[1]
                 expanded_shape = (model_value.shape[0], seq_len, *model_value.shape[1:])
-                model.set(key, model_value.unsqueeze(1).expand(expanded_shape).clone())
+                aligned_value = model_value.unsqueeze(1).expand(expanded_shape).clone()
             elif (
                 real_value.ndim == model_value.ndim
                 and real_value.ndim >= 2
@@ -307,14 +309,16 @@ class _MixedReplayBuffer:
                     real_value.shape[1],
                     *model_value.shape[2:],
                 )
-                model.set(key, model_value.expand(expanded_shape).clone())
+                aligned_value = model_value.expand(expanded_shape).clone()
             elif (
                 real_value.ndim + 1 == model_value.ndim
                 and model_value.shape[1] == 1
                 and real_value.shape[1:] == model_value.shape[2:]
             ):
-                model.set(key, model_value.squeeze(1))
-        return model
+                aligned_value = model_value.squeeze(1)
+            if aligned_value.shape[: len(model_batch)] == model_batch:
+                aligned.set(key, aligned_value)
+        return aligned
 
     def sample(self):
         model_buffer = self.algorithm._model_replay_buffers.get(self.group)
