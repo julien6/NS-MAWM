@@ -493,7 +493,11 @@ class StructuredSequenceDataset(torch.utils.data.Dataset):
 def structured_event_labels(actions: torch.Tensor, rewards: torch.Tensor, dones: torch.Tensor) -> torch.Tensor:
     if dones.ndim == actions.ndim - 1:
         dones = dones.unsqueeze(-1).expand_as(actions)
-    labels = torch.zeros((*actions.shape, len(STRUCTURED_EVENT_NAMES)), dtype=torch.float32)
+    labels = torch.zeros(
+        (*actions.shape, len(STRUCTURED_EVENT_NAMES)),
+        dtype=torch.float32,
+        device=actions.device,
+    )
     positive_reward = rewards.float() > 0.0
     labels[..., 0] = ((actions >= 1) & (actions <= 4) & positive_reward).float()
     labels[..., 1] = ((actions == 5) & positive_reward).float()
