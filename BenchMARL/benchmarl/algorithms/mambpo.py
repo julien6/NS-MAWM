@@ -431,6 +431,10 @@ class Mambpo(Masac):
                         "mambpo/external_world_model_used": torch.tensor(
                             1.0, device=self.device
                         ),
+                        "mambpo/external_model_type_structured": torch.tensor(
+                            1.0 if self.world_model.external_model_type == "gridcraft_structured" else 0.0,
+                            device=self.device,
+                        ),
                         "mambpo/world_model_loss": torch.tensor(
                             0.0, device=self.device
                         ),
@@ -482,7 +486,7 @@ class Mambpo(Masac):
     def _uses_external_gridcraft_world_model(self) -> bool:
         return (
             self.world_model.enabled
-            and self.world_model.external_model_type == "gridcraft_vae_mdn_rnn"
+            and self.world_model.external_model_type in {"gridcraft_vae_mdn_rnn", "gridcraft_structured"}
             and bool(self.world_model.external_checkpoint_dir)
         )
 
@@ -554,9 +558,16 @@ class Mambpo(Masac):
         checkpoint_dir = Path(str(self.world_model.external_checkpoint_dir)).expanduser()
         if not checkpoint_dir.is_absolute():
             checkpoint_dir = Path.cwd() / checkpoint_dir
+        structured_path = checkpoint_dir / "structured_wm.pt"
         vae_path = checkpoint_dir / "vae.pt"
         rnn_path = checkpoint_dir / "rnn.pt"
-        if not vae_path.exists() or not rnn_path.exists():
+        if self.world_model.external_model_type == "gridcraft_structured":
+            if not structured_path.exists():
+                raise FileNotFoundError(
+                    "Missing external structured Gridcraft world model checkpoint: "
+                    f"{structured_path}"
+                )
+        elif not vae_path.exists() or not rnn_path.exists():
             raise FileNotFoundError(
                 "Missing external Gridcraft world model checkpoints: "
                 f"{vae_path} / {rnn_path}"
@@ -569,10 +580,23 @@ class Mambpo(Masac):
         gridcraft_dir = root / "gridcraft"
         if str(gridcraft_dir) not in sys.path:
             sys.path.insert(0, str(gridcraft_dir))
-        from torch_world_model import load_world_model_config, make_rnn_from_config, make_vae_from_config
+        from torch_world_model import load_world_model_config, make_rnn_from_config, make_structured_from_config, make_vae_from_config
         from run_benchmarl_dyna_gridcraft import apply_ns_mawm_to_latent_step
 
         wm_config = load_world_model_config(checkpoint_dir)
+        if self.world_model.external_model_type == "gridcraft_structured":
+            model = make_structured_from_config(wm_config).to(self.device)
+            model.load_state_dict(torch.load(structured_path, map_location=self.device), strict=False)
+            model.eval()
+            for param in model.parameters():
+                param.requires_grad_(False)
+            state = {
+                "structured": model,
+                "checkpoint_dir": str(checkpoint_dir),
+                "external_model_type": "gridcraft_structured",
+            }
+            self._external_world_models[group] = state
+            return state
         vae = make_vae_from_config(wm_config).to(self.device)
         rnn = make_rnn_from_config(wm_config).to(self.device)
         vae.load_state_dict(torch.load(vae_path, map_location=self.device))
@@ -588,6 +612,7 @@ class Mambpo(Masac):
             "rnn": rnn,
             "apply_ns": apply_ns_mawm_to_latent_step,
             "checkpoint_dir": str(checkpoint_dir),
+            "external_model_type": "gridcraft_vae_mdn_rnn",
         }
         self._external_world_models[group] = state
         return state
@@ -668,6 +693,8 @@ class Mambpo(Masac):
         if n_roots <= 0:
             return None
         state = self._get_external_gridcraft_world_model(group)
+        if state.get("external_model_type") == "gridcraft_structured":
+            return self._generate_external_structured_gridcraft_rollouts(group, flat_batch, state, n_roots)
         vae = state["vae"]
         rnn = state["rnn"]
         apply_ns = state["apply_ns"]
@@ -751,6 +778,60 @@ class Mambpo(Masac):
             transitions.append(transition)
             current_obs = next_obs.detach()
             current_z = next_z.detach()
+        return torch.cat(transitions, dim=0)
+
+    @torch.no_grad()
+    def _generate_external_structured_gridcraft_rollouts(
+        self,
+        group: str,
+        flat_batch: TensorDictBase,
+        state: Dict,
+        n_roots: int,
+    ) -> Optional[TensorDictBase]:
+        model = state["structured"]
+        indices = torch.randint(len(flat_batch), (n_roots,), device=flat_batch.device)
+        roots = flat_batch[indices].clone()
+        current_obs = roots.get((group, "observation")).to(self.device)
+        if current_obs.ndim < 3:
+            return None
+        num_agents = int(self.world_model.external_num_agents) or int(current_obs.shape[1])
+        if int(current_obs.shape[1]) != num_agents:
+            num_agents = int(current_obs.shape[1])
+        hidden = None
+        transitions = []
+        policy = self.get_policy_for_collection()
+        for _ in range(self._current_rollout_length()):
+            td = roots.clone()
+            td.set((group, "observation"), current_obs.to(td.device))
+            if self.imagined_rollouts.diverse_actions:
+                policy(td.to(self.device))
+            action_raw = td.get((group, "action")).to(self.device)
+            if action_raw.ndim >= 2 and action_raw.shape[-1] == num_agents and not action_raw.is_floating_point():
+                action_index = action_raw.long()
+            elif action_raw.ndim >= 3 and action_raw.shape[-1] == 1:
+                action_index = action_raw.squeeze(-1).long()
+            elif action_raw.ndim >= 3 and action_raw.shape[-1] > 1:
+                action_index = action_raw.argmax(dim=-1)
+            else:
+                action_index = action_raw.reshape(n_roots, num_agents).long()
+            outputs, hidden = model.step(current_obs.float(), action_index, hidden)
+            next_obs = model.decode_to_obs_vector(outputs).reshape_as(current_obs)
+            reward = outputs["reward_pred"].reshape(n_roots, num_agents, 1)
+            done_prob = torch.sigmoid(outputs["done_logit"]).reshape(n_roots, num_agents, 1)
+            done = done_prob > 0.5 if self.world_model.predict_done else torch.zeros_like(done_prob, dtype=torch.bool)
+            transition = td.clone()
+            transition.set((group, "action"), action_raw.to(transition.device))
+            transition.set(("next", group, "observation"), next_obs.to(transition.device))
+            transition.set(("next", group, "reward"), reward.to(transition.device))
+            transition.set(("next", group, "done"), done.to(transition.device))
+            transition.set(("next", group, "terminated"), done.to(transition.device))
+            if ("next", "done") in transition.keys(True, True):
+                transition.set(("next", "done"), done.any(dim=-2).to(transition.device))
+            if ("next", "terminated") in transition.keys(True, True):
+                transition.set(("next", "terminated"), done.any(dim=-2).to(transition.device))
+            transitions.append(transition)
+            current_obs = next_obs.detach()
+            hidden = hidden.detach()
         return torch.cat(transitions, dim=0)
 
     def _summarize_imagined_transitions(

@@ -11,6 +11,9 @@ RUN_NAME="${RUN_NAME:-${BASELINE_ID}_a${NUM_AGENTS}_full_seed${SEED}}"
 WANDB_RUN_ID="${WANDB_RUN_ID:-${RUN_NAME}_$(date +%Y%m%d_%H%M%S)}"
 WANDB_GROUP="${WANDB_GROUP:-${BASELINE_ID}}"
 DRY_RUN="${DRY_RUN:-0}"
+WM_REWARD_LOSS_WEIGHT_USER_SET="${WM_REWARD_LOSS_WEIGHT+x}"
+WM_DONE_LOSS_WEIGHT_USER_SET="${WM_DONE_LOSS_WEIGHT+x}"
+WM_EVENT_LOSS_WEIGHT_USER_SET="${WM_EVENT_LOSS_WEIGHT+x}"
 
 # World-model phase for model-based baselines; lightweight real policy smoke for B00.
 WM_NUM_ENVS="${WM_NUM_ENVS:-128}"
@@ -21,6 +24,7 @@ RNN_STEPS="${RNN_STEPS:-2000}"
 WM_BATCH_SIZE="${WM_BATCH_SIZE:-512}"
 WM_NUM_WORKERS="${WM_NUM_WORKERS:-4}"
 WM_SEQ_LEN="${WM_SEQ_LEN:-32}"
+WORLD_MODEL_ARCH="${WORLD_MODEL_ARCH:-vae_mdn_rnn}"
 VAE_Z_SIZE="${VAE_Z_SIZE:-64}"
 VAE_HIDDEN_SIZE="${VAE_HIDDEN_SIZE:-512}"
 VAE_KL_TOLERANCE="${VAE_KL_TOLERANCE:-0.5}"
@@ -29,6 +33,14 @@ RNN_NUM_MIXTURE="${RNN_NUM_MIXTURE:-5}"
 WM_MEAN_MSE_WEIGHT="${WM_MEAN_MSE_WEIGHT:-10.0}"
 WM_REWARD_LOSS_WEIGHT="${WM_REWARD_LOSS_WEIGHT:-1.0}"
 WM_DONE_LOSS_WEIGHT="${WM_DONE_LOSS_WEIGHT:-1.0}"
+WM_EVENT_LOSS_WEIGHT="${WM_EVENT_LOSS_WEIGHT:-5.0}"
+WM_GRID_EMBED_DIM="${WM_GRID_EMBED_DIM:-32}"
+WM_CNN_CHANNELS="${WM_CNN_CHANNELS:-128}"
+WM_SELF_HIDDEN_SIZE="${WM_SELF_HIDDEN_SIZE:-128}"
+WM_AGENT_HIDDEN_SIZE="${WM_AGENT_HIDDEN_SIZE:-256}"
+WM_ATTENTION_HEADS="${WM_ATTENTION_HEADS:-4}"
+WM_NUM_ATTENTION_LAYERS="${WM_NUM_ATTENTION_LAYERS:-1}"
+WM_TRANSITION_HIDDEN_SIZE="${WM_TRANSITION_HIDDEN_SIZE:-256}"
 WM_LEARNING_RATE="${WM_LEARNING_RATE:-0.001}"
 LAMBDA_SYM="${LAMBDA_SYM:-1.0}"
 LAMBDA_RESIDUAL="${LAMBDA_RESIDUAL:-0.25}"
@@ -162,6 +174,20 @@ case "$BASELINE_ID" in
     MODEL_BASED=1
     ;;
 esac
+if [[ "$BASELINE_ID" == B11_* && "${WORLD_MODEL_ARCH:-vae_mdn_rnn}" == "vae_mdn_rnn" ]]; then
+  WORLD_MODEL_ARCH="structured"
+fi
+if [[ "$BASELINE_ID" == B11_* ]]; then
+  if [[ -z "$WM_REWARD_LOSS_WEIGHT_USER_SET" ]]; then
+    WM_REWARD_LOSS_WEIGHT="10.0"
+  fi
+  if [[ -z "$WM_DONE_LOSS_WEIGHT_USER_SET" ]]; then
+    WM_DONE_LOSS_WEIGHT="5.0"
+  fi
+  if [[ -z "$WM_EVENT_LOSS_WEIGHT_USER_SET" ]]; then
+    WM_EVENT_LOSS_WEIGHT="5.0"
+  fi
+fi
 
 if [[ "$MODEL_BASED" == "1" && "$REUSE_WM_HPO_CONFIG" == "1" ]]; then
   HPO_EXPORT_CMD=("$PYTHON_BIN" wm_hpo_registry.py export-env --baseline-id "$BASELINE_ID" --root "$HPO_RESULTS_DIR")
@@ -230,6 +256,7 @@ WM_CMD=(
   --wm-batch-size "$WM_BATCH_SIZE"
   --wm-num-workers "$WM_NUM_WORKERS"
   --seq-len "$WM_SEQ_LEN"
+  --world-model-arch "$WORLD_MODEL_ARCH"
   --vae-z-size "$VAE_Z_SIZE"
   --vae-hidden-size "$VAE_HIDDEN_SIZE"
   --vae-kl-tolerance "$VAE_KL_TOLERANCE"
@@ -239,6 +266,14 @@ WM_CMD=(
   --mean-mse-weight "$WM_MEAN_MSE_WEIGHT"
   --reward-loss-weight "$WM_REWARD_LOSS_WEIGHT"
   --done-loss-weight "$WM_DONE_LOSS_WEIGHT"
+  --event-loss-weight "$WM_EVENT_LOSS_WEIGHT"
+  --grid-embed-dim "$WM_GRID_EMBED_DIM"
+  --cnn-channels "$WM_CNN_CHANNELS"
+  --self-hidden-size "$WM_SELF_HIDDEN_SIZE"
+  --agent-hidden-size "$WM_AGENT_HIDDEN_SIZE"
+  --attention-heads "$WM_ATTENTION_HEADS"
+  --num-attention-layers "$WM_NUM_ATTENTION_LAYERS"
+  --transition-hidden-size "$WM_TRANSITION_HIDDEN_SIZE"
   --lambda-sym "$LAMBDA_SYM"
   --lambda-residual "$LAMBDA_RESIDUAL"
   --wm-hpo-family "${WM_HPO_FAMILY:-}"

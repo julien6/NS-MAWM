@@ -30,7 +30,12 @@ from ns_symbolic import (
 )
 from pstr_profiles import active_rules_for_baseline, profile_name_from_baseline, rules_to_csv
 from wandb_schema import GENERAL, MARL_EVALUATION, MARL_TRAINING, PSTR_RULES, WORLD_MODEL_EVALUATION, WORLD_MODEL_TRAINING
-from torch_world_model import TorchGridcraftRNN, TorchGridcraftVAE
+from torch_world_model import (
+    STRUCTURED_EVENT_NAMES,
+    StructuredGridcraftWorldModel,
+    TorchGridcraftRNN,
+    TorchGridcraftVAE,
+)
 from vgridcraft import VGridcraftConfig, VectorizedGridcraftEnv
 from vgridcraft.dataset import RolloutDataset, SequenceDataset, collect_or_load_dataset, observation_shape, observation_vectors, has_compact_observations, vector_from_tabular
 
@@ -38,6 +43,7 @@ from vgridcraft.dataset import RolloutDataset, SequenceDataset, collect_or_load_
 BASELINES = {
     "B00_model-free-control": {"id": "B00", "variant": "none", "coverage": 0.0, "model_based": False},
     "B10_neural_k0.0": {"id": "B10", "variant": "neural", "coverage": 0.0, "model_based": True},
+    "B11_structured_neural_k0.0": {"id": "B11", "variant": "structured_neural", "coverage": 0.0, "model_based": True},
     "B25_residual_k0.3": {"id": "B25", "variant": "residual", "coverage": 0.3, "model_based": True},
     "B25_projection_k0.3": {"id": "B25", "variant": "projection", "coverage": 0.3, "model_based": True},
     "B25_regularization_k0.3": {"id": "B25", "variant": "regularization", "coverage": 0.3, "model_based": True},
@@ -81,6 +87,7 @@ def main() -> None:
     parser.add_argument("--max-steps", type=int, default=200)
     parser.add_argument("--wm-batch-size", type=int, default=512)
     parser.add_argument("--wm-num-workers", type=int, default=2)
+    parser.add_argument("--world-model-arch", choices=("vae_mdn_rnn", "structured"), default="vae_mdn_rnn")
     parser.add_argument("--vae-steps", type=int, default=5000)
     parser.add_argument("--rnn-steps", type=int, default=5000)
     parser.add_argument("--seq-len", type=int, default=32)
@@ -92,6 +99,14 @@ def main() -> None:
     parser.add_argument("--mean-mse-weight", type=float, default=10.0)
     parser.add_argument("--reward-loss-weight", type=float, default=1.0)
     parser.add_argument("--done-loss-weight", type=float, default=1.0)
+    parser.add_argument("--event-loss-weight", type=float, default=5.0)
+    parser.add_argument("--grid-embed-dim", type=int, default=32)
+    parser.add_argument("--cnn-channels", type=int, default=128)
+    parser.add_argument("--self-hidden-size", type=int, default=128)
+    parser.add_argument("--agent-hidden-size", type=int, default=256)
+    parser.add_argument("--attention-heads", type=int, default=4)
+    parser.add_argument("--num-attention-layers", type=int, default=1)
+    parser.add_argument("--transition-hidden-size", type=int, default=256)
     parser.add_argument("--wm-hpo-family", default=None)
     parser.add_argument("--wm-hpo-config-reused", type=float, default=0.0)
     parser.add_argument("--wm-hpo-score", type=float, default=None)
@@ -199,7 +214,7 @@ def main() -> None:
         print(f"=== World Model Training/Evaluation ({args.baseline_id}) ===", flush=True)
         print(
             "World Model config: "
-            f"episodes={args.episodes}, max_steps={args.max_steps}, agents={args.num_agents}, "
+            f"arch={args.world_model_arch}, episodes={args.episodes}, max_steps={args.max_steps}, agents={args.num_agents}, "
             f"vae_steps={args.vae_steps}, rnn_steps={args.rnn_steps}, "
             f"batch={args.wm_batch_size}, eval_every={args.eval_every}, video_every={args.video_every}",
             flush=True,
@@ -244,23 +259,37 @@ def main() -> None:
             step=1,
             namespace="wm_training",
         )
-        print("=== World Model phase 1/5: VAE training/cache ===", flush=True)
-        vae, vae_cache_dir, vae_cache_key = load_or_train_vae(data, args, dataset_file, device, checkpoint_dir, logger)
-        print("=== World Model phase 2/5: latent encoding/cache ===", flush=True)
-        z = load_or_encode_latents(vae, data, args, vae_cache_dir, vae_cache_key, device, logger)
-        print("=== World Model phase 3/5: MDN-RNN training and periodic evaluation ===", flush=True)
-        rnn = train_rnn(z, data, args, device, checkpoint_dir, eval_dir, logger, vae, baseline, step_offset=args.vae_steps)
-        print("=== World Model phase 4/5: final evaluation ===", flush=True)
-        metrics, pstr_rows = evaluate_world_model(vae, rnn, data, device, horizons=args.horizons, baseline=baseline, args=args)
-        metrics["dataset_path"] = str(dataset_file)
-        (eval_dir / "world_model_summary.json").write_text(json.dumps(metrics, indent=2))
-        write_pstr_rvr_table(eval_dir / "pstr_rvr_table_final.json", pstr_rows)
-        final_eval_step = args.vae_steps + args.rnn_steps + 1
-        logger.log(metrics, step=final_eval_step, namespace="wm_evaluation")
-        log_pstr_rvr_table(logger, pstr_rows, step=final_eval_step)
-        print("=== World Model phase 5/5: final video ===", flush=True)
-        log_world_model_video(logger, args, config, vae, rnn, device, step=final_eval_step)
-        logger.log_summary(metrics, namespace="wm_evaluation")
+        if args.world_model_arch == "structured":
+            print("=== World Model phase 1/3: structured supervised training ===", flush=True)
+            structured = train_structured_world_model(data, args, device, checkpoint_dir, eval_dir, logger, baseline)
+            print("=== World Model phase 2/3: final structured evaluation ===", flush=True)
+            metrics, pstr_rows = evaluate_structured_world_model(structured, data, device, horizons=args.horizons, baseline=baseline, args=args)
+            metrics["dataset_path"] = str(dataset_file)
+            (eval_dir / "world_model_summary.json").write_text(json.dumps(metrics, indent=2))
+            write_pstr_rvr_table(eval_dir / "pstr_rvr_table_final.json", pstr_rows)
+            final_eval_step = args.rnn_steps + 1
+            logger.log(metrics, step=final_eval_step, namespace="wm_evaluation")
+            log_pstr_rvr_table(logger, pstr_rows, step=final_eval_step)
+            print("=== World Model phase 3/3: structured video skipped in v1 ===", flush=True)
+            logger.log_summary(metrics, namespace="wm_evaluation")
+        else:
+            print("=== World Model phase 1/5: VAE training/cache ===", flush=True)
+            vae, vae_cache_dir, vae_cache_key = load_or_train_vae(data, args, dataset_file, device, checkpoint_dir, logger)
+            print("=== World Model phase 2/5: latent encoding/cache ===", flush=True)
+            z = load_or_encode_latents(vae, data, args, vae_cache_dir, vae_cache_key, device, logger)
+            print("=== World Model phase 3/5: MDN-RNN training and periodic evaluation ===", flush=True)
+            rnn = train_rnn(z, data, args, device, checkpoint_dir, eval_dir, logger, vae, baseline, step_offset=args.vae_steps)
+            print("=== World Model phase 4/5: final evaluation ===", flush=True)
+            metrics, pstr_rows = evaluate_world_model(vae, rnn, data, device, horizons=args.horizons, baseline=baseline, args=args)
+            metrics["dataset_path"] = str(dataset_file)
+            (eval_dir / "world_model_summary.json").write_text(json.dumps(metrics, indent=2))
+            write_pstr_rvr_table(eval_dir / "pstr_rvr_table_final.json", pstr_rows)
+            final_eval_step = args.vae_steps + args.rnn_steps + 1
+            logger.log(metrics, step=final_eval_step, namespace="wm_evaluation")
+            log_pstr_rvr_table(logger, pstr_rows, step=final_eval_step)
+            print("=== World Model phase 5/5: final video ===", flush=True)
+            log_world_model_video(logger, args, config, vae, rnn, device, step=final_eval_step)
+            logger.log_summary(metrics, namespace="wm_evaluation")
 
     if args.phase in ("policy", "all") and not baseline["model_based"]:
         print("=== MARL Evaluation: lightweight policy smoke ===", flush=True)
@@ -287,7 +316,30 @@ def shared_model_root(args) -> Path:
 
 
 def world_model_config_from_args(args) -> dict:
+    if str(getattr(args, "world_model_arch", "vae_mdn_rnn")) == "structured":
+        return {
+            "world_model_arch": "structured",
+            "structured": {
+                "obs_size": 550,
+                "action_size": 15,
+                "grid_embed_dim": int(args.grid_embed_dim),
+                "cnn_channels": int(args.cnn_channels),
+                "self_hidden_size": int(args.self_hidden_size),
+                "agent_hidden_size": int(args.agent_hidden_size),
+                "attention_heads": int(args.attention_heads),
+                "num_attention_layers": int(args.num_attention_layers),
+                "transition_hidden_size": int(args.transition_hidden_size),
+                "event_dim": len(STRUCTURED_EVENT_NAMES),
+                "event_names": list(STRUCTURED_EVENT_NAMES),
+            },
+            "loss": {
+                "reward_loss_weight": float(args.reward_loss_weight),
+                "done_loss_weight": float(args.done_loss_weight),
+                "event_loss_weight": float(args.event_loss_weight),
+            },
+        }
     return {
+        "world_model_arch": "vae_mdn_rnn",
         "vae": {
             "obs_size": 550,
             "z_size": int(args.vae_z_size),
@@ -321,6 +373,18 @@ def make_rnn_from_args(args) -> TorchGridcraftRNN:
         z_size=int(args.vae_z_size),
         rnn_size=int(args.rnn_size),
         num_mixture=int(args.rnn_num_mixture),
+    )
+
+
+def make_structured_from_args(args) -> StructuredGridcraftWorldModel:
+    return StructuredGridcraftWorldModel(
+        grid_embed_dim=int(args.grid_embed_dim),
+        cnn_channels=int(args.cnn_channels),
+        self_hidden_size=int(args.self_hidden_size),
+        agent_hidden_size=int(args.agent_hidden_size),
+        attention_heads=int(args.attention_heads),
+        num_attention_layers=int(args.num_attention_layers),
+        transition_hidden_size=int(args.transition_hidden_size),
     )
 
 
@@ -386,6 +450,66 @@ def write_cache_metadata(path: Path, payload: dict, key: str, cache_dir: Path) -
             indent=2,
             sort_keys=True,
         )
+
+
+class StructuredSequenceDataset(torch.utils.data.Dataset):
+    def __init__(self, obs: torch.Tensor, actions: torch.Tensor, rewards: torch.Tensor, dones: torch.Tensor, valid: torch.Tensor | None, seq_len: int):
+        self.obs = obs.float()
+        self.actions = actions.long()
+        self.rewards = rewards.float()
+        self.dones = dones.bool()
+        self.valid = valid.bool() if valid is not None else None
+        self.seq_len = int(seq_len)
+        self.episodes, self.steps, self.agents = self.obs.shape[:3]
+        if self.steps - 1 < self.seq_len:
+            raise ValueError("sequence length is longer than collected episodes")
+        self.indices = self._valid_indices()
+
+    def _valid_indices(self):
+        result = []
+        max_start = self.steps - self.seq_len
+        for episode in range(self.episodes):
+            for start in range(max_start):
+                if self.valid is not None and not bool(self.valid[episode, start : start + self.seq_len].all()):
+                    continue
+                result.append((episode, start))
+        return result
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, index):
+        episode, start = self.indices[index]
+        end = start + self.seq_len
+        return (
+            self.obs[episode, start : end + 1],
+            self.actions[episode, start:end],
+            self.rewards[episode, start:end],
+            self.dones[episode, start:end],
+            structured_event_labels(self.actions[episode, start:end], self.rewards[episode, start:end], self.dones[episode, start:end]),
+        )
+
+
+def structured_event_labels(actions: torch.Tensor, rewards: torch.Tensor, dones: torch.Tensor) -> torch.Tensor:
+    if dones.ndim == actions.ndim - 1:
+        dones = dones.unsqueeze(-1).expand_as(actions)
+    labels = torch.zeros((*actions.shape, len(STRUCTURED_EVENT_NAMES)), dtype=torch.float32)
+    positive_reward = rewards.float() > 0.0
+    labels[..., 0] = ((actions >= 1) & (actions <= 4) & positive_reward).float()
+    labels[..., 1] = ((actions == 5) & positive_reward).float()
+    labels[..., 2] = ((actions == 6) & positive_reward).float()
+    labels[..., 3] = ((actions == 8) & positive_reward).float()
+    labels[..., 4] = ((actions == 9) & positive_reward).float()
+    labels[..., 5] = ((actions == 10) & positive_reward).float()
+    labels[..., 6] = (((actions == 11) | (actions == 13)) & positive_reward).float()
+    labels[..., 7] = (((actions == 12) | (actions == 14)) & positive_reward).float()
+    labels[..., 8] = (((actions >= 11) & (actions <= 14)) & positive_reward).float()
+    labels[..., 9] = ((actions == 7) & positive_reward).float()
+    labels[..., 10] = ((actions == 7) & (rewards.float() > 10.0)).float()
+    labels[..., 11] = dones.float()
+    for level in range(8):
+        labels[..., 12 + level] = (rewards.float() >= float(2 ** level)).float()
+    return labels
 
 
 def load_or_train_vae(data, args, dataset_file: Path, device, checkpoint_dir: Path, logger):
@@ -790,6 +914,95 @@ def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logge
     return model
 
 
+def train_structured_world_model(data, args, device, checkpoint_dir: Path, eval_dir: Path, logger, baseline):
+    model = make_structured_from_args(args).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+    obs = all_agent_obs(observation_vectors(data)).float()
+    actions = normalize_action_tensor(data["action"]).long()
+    rewards = data["reward"].float()
+    dones = data["done"].bool()
+    valid = data.get("transition_valid")
+    dataset = StructuredSequenceDataset(
+        obs=obs,
+        actions=actions,
+        rewards=rewards,
+        dones=dones,
+        valid=valid,
+        seq_len=min(args.seq_len, obs.shape[1] - 1),
+    )
+    if len(dataset) <= 0:
+        raise RuntimeError("no valid structured world-model training sequences were available")
+    effective_batch_size = min(args.wm_batch_size, len(dataset))
+    loader = DataLoader(
+        dataset,
+        batch_size=effective_batch_size,
+        shuffle=True,
+        num_workers=args.wm_num_workers,
+        pin_memory=device.type == "cuda",
+        drop_last=False,
+    )
+    iterator = iter(loader)
+    start = time.time()
+    progress = tqdm(
+        range(1, args.rnn_steps + 1),
+        total=args.rnn_steps,
+        desc="Structured Gridcraft WM",
+        unit="step",
+        dynamic_ncols=True,
+    )
+    for step in progress:
+        try:
+            obs_seq, action, reward, done, events = next(iterator)
+        except StopIteration:
+            iterator = iter(loader)
+            obs_seq, action, reward, done, events = next(iterator)
+        obs_seq = obs_seq.to(device, non_blocking=True)
+        action = action.to(device, non_blocking=True)
+        reward = reward.to(device, non_blocking=True)
+        done = done.to(device, non_blocking=True)
+        events = events.to(device, non_blocking=True)
+        optimizer.zero_grad(set_to_none=True)
+        loss, metrics = model.loss(
+            obs_seq,
+            action,
+            reward,
+            done,
+            events=events,
+            reward_loss_weight=args.reward_loss_weight,
+            done_loss_weight=args.done_loss_weight,
+            event_loss_weight=args.event_loss_weight,
+        )
+        loss.backward()
+        optimizer.step()
+        if step == 1 or step % 10 == 0:
+            progress.set_postfix({
+                "loss": f"{float(loss.detach().cpu()):.4f}",
+                "seq/s": f"{step * effective_batch_size / max(time.time() - start, 1e-6):.0f}",
+            })
+        if step == 1 or step % 100 == 0:
+            metrics["structured_sequences_per_second"] = step * effective_batch_size / max(time.time() - start, 1e-6)
+            logger.log(metrics, step=step, namespace="wm_training")
+        if args.eval_every and step % args.eval_every == 0:
+            checkpoint = checkpoint_dir / f"structured_wm_step_{step}.pt"
+            torch.save(model.state_dict(), checkpoint)
+            progress.write(f"[structured wm] evaluating checkpoint step={step}")
+            metrics, pstr_rows = evaluate_structured_world_model(model, data, device, horizons=args.horizons, baseline=baseline, args=args)
+            metrics["checkpoint_step"] = step
+            (eval_dir / f"world_model_step_{step}.json").write_text(json.dumps(metrics, indent=2))
+            write_pstr_rvr_table(eval_dir / f"pstr_rvr_table_step_{step}.json", pstr_rows)
+            logger.log(metrics, step=step, namespace="wm_evaluation")
+            log_pstr_rvr_table(logger, pstr_rows, step=step)
+            progress.write(
+                "[structured wm] eval "
+                f"step={step} grid_mismatch={metrics.get('grid_mismatch', float('nan')):.4f} "
+                f"reward_mae={metrics.get('reward_mae', float('nan')):.4f}"
+            )
+    torch.save(model.state_dict(), checkpoint_dir / "structured_wm.pt")
+    save_world_model_config(checkpoint_dir, args)
+    print(f"[structured wm] saved final checkpoint to {checkpoint_dir / 'structured_wm.pt'}", flush=True)
+    return model
+
+
 @torch.no_grad()
 def evaluate_world_model(vae, rnn, data, device, horizons, baseline=None, args=None):
     episodes, _, _ = observation_shape(data)
@@ -853,6 +1066,82 @@ def evaluate_world_model(vae, rnn, data, device, horizons, baseline=None, args=N
     return result, pstr_rows
 
 
+@torch.no_grad()
+def evaluate_structured_world_model(model, data, device, horizons, baseline=None, args=None):
+    episodes, _, agents = observation_shape(data)
+    raw_obs = all_agent_obs(observation_vectors(data, episode_limit=min(128, episodes))).to(device)
+    raw_actions = normalize_action_tensor(data["action"][: raw_obs.shape[0]]).to(device)
+    rewards = data["reward"][: raw_obs.shape[0]].to(device).float()
+    dones = data["done"][: raw_obs.shape[0]].to(device).bool()
+    result = {}
+    first_out, _ = model.step(raw_obs[:, 0], raw_actions[:, 0], None)
+    decoded_one = model.decode_to_obs_vector(first_out)
+    target_one = raw_obs[:, 1]
+    terrain_t, block_t, entity_t, self_t = model_targets_for_obs(target_one)
+    result["grid_mismatch"] = float(structured_grid_mismatch(first_out, target_one).detach().cpu())
+    result["self_mse"] = float(torch.mean((first_out["self_pred"] - self_t.float()) ** 2).detach().cpu())
+    result["structured_grid_mismatch"] = result["grid_mismatch"]
+    result["structured_self_mse"] = result["self_mse"]
+    result["structured_terrain_acc"] = float((first_out["terrain_logits"].argmax(-1) == terrain_t).float().mean().detach().cpu())
+    result["structured_block_acc"] = float((first_out["block_logits"].argmax(-1) == block_t).float().mean().detach().cpu())
+    result["structured_entity_acc"] = float((first_out["entity_logits"].argmax(-1) == entity_t).float().mean().detach().cpu())
+    reward_error = first_out["reward_pred"].squeeze(-1) - rewards[:, 0]
+    done_target = dones[:, 0, None].expand(-1, agents)
+    done_prob = torch.sigmoid(first_out["done_logit"].squeeze(-1))
+    done_pred = done_prob > 0.5
+    result["reward_mse"] = float(torch.mean(reward_error ** 2).detach().cpu())
+    result["reward_mae"] = float(torch.mean(torch.abs(reward_error)).detach().cpu())
+    result["reward_target_abs_mean"] = float(torch.mean(torch.abs(rewards[:, 0])).detach().cpu())
+    result["reward_mae_normalized"] = result["reward_mae"] / max(result["reward_target_abs_mean"], 1.0)
+    result["done_bce"] = float(torch.nn.functional.binary_cross_entropy_with_logits(first_out["done_logit"].squeeze(-1), done_target.float()).detach().cpu())
+    result["done_accuracy"] = float((done_pred == done_target).float().mean().detach().cpu())
+    result["structured_reward_mae"] = result["reward_mae"]
+    result["structured_reward_mse"] = result["reward_mse"]
+    result["structured_done_bce"] = result["done_bce"]
+    result["structured_done_accuracy"] = result["done_accuracy"]
+    events = structured_event_labels(raw_actions[:, 0], rewards[:, 0], done_target)
+    event_pred = torch.sigmoid(first_out["event_logits"]) > 0.5
+    for idx, name in enumerate(STRUCTURED_EVENT_NAMES):
+        target = events[..., idx].bool()
+        pred = event_pred[..., idx]
+        tp = (pred & target).float().sum()
+        fp = (pred & ~target).float().sum()
+        fn = (~pred & target).float().sum()
+        f1 = (2 * tp / (2 * tp + fp + fn).clamp_min(1.0)).detach().cpu()
+        result[f"structured_event_f1/{name}"] = float(f1)
+        if name.startswith("milestone_level_"):
+            result[f"structured_milestone_f1/{name.rsplit('_', 1)[-1]}"] = float(f1)
+    for horizon in horizons:
+        h = min(int(horizon), raw_obs.shape[1] - 1)
+        current_obs = raw_obs[:, 0]
+        hidden = None
+        out = None
+        for t in range(h):
+            out, hidden = model.step(current_obs, raw_actions[:, t], hidden)
+            current_obs = model.decode_to_obs_vector(out)
+        result[f"compounding_grid_mismatch_h{h}"] = float(grid_mismatch(current_obs.reshape(-1, current_obs.shape[-1]), raw_obs[:, h].reshape(-1, raw_obs.shape[-1])).detach().cpu())
+        result[f"structured_compounding_grid_mismatch_h{h}"] = result[f"compounding_grid_mismatch_h{h}"]
+    result["structured_real_imagined_reward_gap_proxy"] = float((rewards[:, 0].mean() - first_out["reward_pred"].squeeze(-1).mean()).detach().cpu())
+    result["wm_hpo_score"] = float(world_model_hpo_score(result, {"variant": "structured"}))
+    return result, pstr_rvr_rows({}, {}, {})
+
+
+def model_targets_for_obs(obs):
+    from torch_world_model.models import observation_labels
+
+    return observation_labels(obs)
+
+
+def structured_grid_mismatch(outputs, target):
+    terrain_t, block_t, entity_t, _ = model_targets_for_obs(target)
+    mismatches = [
+        (outputs["terrain_logits"].argmax(-1) != terrain_t).float().mean(),
+        (outputs["block_logits"].argmax(-1) != block_t).float().mean(),
+        (outputs["entity_logits"].argmax(-1) != entity_t).float().mean(),
+    ]
+    return torch.stack(mismatches).mean()
+
+
 def world_model_hpo_score(metrics: dict, baseline: dict) -> float:
     score = (
         float(metrics.get("grid_mismatch", 0.0))
@@ -861,7 +1150,16 @@ def world_model_hpo_score(metrics: dict, baseline: dict) -> float:
         + float(metrics.get("done_bce", 0.0))
     )
     variant = str(baseline.get("variant", "neural"))
-    if variant == "regularization":
+    if variant == "structured":
+        score += 0.5 * float(metrics.get("structured_compounding_grid_mismatch_h10", metrics.get("compounding_grid_mismatch_h10", 0.0)))
+        event_errors = [
+            1.0 - float(value)
+            for key, value in metrics.items()
+            if str(key).startswith("structured_event_f1/")
+        ]
+        if event_errors:
+            score += float(np.mean(event_errors))
+    elif variant == "regularization":
         score += float(metrics.get("rvr_pre_global", metrics.get("rvr_global", 0.0)))
     elif variant == "residual":
         score += float(metrics.get("rvr_post_global", metrics.get("rvr_pre_global", metrics.get("rvr_global", 0.0))))

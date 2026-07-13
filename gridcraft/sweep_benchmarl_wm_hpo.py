@@ -36,7 +36,7 @@ def main() -> None:
     parser.add_argument("--baseline-id", default="B10_neural_k0.0")
     parser.add_argument(
         "--hpo-family",
-        choices=("neural_k0.0", "regularization_k0.3", "regularization_k0.6", "residual_k0.3", "residual_k0.6"),
+        choices=("neural_k0.0", "structured_neural_k0.0", "regularization_k0.3", "regularization_k0.6", "residual_k0.3", "residual_k0.6"),
         default="neural_k0.0",
     )
     parser.add_argument("--num-agents", type=int, default=3)
@@ -97,6 +97,7 @@ def main() -> None:
         "--wm-batch-size", str(cfg_value("wm_batch_size", 2048)),
         "--wm-num-workers", str(cfg_value("wm_num_workers", 4)),
         "--seq-len", str(cfg_value("seq_len", 32)),
+        "--world-model-arch", str(cfg_value("world_model_arch", "structured" if hpo_family == "structured_neural_k0.0" else "vae_mdn_rnn")),
         "--learning-rate", str(cfg_value("learning_rate", 1e-3)),
         "--vae-z-size", str(cfg_value("vae_z_size", 64)),
         "--vae-hidden-size", str(cfg_value("vae_hidden_size", 512)),
@@ -106,6 +107,14 @@ def main() -> None:
         "--mean-mse-weight", str(cfg_value("mean_mse_weight", 10.0)),
         "--reward-loss-weight", str(cfg_value("reward_loss_weight", 1.0)),
         "--done-loss-weight", str(cfg_value("done_loss_weight", 1.0)),
+        "--event-loss-weight", str(cfg_value("event_loss_weight", 5.0)),
+        "--grid-embed-dim", str(cfg_value("grid_embed_dim", 32)),
+        "--cnn-channels", str(cfg_value("cnn_channels", 128)),
+        "--self-hidden-size", str(cfg_value("self_hidden_size", 128)),
+        "--agent-hidden-size", str(cfg_value("agent_hidden_size", 256)),
+        "--attention-heads", str(cfg_value("attention_heads", 4)),
+        "--num-attention-layers", str(cfg_value("num_attention_layers", 1)),
+        "--transition-hidden-size", str(cfg_value("transition_hidden_size", 256)),
         "--lambda-sym", str(cfg_value("lambda_sym", 1.0)),
         "--lambda-residual", str(cfg_value("lambda_residual", 0.25)),
         "--dataset-dir", str(args.dataset_dir),

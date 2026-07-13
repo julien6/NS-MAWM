@@ -35,7 +35,7 @@ HPO_TOP_K="${HPO_TOP_K:-3}"
 HPO_SEEDS="${HPO_SEEDS:-${HPO_SEED:-${SEED:-1}}}"
 HPO_BENCHMARK_FIRST="${HPO_BENCHMARK_FIRST:-0}"
 FORCE_WM_HPO="${FORCE_WM_HPO:-0}"
-HPO_FAMILIES="${HPO_FAMILIES:-neural_k0.0 regularization_k0.3 regularization_k0.6 residual_k0.3 residual_k0.6}"
+HPO_FAMILIES="${HPO_FAMILIES:-neural_k0.0 structured_neural_k0.0 regularization_k0.3 regularization_k0.6 residual_k0.3 residual_k0.6}"
 if [[ "$HPO_STAGE" == "auto" ]]; then
   HPO_STAGE="final"
   for family in $HPO_FAMILIES; do
@@ -99,6 +99,7 @@ export HPO_CURRENT_STAGE="$HPO_STAGE"
 config_for_family() {
   case "$1" in
     neural_k0.0) echo "sweeps/world_model_neural_hpo.yaml" ;;
+    structured_neural_k0.0) echo "sweeps/world_model_structured_neural_hpo.yaml" ;;
     regularization_k0.3) echo "sweeps/world_model_regularization_k03_hpo.yaml" ;;
     regularization_k0.6) echo "sweeps/world_model_regularization_k06_hpo.yaml" ;;
     residual_k0.3) echo "sweeps/world_model_residual_k03_hpo.yaml" ;;

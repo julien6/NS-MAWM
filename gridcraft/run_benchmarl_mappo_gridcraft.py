@@ -196,7 +196,9 @@ def main() -> None:
         if args.wm_run_dir:
             ns_variant, ns_coverage = infer_ns_settings(args.baseline_id)
             enabled_pstr_rules = active_rules_for_baseline(args.baseline_id)
-            algorithm_config.world_model.external_model_type = "gridcraft_vae_mdn_rnn"
+            algorithm_config.world_model.external_model_type = (
+                "gridcraft_structured" if "structured" in str(args.baseline_id) or str(args.baseline_id).startswith("B11") else "gridcraft_vae_mdn_rnn"
+            )
             algorithm_config.world_model.external_checkpoint_dir = str(Path(args.wm_run_dir) / "checkpoints")
             algorithm_config.world_model.external_ns_variant = ns_variant
             algorithm_config.world_model.external_ns_coverage = ns_coverage
@@ -225,7 +227,9 @@ def main() -> None:
             ns_variant, ns_coverage = infer_ns_settings(args.baseline_id)
             enabled_pstr_rules = active_rules_for_baseline(args.baseline_id)
             checkpoint_dir = Path(args.wm_run_dir) / "checkpoints"
-            algorithm_config.world_model.external_model_type = "gridcraft_vae_mdn_rnn"
+            algorithm_config.world_model.external_model_type = (
+                "gridcraft_structured" if "structured" in str(args.baseline_id) or str(args.baseline_id).startswith("B11") else "gridcraft_vae_mdn_rnn"
+            )
             algorithm_config.world_model.external_checkpoint_dir = str(checkpoint_dir)
             algorithm_config.world_model.external_ns_variant = ns_variant
             algorithm_config.world_model.external_ns_coverage = ns_coverage
@@ -233,7 +237,11 @@ def main() -> None:
             algorithm_config.world_model.external_enabled_pstr_rules = rules_to_csv(enabled_pstr_rules)
             algorithm_config.world_model.train_steps = 0
             algorithm_config.world_model.predict_done = True
-            if not (checkpoint_dir / "vae.pt").exists() or not (checkpoint_dir / "rnn.pt").exists():
+            if algorithm_config.world_model.external_model_type == "gridcraft_structured":
+                missing_external = not (checkpoint_dir / "structured_wm.pt").exists()
+            else:
+                missing_external = not (checkpoint_dir / "vae.pt").exists() or not (checkpoint_dir / "rnn.pt").exists()
+            if missing_external:
                 raise FileNotFoundError(
                     "MAMBPO model-based downstream requires trained Gridcraft "
                     f"world-model checkpoints at {checkpoint_dir}"

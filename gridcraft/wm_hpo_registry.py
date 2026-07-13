@@ -18,6 +18,7 @@ except ImportError:
 
 HPO_FAMILIES = (
     "neural_k0.0",
+    "structured_neural_k0.0",
     "regularization_k0.3",
     "regularization_k0.6",
     "residual_k0.3",
@@ -26,6 +27,7 @@ HPO_FAMILIES = (
 
 HPO_BASELINE_IDS = {
     "neural_k0.0": "B10_neural_k0.0",
+    "structured_neural_k0.0": "B11_structured_neural_k0.0",
     "regularization_k0.3": "B25_regularization_k0.3",
     "regularization_k0.6": "B26_regularization_k0.6",
     "residual_k0.3": "B25_residual_k0.3",
@@ -34,6 +36,7 @@ HPO_BASELINE_IDS = {
 
 HPO_PSTR_PROFILES = {
     "neural_k0.0": "neural_k0.0",
+    "structured_neural_k0.0": "neural_k0.0",
     "regularization_k0.3": "ns_k0.3",
     "regularization_k0.6": "ns_k0.6",
     "residual_k0.3": "ns_k0.3",
@@ -41,6 +44,7 @@ HPO_PSTR_PROFILES = {
 }
 
 HPO_ENV_KEYS = {
+    "world_model_arch": "WORLD_MODEL_ARCH",
     "vae_z_size": "VAE_Z_SIZE",
     "vae_hidden_size": "VAE_HIDDEN_SIZE",
     "vae_kl_tolerance": "VAE_KL_TOLERANCE",
@@ -52,6 +56,14 @@ HPO_ENV_KEYS = {
     "mean_mse_weight": "WM_MEAN_MSE_WEIGHT",
     "reward_loss_weight": "WM_REWARD_LOSS_WEIGHT",
     "done_loss_weight": "WM_DONE_LOSS_WEIGHT",
+    "event_loss_weight": "WM_EVENT_LOSS_WEIGHT",
+    "grid_embed_dim": "WM_GRID_EMBED_DIM",
+    "cnn_channels": "WM_CNN_CHANNELS",
+    "self_hidden_size": "WM_SELF_HIDDEN_SIZE",
+    "agent_hidden_size": "WM_AGENT_HIDDEN_SIZE",
+    "attention_heads": "WM_ATTENTION_HEADS",
+    "num_attention_layers": "WM_NUM_ATTENTION_LAYERS",
+    "transition_hidden_size": "WM_TRANSITION_HIDDEN_SIZE",
     "lambda_sym": "LAMBDA_SYM",
     "lambda_residual": "LAMBDA_RESIDUAL",
 }
@@ -66,6 +78,8 @@ def hpo_family_for_baseline(baseline_id: str) -> str | None:
         return None
     if "projection" in text:
         return "neural_k0.0"
+    if "structured" in text or text.startswith("B11"):
+        return "structured_neural_k0.0"
     if "regularization" in text:
         return "regularization_k0.6" if "_k0.6" in text or "B26" in text else "regularization_k0.3"
     if "residual" in text:
@@ -143,7 +157,12 @@ def validate_best_config(
         return False, f"num_agents={provenance.get('num_agents')!r} does not match {num_agents}"
     if require_checkpoints:
         checkpoint_dir = Path(str(best_config.get("checkpoint_dir", "")))
-        missing = [name for name in ("vae.pt", "rnn.pt") if not (checkpoint_dir / name).is_file()]
+        hyperparams = best_config.get("hyperparameters", best_config)
+        if hyperparams.get("world_model_arch") == "structured" or best_config.get("hpo_family") == "structured_neural_k0.0":
+            expected = ("structured_wm.pt",)
+        else:
+            expected = ("vae.pt", "rnn.pt")
+        missing = [name for name in expected if not (checkpoint_dir / name).is_file()]
         if missing:
             return False, f"missing checkpoint files in {checkpoint_dir}: {', '.join(missing)}"
     stored_dataset_checksum = best_config.get("dataset_checksum")

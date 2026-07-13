@@ -16,6 +16,29 @@ ENTITY_CLASSES = 4
 SELF_FEATURES = 11
 OBS_SIZE = GRID_CELLS * (TERRAIN_CLASSES + BLOCK_CLASSES + ENTITY_CLASSES) + SELF_FEATURES
 ACTION_SIZE = 15
+STRUCTURED_EVENT_NAMES = (
+    "move_success",
+    "harvest_success",
+    "pickup_success",
+    "eat_success",
+    "craft_plank",
+    "craft_stick",
+    "craft_wood_tool",
+    "craft_stone_tool",
+    "tool_equipped",
+    "mob_hit",
+    "mob_kill_armed",
+    "agent_death",
+    "milestone_level_1",
+    "milestone_level_2",
+    "milestone_level_3",
+    "milestone_level_4",
+    "milestone_level_5",
+    "milestone_level_6",
+    "milestone_level_7",
+    "milestone_level_8",
+)
+STRUCTURED_EVENT_DIM = len(STRUCTURED_EVENT_NAMES)
 
 
 class TorchGridcraftVAE(nn.Module):
@@ -205,6 +228,244 @@ class TorchGridcraftRNN(nn.Module):
         }
 
 
+def split_observation_vector(obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    cursor = 0
+    terrain = obs[..., cursor : cursor + GRID_CELLS * TERRAIN_CLASSES].reshape(*obs.shape[:-1], GRID_CELLS, TERRAIN_CLASSES)
+    cursor += GRID_CELLS * TERRAIN_CLASSES
+    blocks = obs[..., cursor : cursor + GRID_CELLS * BLOCK_CLASSES].reshape(*obs.shape[:-1], GRID_CELLS, BLOCK_CLASSES)
+    cursor += GRID_CELLS * BLOCK_CLASSES
+    entities = obs[..., cursor : cursor + GRID_CELLS * ENTITY_CLASSES].reshape(*obs.shape[:-1], GRID_CELLS, ENTITY_CLASSES)
+    self_vec = obs[..., -SELF_FEATURES:]
+    return terrain, blocks, entities, self_vec
+
+
+def observation_labels(obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    terrain, blocks, entities, self_vec = split_observation_vector(obs)
+    return terrain.argmax(-1), blocks.argmax(-1), entities.argmax(-1), self_vec.float()
+
+
+def logits_to_observation_vector(
+    terrain_logits: torch.Tensor,
+    block_logits: torch.Tensor,
+    entity_logits: torch.Tensor,
+    self_pred: torch.Tensor,
+) -> torch.Tensor:
+    terrain = F.one_hot(terrain_logits.argmax(-1), TERRAIN_CLASSES).float().flatten(start_dim=-2)
+    blocks = F.one_hot(block_logits.argmax(-1), BLOCK_CLASSES).float().flatten(start_dim=-2)
+    entities = F.one_hot(entity_logits.argmax(-1), ENTITY_CLASSES).float().flatten(start_dim=-2)
+    self_vec = self_pred.float().clamp(0.0, 1.0)
+    return torch.cat([terrain, blocks, entities, self_vec], dim=-1)
+
+
+class StructuredGridcraftWorldModel(nn.Module):
+    """Factorized Gridcraft world model for discrete local observations."""
+
+    def __init__(
+        self,
+        grid_embed_dim: int = 32,
+        cnn_channels: int = 128,
+        self_hidden_size: int = 128,
+        agent_hidden_size: int = 256,
+        attention_heads: int = 4,
+        num_attention_layers: int = 1,
+        transition_hidden_size: int = 256,
+        action_size: int = ACTION_SIZE,
+        event_dim: int = STRUCTURED_EVENT_DIM,
+    ):
+        super().__init__()
+        self.grid_embed_dim = int(grid_embed_dim)
+        self.cnn_channels = int(cnn_channels)
+        self.self_hidden_size = int(self_hidden_size)
+        self.agent_hidden_size = int(agent_hidden_size)
+        self.attention_heads = int(attention_heads)
+        self.num_attention_layers = int(num_attention_layers)
+        self.transition_hidden_size = int(transition_hidden_size)
+        self.action_size = int(action_size)
+        self.event_dim = int(event_dim)
+
+        self.terrain_embedding = nn.Embedding(TERRAIN_CLASSES, self.grid_embed_dim)
+        self.block_embedding = nn.Embedding(BLOCK_CLASSES, self.grid_embed_dim)
+        self.entity_embedding = nn.Embedding(ENTITY_CLASSES, self.grid_embed_dim)
+        in_channels = self.grid_embed_dim * 3
+        self.grid_encoder = nn.Sequential(
+            nn.Conv2d(in_channels, self.cnn_channels, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(self.cnn_channels, self.cnn_channels, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Flatten(),
+            nn.Linear(self.cnn_channels * 7 * 7, self.agent_hidden_size),
+            nn.ReLU(),
+        )
+        self.self_encoder = nn.Sequential(
+            nn.Linear(SELF_FEATURES, self.self_hidden_size),
+            nn.ReLU(),
+            nn.Linear(self.self_hidden_size, self.self_hidden_size),
+            nn.ReLU(),
+        )
+        self.action_embedding = nn.Embedding(self.action_size, self.self_hidden_size)
+        fusion_dim = self.agent_hidden_size + self.self_hidden_size + self.self_hidden_size
+        self.agent_fusion = nn.Sequential(
+            nn.Linear(fusion_dim, self.agent_hidden_size),
+            nn.ReLU(),
+        )
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=self.agent_hidden_size,
+            nhead=max(1, self.attention_heads),
+            dim_feedforward=max(self.agent_hidden_size * 2, 64),
+            batch_first=True,
+            dropout=0.0,
+            activation="relu",
+        )
+        self.agent_attention = nn.TransformerEncoder(encoder_layer, num_layers=max(1, self.num_attention_layers))
+        self.transition = nn.GRUCell(self.agent_hidden_size, self.transition_hidden_size)
+        self.hidden_to_agent = nn.Sequential(
+            nn.Linear(self.transition_hidden_size, self.agent_hidden_size),
+            nn.ReLU(),
+        )
+        self.terrain_head = nn.Linear(self.agent_hidden_size, GRID_CELLS * TERRAIN_CLASSES)
+        self.block_head = nn.Linear(self.agent_hidden_size, GRID_CELLS * BLOCK_CLASSES)
+        self.entity_head = nn.Linear(self.agent_hidden_size, GRID_CELLS * ENTITY_CLASSES)
+        self.self_head = nn.Linear(self.agent_hidden_size, SELF_FEATURES)
+        self.reward_head = nn.Linear(self.agent_hidden_size, 1)
+        self.done_head = nn.Linear(self.agent_hidden_size, 1)
+        self.event_head = nn.Linear(self.agent_hidden_size, self.event_dim)
+
+    def initial_hidden(self, batch: int, agents: int, device=None) -> torch.Tensor:
+        return torch.zeros(batch, agents, self.transition_hidden_size, device=device)
+
+    def encode_step(self, obs: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+        terrain, blocks, entities, self_vec = observation_labels(obs)
+        batch, agents = obs.shape[:2]
+        terrain_emb = self.terrain_embedding(terrain.long())
+        block_emb = self.block_embedding(blocks.long())
+        entity_emb = self.entity_embedding(entities.long())
+        grid = torch.cat([terrain_emb, block_emb, entity_emb], dim=-1)
+        grid = grid.reshape(batch * agents, 7, 7, -1).permute(0, 3, 1, 2).contiguous()
+        grid_repr = self.grid_encoder(grid).reshape(batch, agents, -1)
+        self_repr = self.self_encoder(self_vec.float())
+        action_repr = self.action_embedding(action.long().clamp(0, self.action_size - 1))
+        fused = self.agent_fusion(torch.cat([grid_repr, self_repr, action_repr], dim=-1))
+        return self.agent_attention(fused)
+
+    def decode_hidden(self, hidden: torch.Tensor) -> dict[str, torch.Tensor]:
+        agent = self.hidden_to_agent(hidden)
+        return {
+            "terrain_logits": self.terrain_head(agent).reshape(*agent.shape[:-1], GRID_CELLS, TERRAIN_CLASSES),
+            "block_logits": self.block_head(agent).reshape(*agent.shape[:-1], GRID_CELLS, BLOCK_CLASSES),
+            "entity_logits": self.entity_head(agent).reshape(*agent.shape[:-1], GRID_CELLS, ENTITY_CLASSES),
+            "self_pred": torch.sigmoid(self.self_head(agent)),
+            "reward_pred": self.reward_head(agent),
+            "done_logit": self.done_head(agent),
+            "event_logits": self.event_head(agent),
+        }
+
+    def step(self, obs: torch.Tensor, action: torch.Tensor, hidden: torch.Tensor | None = None) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+        if obs.ndim != 3:
+            raise ValueError(f"expected obs [batch, agents, features], got {tuple(obs.shape)}")
+        batch, agents = obs.shape[:2]
+        if hidden is None:
+            hidden = self.initial_hidden(batch, agents, device=obs.device)
+        encoded = self.encode_step(obs.float(), action.long())
+        next_hidden = self.transition(
+            encoded.reshape(batch * agents, -1),
+            hidden.reshape(batch * agents, -1),
+        ).reshape(batch, agents, -1)
+        return self.decode_hidden(next_hidden), next_hidden
+
+    def decode_to_obs_vector(self, outputs: dict[str, torch.Tensor]) -> torch.Tensor:
+        return logits_to_observation_vector(
+            outputs["terrain_logits"],
+            outputs["block_logits"],
+            outputs["entity_logits"],
+            outputs["self_pred"],
+        )
+
+    def rollout_teacher_forced(self, obs_seq: torch.Tensor, actions: torch.Tensor) -> dict[str, torch.Tensor]:
+        preds: dict[str, list[torch.Tensor]] = {
+            "terrain_logits": [],
+            "block_logits": [],
+            "entity_logits": [],
+            "self_pred": [],
+            "reward_pred": [],
+            "done_logit": [],
+            "event_logits": [],
+        }
+        hidden = None
+        for t in range(actions.shape[1]):
+            out, hidden = self.step(obs_seq[:, t], actions[:, t], hidden)
+            for key, value in out.items():
+                preds[key].append(value)
+        return {key: torch.stack(values, dim=1) for key, values in preds.items()}
+
+    def loss(
+        self,
+        obs_seq: torch.Tensor,
+        actions: torch.Tensor,
+        rewards: torch.Tensor,
+        dones: torch.Tensor,
+        events: torch.Tensor | None = None,
+        reward_loss_weight: float = 10.0,
+        done_loss_weight: float = 5.0,
+        event_loss_weight: float = 5.0,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        outputs = self.rollout_teacher_forced(obs_seq[:, :-1], actions)
+        target_obs = obs_seq[:, 1:]
+        terrain_target, block_target, entity_target, self_target = observation_labels(target_obs)
+        terrain_loss = F.cross_entropy(
+            outputs["terrain_logits"].reshape(-1, TERRAIN_CLASSES),
+            terrain_target.reshape(-1).long(),
+        )
+        block_loss = F.cross_entropy(
+            outputs["block_logits"].reshape(-1, BLOCK_CLASSES),
+            block_target.reshape(-1).long(),
+        )
+        entity_loss = F.cross_entropy(
+            outputs["entity_logits"].reshape(-1, ENTITY_CLASSES),
+            entity_target.reshape(-1).long(),
+        )
+        self_loss = F.smooth_l1_loss(outputs["self_pred"], self_target.float())
+        reward_target = rewards.unsqueeze(-1).float()
+        if dones.ndim == rewards.ndim - 1:
+            dones = dones.unsqueeze(-1).expand_as(rewards)
+        done_target = dones.unsqueeze(-1).float()
+        reward_loss = F.mse_loss(outputs["reward_pred"], reward_target)
+        done_loss = F.binary_cross_entropy_with_logits(outputs["done_logit"], done_target)
+        if events is None:
+            event_target = torch.zeros_like(outputs["event_logits"])
+        else:
+            event_target = events.float()
+        event_loss = F.binary_cross_entropy_with_logits(outputs["event_logits"], event_target)
+        loss = (
+            terrain_loss
+            + block_loss
+            + entity_loss
+            + self_loss
+            + float(reward_loss_weight) * reward_loss
+            + float(done_loss_weight) * done_loss
+            + float(event_loss_weight) * event_loss
+        )
+        with torch.no_grad():
+            terrain_acc = (outputs["terrain_logits"].argmax(-1) == terrain_target).float().mean()
+            block_acc = (outputs["block_logits"].argmax(-1) == block_target).float().mean()
+            entity_acc = (outputs["entity_logits"].argmax(-1) == entity_target).float().mean()
+            done_pred = torch.sigmoid(outputs["done_logit"]) > 0.5
+            done_acc = (done_pred == done_target.bool()).float().mean()
+        return loss, {
+            "training_structured_total_loss": float(loss.detach().cpu()),
+            "training_structured_terrain_loss": float(terrain_loss.detach().cpu()),
+            "training_structured_block_loss": float(block_loss.detach().cpu()),
+            "training_structured_entity_loss": float(entity_loss.detach().cpu()),
+            "training_structured_self_loss": float(self_loss.detach().cpu()),
+            "training_structured_reward_loss": float(reward_loss.detach().cpu()),
+            "training_structured_done_loss": float(done_loss.detach().cpu()),
+            "training_structured_event_loss": float(event_loss.detach().cpu()),
+            "training_structured_terrain_acc": float(terrain_acc.detach().cpu()),
+            "training_structured_block_acc": float(block_acc.detach().cpu()),
+            "training_structured_entity_acc": float(entity_acc.detach().cpu()),
+            "training_structured_done_accuracy": float(done_acc.detach().cpu()),
+        }
+
+
 def categorical_plane_loss(decoded: torch.Tensor, target: torch.Tensor, offset: int, depth: int) -> torch.Tensor:
     logits = decoded[:, offset:offset + GRID_CELLS * depth].reshape(-1, GRID_CELLS, depth)
     labels = target[:, offset:offset + GRID_CELLS * depth].reshape(-1, GRID_CELLS, depth).argmax(-1)
@@ -245,4 +506,19 @@ def make_rnn_from_config(config: dict | None = None) -> TorchGridcraftRNN:
         action_size=int(rnn_config.get("action_size", ACTION_SIZE)),
         rnn_size=int(rnn_config.get("rnn_size", 128)),
         num_mixture=int(rnn_config.get("num_mixture", 5)),
+    )
+
+
+def make_structured_from_config(config: dict | None = None) -> StructuredGridcraftWorldModel:
+    structured = (config or {}).get("structured", {})
+    return StructuredGridcraftWorldModel(
+        grid_embed_dim=int(structured.get("grid_embed_dim", 32)),
+        cnn_channels=int(structured.get("cnn_channels", 128)),
+        self_hidden_size=int(structured.get("self_hidden_size", 128)),
+        agent_hidden_size=int(structured.get("agent_hidden_size", 256)),
+        attention_heads=int(structured.get("attention_heads", 4)),
+        num_attention_layers=int(structured.get("num_attention_layers", 1)),
+        transition_hidden_size=int(structured.get("transition_hidden_size", 256)),
+        action_size=int(structured.get("action_size", ACTION_SIZE)),
+        event_dim=int(structured.get("event_dim", STRUCTURED_EVENT_DIM)),
     )
