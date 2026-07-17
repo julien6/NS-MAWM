@@ -187,6 +187,12 @@ PY
   if [[ "$HPO_STAGE" == "screen" || "$trial_glob_count" == "0" ]]; then
     sweep_config="$(config_for_family "$family")"
     if [[ "$HPO_STAGE" != "screen" && "$trial_glob_count" == "0" ]]; then
+      if [[ "${HPO_ALLOW_BOOTSTRAP_WITHOUT_PRIOR:-0}" != "1" ]]; then
+        echo "[wm-hpo] ${family}: cannot run stage=${HPO_STAGE} because no prior trial summaries were found in ${HPO_TRIALS_DIR}/${family}." >&2
+        echo "[wm-hpo] Run HPO_STAGE=screen first, then HPO_STAGE=promote, then HPO_STAGE=final." >&2
+        echo "[wm-hpo] Set HPO_ALLOW_BOOTSTRAP_WITHOUT_PRIOR=1 only if you intentionally want a fresh ${HPO_STAGE} sweep." >&2
+        exit 2
+      fi
       echo "[wm-hpo] ${family}: no previous screen trials found; bootstrapping ${HPO_STAGE} with a sweep from ${sweep_config}"
     else
       echo "[wm-hpo] ${family}: creating screen sweep from ${sweep_config}"

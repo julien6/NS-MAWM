@@ -453,14 +453,42 @@ def write_cache_metadata(path: Path, payload: dict, key: str, cache_dir: Path) -
 
 
 class StructuredSequenceDataset(torch.utils.data.Dataset):
-    def __init__(self, obs: torch.Tensor, actions: torch.Tensor, rewards: torch.Tensor, dones: torch.Tensor, valid: torch.Tensor | None, seq_len: int):
-        self.obs = obs.float()
+    def __init__(
+        self,
+        *,
+        obs: torch.Tensor | None = None,
+        data: dict | None = None,
+        actions: torch.Tensor | None = None,
+        rewards: torch.Tensor | None = None,
+        dones: torch.Tensor | None = None,
+        valid: torch.Tensor | None,
+        seq_len: int,
+    ):
+        if obs is None and data is None:
+            raise ValueError("StructuredSequenceDataset requires either dense obs or compact data")
+        self.obs = obs.float() if obs is not None else None
+        self.obs_grid = None
+        self.obs_self = None
+        if self.obs is None:
+            if data is None or not has_compact_observations(data):
+                raise ValueError("compact structured training requires obs_grid and obs_self")
+            self.obs_grid = data["obs_grid"]
+            self.obs_self = data["obs_self"]
+            actions = data["action"] if actions is None else actions
+            rewards = data["reward"] if rewards is None else rewards
+            dones = data["done"] if dones is None else dones
+            valid = data.get("transition_valid", valid)
+        if actions is None or rewards is None or dones is None:
+            raise ValueError("actions, rewards and dones are required")
         self.actions = actions.long()
         self.rewards = rewards.float()
         self.dones = dones.bool()
         self.valid = valid.bool() if valid is not None else None
         self.seq_len = int(seq_len)
-        self.episodes, self.steps, self.agents = self.obs.shape[:3]
+        if self.obs is not None:
+            self.episodes, self.steps, self.agents = self.obs.shape[:3]
+        else:
+            self.episodes, self.steps, self.agents = self.obs_grid.shape[:3]
         if self.steps - 1 < self.seq_len:
             raise ValueError("sequence length is longer than collected episodes")
         self.indices = self._valid_indices()
@@ -481,8 +509,15 @@ class StructuredSequenceDataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         episode, start = self.indices[index]
         end = start + self.seq_len
+        if self.obs is not None:
+            obs_seq = self.obs[episode, start : end + 1]
+        else:
+            obs_seq = vector_from_tabular(
+                self.obs_grid[episode, start : end + 1],
+                self.obs_self[episode, start : end + 1],
+            )
         return (
-            self.obs[episode, start : end + 1],
+            obs_seq,
             self.actions[episode, start:end],
             self.rewards[episode, start:end],
             self.dones[episode, start:end],
@@ -921,18 +956,19 @@ def train_rnn(z, data, args, device, checkpoint_dir: Path, eval_dir: Path, logge
 def train_structured_world_model(data, args, device, checkpoint_dir: Path, eval_dir: Path, logger, baseline):
     model = make_structured_from_args(args).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
-    obs = all_agent_obs(observation_vectors(data)).float()
     actions = normalize_action_tensor(data["action"]).long()
     rewards = data["reward"].float()
     dones = data["done"].bool()
     valid = data.get("transition_valid")
+    _, steps, _ = observation_shape(data)
     dataset = StructuredSequenceDataset(
-        obs=obs,
+        data=data if has_compact_observations(data) else None,
+        obs=None if has_compact_observations(data) else all_agent_obs(observation_vectors(data)).float(),
         actions=actions,
         rewards=rewards,
         dones=dones,
         valid=valid,
-        seq_len=min(args.seq_len, obs.shape[1] - 1),
+        seq_len=min(args.seq_len, steps - 1),
     )
     if len(dataset) <= 0:
         raise RuntimeError("no valid structured world-model training sequences were available")

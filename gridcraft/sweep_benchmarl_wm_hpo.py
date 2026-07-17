@@ -27,7 +27,9 @@ ENV_OVERRIDES = {
     "eval_every": ("HPO_EVAL_EVERY", int),
     "video_every": ("HPO_VIDEO_EVERY", int),
     "horizons": ("HPO_HORIZONS", lambda value: [int(part) for part in str(value).replace(",", " ").split()]),
+    "wm_batch_size": ("HPO_WM_BATCH_SIZE", int),
     "wm_num_workers": ("HPO_WM_NUM_WORKERS", int),
+    "seq_len": ("HPO_SEQ_LEN", int),
 }
 
 
