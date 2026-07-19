@@ -11,6 +11,8 @@ from marl_hpo_registry import build_trial_summary, trial_summary_path, write_tri
 
 
 ENV_OVERRIDES = {
+    "baseline_id": ("MARL_HPO_BASELINE_ID", str),
+    "wm_run_dir": ("MARL_HPO_WM_RUN_DIR", str),
     "num_agents": ("MARL_HPO_NUM_AGENTS", int),
     "device": ("MARL_HPO_DEVICE", str),
     "seed": ("MARL_HPO_SEED", int),

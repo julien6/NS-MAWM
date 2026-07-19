@@ -201,9 +201,9 @@ PY
   fi
   if [[ "$family" == "mambpo_imagination" ]]; then
     checkpoint_dir="${MARL_HPO_WM_RUN_DIR}/checkpoints"
-    if [[ ! -f "${checkpoint_dir}/vae.pt" || ! -f "${checkpoint_dir}/rnn.pt" ]]; then
+    if [[ ! -f "${checkpoint_dir}/structured_wm.pt" && ( ! -f "${checkpoint_dir}/vae.pt" || ! -f "${checkpoint_dir}/rnn.pt" ) ]]; then
       echo "[marl-hpo] mambpo_imagination requires trained WM checkpoints at ${checkpoint_dir}" >&2
-      echo "Set MARL_HPO_WM_RUN_DIR or run B10_neural_k0.0 world-model first." >&2
+      echo "Set MARL_HPO_WM_RUN_DIR or run B10_neural_k0.0/B11_structured_neural_k0.0 world-model first." >&2
       exit 2
     fi
   fi

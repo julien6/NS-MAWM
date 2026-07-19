@@ -84,8 +84,13 @@ def checkpoint_checksum(checkpoint_dir: str | None) -> str | None:
     if not checkpoint_dir:
         return None
     root = Path(checkpoint_dir)
-    paths = [root / "vae.pt", root / "rnn.pt"]
-    if not all(path.is_file() for path in paths):
+    vae_mdn_paths = [root / "vae.pt", root / "rnn.pt"]
+    structured_paths = [root / "structured_wm.pt"]
+    if all(path.is_file() for path in vae_mdn_paths):
+        paths = vae_mdn_paths
+    elif all(path.is_file() for path in structured_paths):
+        paths = structured_paths
+    else:
         return None
     payload = ":".join(f"{path.resolve()}:{path.stat().st_size}:{path.stat().st_mtime_ns}" for path in paths)
     return hashlib.sha256(payload.encode()).hexdigest()
