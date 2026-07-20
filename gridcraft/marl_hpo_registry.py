@@ -194,8 +194,10 @@ def build_trial_summary(
 ) -> dict[str, Any]:
     family = normalize_family(family)
     score = score_from_metrics(metrics, family)
+    baseline_id = config.get("baseline_id")
     return {
         "hpo_family": family,
+        "baseline_id": baseline_id,
         "score": score,
         "metrics": metrics,
         "hyperparameters": extract_hyperparameters(config, family),
@@ -205,6 +207,7 @@ def build_trial_summary(
         "sweep_id": sweep_id,
         "stage": stage,
         "provenance": {
+            "baseline_id": baseline_id,
             "num_agents": num_agents,
             "seed": config.get("seed"),
             "external_checkpoint_dir": external_checkpoint_dir,

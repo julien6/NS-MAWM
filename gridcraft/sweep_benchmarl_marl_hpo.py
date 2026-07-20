@@ -300,6 +300,7 @@ def main() -> None:
     payload["metrics"]["trial_wall_time"] = payload["trial_wall_time"]
     write_trial_summary(trial_summary_path(summary_root), payload)
     run.summary["marl_hpo_family"] = family
+    run.summary["effective_baseline_id"] = baseline_id
     run.summary["marl_hpo_score"] = payload["score"]
     run.summary["trial_wall_time"] = payload["trial_wall_time"]
     run.summary["marl_hpo_trial_summary_path"] = str(trial_summary_path(summary_root))
