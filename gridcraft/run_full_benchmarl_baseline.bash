@@ -11,6 +11,9 @@ RUN_NAME="${RUN_NAME:-${BASELINE_ID}_a${NUM_AGENTS}_full_seed${SEED}}"
 WANDB_RUN_ID="${WANDB_RUN_ID:-${RUN_NAME}_$(date +%Y%m%d_%H%M%S)}"
 WANDB_GROUP="${WANDB_GROUP:-${BASELINE_ID}}"
 DRY_RUN="${DRY_RUN:-0}"
+EXTERNAL_WM_RUN_DIR="${EXTERNAL_WM_RUN_DIR:-${WM_RUN_DIR:-}}"
+WM_EXTERNAL_REUSED=0
+WM_EXTERNAL_CHECKPOINT_CHECKSUM=""
 WM_REWARD_LOSS_WEIGHT_USER_SET="${WM_REWARD_LOSS_WEIGHT+x}"
 WM_DONE_LOSS_WEIGHT_USER_SET="${WM_DONE_LOSS_WEIGHT+x}"
 WM_EVENT_LOSS_WEIGHT_USER_SET="${WM_EVENT_LOSS_WEIGHT+x}"
@@ -159,6 +162,7 @@ MB_WORLD_MODEL_HIDDEN_SIZE="${MB_WORLD_MODEL_HIDDEN_SIZE:-256}"
 MB_IMAGINED_HORIZON="${MB_IMAGINED_HORIZON:-3}"
 MB_IMAGINED_BRANCHES="${MB_IMAGINED_BRANCHES:-4}"
 MB_LAMBDA_IMAGINED="${MB_LAMBDA_IMAGINED:-0.5}"
+MAMBPO_IMAGINATION_MODE="${MAMBPO_IMAGINATION_MODE:-enabled}"
 MPC_PLANNING_HORIZON="${MPC_PLANNING_HORIZON:-15}"
 MPC_CEM_SAMPLES="${MPC_CEM_SAMPLES:-128}"
 MPC_CEM_ITERS="${MPC_CEM_ITERS:-3}"
@@ -189,6 +193,51 @@ if [[ "$BASELINE_ID" == B11_* ]]; then
   fi
 fi
 
+if [[ "$MAMBPO_IMAGINATION_MODE" != "enabled" && "$MAMBPO_IMAGINATION_MODE" != "disabled" ]]; then
+  echo "Unsupported MAMBPO_IMAGINATION_MODE=${MAMBPO_IMAGINATION_MODE}; expected enabled or disabled" >&2
+  exit 2
+fi
+if [[ "$MAMBPO_IMAGINATION_MODE" == "disabled" ]]; then
+  MB_LAMBDA_IMAGINED="0.0"
+fi
+
+checkpoint_checksum() {
+  local checkpoint_dir="$1"
+  "$PYTHON_BIN" - "$checkpoint_dir" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+if (root / "structured_wm.pt").is_file():
+    paths = [root / "structured_wm.pt"]
+elif (root / "vae.pt").is_file() and (root / "rnn.pt").is_file():
+    paths = [root / "vae.pt", root / "rnn.pt"]
+else:
+    raise SystemExit(2)
+payload = ":".join(f"{p.resolve()}:{p.stat().st_size}:{p.stat().st_mtime_ns}" for p in paths)
+print(hashlib.sha256(payload.encode()).hexdigest())
+PY
+}
+
+if [[ "$MODEL_BASED" == "1" && -n "$EXTERNAL_WM_RUN_DIR" ]]; then
+  EXTERNAL_WM_CHECKPOINT_DIR="${EXTERNAL_WM_RUN_DIR%/}/checkpoints"
+  if [[ "$BASELINE_ID" == B11_* || "$WORLD_MODEL_ARCH" == "structured" ]]; then
+    if [[ ! -f "${EXTERNAL_WM_CHECKPOINT_DIR}/structured_wm.pt" ]]; then
+      echo "EXTERNAL_WM_RUN_DIR=${EXTERNAL_WM_RUN_DIR} does not contain checkpoints/structured_wm.pt" >&2
+      exit 2
+    fi
+  else
+    if [[ ! -f "${EXTERNAL_WM_CHECKPOINT_DIR}/vae.pt" || ! -f "${EXTERNAL_WM_CHECKPOINT_DIR}/rnn.pt" ]]; then
+      echo "EXTERNAL_WM_RUN_DIR=${EXTERNAL_WM_RUN_DIR} must contain checkpoints/vae.pt and checkpoints/rnn.pt" >&2
+      exit 2
+    fi
+  fi
+  WM_EXTERNAL_REUSED=1
+  WM_EXTERNAL_CHECKPOINT_CHECKSUM="$(checkpoint_checksum "$EXTERNAL_WM_CHECKPOINT_DIR")"
+  echo "[wm-external] reusing checkpoint dir: ${EXTERNAL_WM_CHECKPOINT_DIR} checksum=${WM_EXTERNAL_CHECKPOINT_CHECKSUM}"
+fi
+
 if [[ "$MODEL_BASED" == "1" && "$REUSE_WM_HPO_CONFIG" == "1" ]]; then
   HPO_EXPORT_CMD=("$PYTHON_BIN" wm_hpo_registry.py export-env --baseline-id "$BASELINE_ID" --root "$HPO_RESULTS_DIR")
   if [[ "$REQUIRE_WM_HPO" == "1" ]]; then
@@ -198,7 +247,12 @@ if [[ "$MODEL_BASED" == "1" && "$REUSE_WM_HPO_CONFIG" == "1" ]]; then
     HPO_EXPORT_CMD+=(--required-stage "$REQUIRED_WM_HPO_STAGE" --num-agents "$NUM_AGENTS")
   fi
   echo "[wm-hpo] checking best HPO config for ${BASELINE_ID} in ${HPO_RESULTS_DIR}"
-  eval "$("${HPO_EXPORT_CMD[@]}")"
+  if HPO_EXPORT_OUTPUT="$("${HPO_EXPORT_CMD[@]}")"; then
+    :
+  else
+    exit $?
+  fi
+  eval "$HPO_EXPORT_OUTPUT"
   if [[ "${WM_HPO_CONFIG_REUSED:-0}" == "1" ]]; then
     echo "[wm-hpo] using ${WM_HPO_FAMILY} config: ${WM_HPO_CONFIG_PATH} (score=${WM_HPO_SCORE})"
   fi
@@ -213,8 +267,16 @@ if [[ "$REUSE_MARL_HPO_CONFIG" == "1" ]]; then
     MARL_HPO_EXPORT_CMD+=(--required-stage "$REQUIRED_MARL_HPO_STAGE" --num-agents "$NUM_AGENTS")
   fi
   MARL_HPO_EXPORT_CMD+=(--required-model-type "$MARL_MODEL")
+  if [[ "$MAMBPO_IMAGINATION_MODE" == "disabled" ]]; then
+    MARL_HPO_EXPORT_CMD+=(--allow-missing-imagination)
+  fi
   echo "[marl-hpo] checking best MARL HPO config for ${BASELINE_ID} in ${MARL_HPO_RESULTS_DIR}"
-  eval "$("${MARL_HPO_EXPORT_CMD[@]}")"
+  if MARL_HPO_EXPORT_OUTPUT="$("${MARL_HPO_EXPORT_CMD[@]}")"; then
+    :
+  else
+    exit $?
+  fi
+  eval "$MARL_HPO_EXPORT_OUTPUT"
   if [[ "${MARL_HPO_CORE_REUSED:-0}" == "1" ]]; then
     echo "[marl-hpo] using masac_core config: ${MARL_HPO_CORE_CONFIG_PATH} (score=${MARL_HPO_CORE_SCORE})"
   fi
@@ -222,6 +284,7 @@ if [[ "$REUSE_MARL_HPO_CONFIG" == "1" ]]; then
     echo "[marl-hpo] using mambpo_imagination config: ${MARL_HPO_IMAGINATION_CONFIG_PATH} (score=${MARL_HPO_IMAGINATION_SCORE})"
   fi
 fi
+echo "[marl-hpo] strict=${REQUIRE_MARL_HPO} core_reused=${MARL_HPO_CORE_REUSED:-0} imagination_reused=${MARL_HPO_IMAGINATION_REUSED:-0} imagination_mode=${MAMBPO_IMAGINATION_MODE}"
 
 print_cmd() {
   printf '[dry-run]'
@@ -231,10 +294,14 @@ print_cmd() {
   printf '\n'
 }
 
-if [[ "$MODEL_BASED" == "1" ]]; then
-  echo "=== Step 1/2: World Model train/eval (${BASELINE_ID}) ==="
+if [[ "$MODEL_BASED" == "1" && "$WM_EXTERNAL_REUSED" == "1" ]]; then
+  echo "=== Step 1/2: Reusing external World Model (${BASELINE_ID}) ==="
 else
+  if [[ "$MODEL_BASED" == "1" ]]; then
+  echo "=== Step 1/2: World Model train/eval (${BASELINE_ID}) ==="
+  else
   echo "=== Step 1/2: Model-free lightweight real policy smoke (${BASELINE_ID}) ==="
+  fi
 fi
 echo "W&B run id: ${WANDB_RUN_ID}"
 WM_PHASE="policy"
@@ -308,20 +375,32 @@ if [[ -n "${WANDB_FLAG}" ]]; then
   WM_CMD+=($WANDB_FLAG)
 fi
 
-if [[ "$DRY_RUN" == "1" ]]; then
-  print_cmd "${WM_CMD[@]}"
+if [[ "$WM_EXTERNAL_REUSED" == "1" ]]; then
+  echo "[wm-external] skipping World Model training/evaluation because EXTERNAL_WM_RUN_DIR is set"
 else
-  "${WM_CMD[@]}"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    print_cmd "${WM_CMD[@]}"
+  else
+    "${WM_CMD[@]}"
+  fi
 fi
 
 if [[ "$MODEL_BASED" == "1" ]]; then
+  MARL_WM_RUN_DIR="runs_benchmarl/${BASELINE_ID}_a${NUM_AGENTS}_seed${SEED}"
+  if [[ "$WM_EXTERNAL_REUSED" == "1" ]]; then
+    MARL_WM_RUN_DIR="$EXTERNAL_WM_RUN_DIR"
+  fi
   if [[ "$MODEL_BASED_DOWNSTREAM_ALGO" == "mambpo" ]]; then
-    echo "=== Step 2/2: MAMBPO train/eval on real vGridcraft with generated model rollouts ==="
+    if [[ "$MAMBPO_IMAGINATION_MODE" == "disabled" ]]; then
+      echo "=== Step 2/2: MAMBPO train/eval on real vGridcraft with imagination disabled ==="
+    else
+      echo "=== Step 2/2: MAMBPO train/eval on real vGridcraft with generated model rollouts ==="
+    fi
     MARL_CMD=(
       "$PYTHON_BIN" run_benchmarl_marl_gridcraft.py
       --algorithm mambpo
       --baseline-id "$BASELINE_ID"
-      --wm-run-dir "runs_benchmarl/${BASELINE_ID}_a${NUM_AGENTS}_seed${SEED}"
+      --wm-run-dir "$MARL_WM_RUN_DIR"
       --seed "$SEED"
       --num-envs "$MARL_NUM_ENVS"
       --num-agents "$NUM_AGENTS"
@@ -357,7 +436,7 @@ if [[ "$MODEL_BASED" == "1" ]]; then
       "$PYTHON_BIN" run_benchmarl_marl_gridcraft.py
       --algorithm mb_mappo
       --baseline-id "$BASELINE_ID"
-      --wm-run-dir "runs_benchmarl/${BASELINE_ID}_a${NUM_AGENTS}_seed${SEED}"
+      --wm-run-dir "$MARL_WM_RUN_DIR"
       --seed "$SEED"
       --num-envs "$MARL_NUM_ENVS"
       --num-agents "$NUM_AGENTS"
@@ -392,7 +471,7 @@ if [[ "$MODEL_BASED" == "1" ]]; then
     MARL_CMD=(
       "$PYTHON_BIN" run_benchmarl_mpc_cem_gridcraft.py
       --baseline-id "$BASELINE_ID"
-      --wm-run-dir "runs_benchmarl/${BASELINE_ID}_a${NUM_AGENTS}_seed${SEED}"
+      --wm-run-dir "$MARL_WM_RUN_DIR"
       --seed "$SEED"
       --num-envs "$MARL_NUM_ENVS"
       --num-agents "$NUM_AGENTS"
@@ -414,7 +493,7 @@ if [[ "$MODEL_BASED" == "1" ]]; then
     MARL_CMD=(
       "$PYTHON_BIN" run_benchmarl_imagined_mappo_gridcraft.py
       --baseline-id "$BASELINE_ID"
-      --wm-run-dir "runs_benchmarl/${BASELINE_ID}_a${NUM_AGENTS}_seed${SEED}"
+      --wm-run-dir "$MARL_WM_RUN_DIR"
       --seed "$SEED"
       --num-envs "$MARL_NUM_ENVS"
       --num-agents "$NUM_AGENTS"
@@ -440,7 +519,7 @@ if [[ "$MODEL_BASED" == "1" ]]; then
     MARL_CMD=(
       "$PYTHON_BIN" run_benchmarl_dyna_gridcraft.py
       --baseline-id "$BASELINE_ID"
-      --wm-run-dir "runs_benchmarl/${BASELINE_ID}_a${NUM_AGENTS}_seed${SEED}"
+      --wm-run-dir "$MARL_WM_RUN_DIR"
       --seed "$SEED"
       --num-envs "$MARL_NUM_ENVS"
       --num-agents "$NUM_AGENTS"
@@ -514,6 +593,11 @@ if [[ "${MARL_CMD[1]}" == "run_benchmarl_marl_gridcraft.py" ]]; then
     --marl-hpo-core-stage "${MARL_HPO_CORE_STAGE:-}"
     --marl-hpo-imagination-stage "${MARL_HPO_IMAGINATION_STAGE:-}"
     --marl-hpo-imagination-checkpoint-checksum "${MARL_HPO_IMAGINATION_CHECKPOINT_CHECKSUM:-}"
+    --marl-hpo-strict-mode "$REQUIRE_MARL_HPO"
+    --wm-external-reused "$WM_EXTERNAL_REUSED"
+    --wm-external-run-dir "${EXTERNAL_WM_RUN_DIR:-}"
+    --wm-external-checkpoint-checksum "$WM_EXTERNAL_CHECKPOINT_CHECKSUM"
+    --mambpo-imagination-mode "$MAMBPO_IMAGINATION_MODE"
   )
   if [[ "$MARL_LSTM_COMPILE" == "1" ]]; then
     MARL_CMD+=(--marl-lstm-compile)

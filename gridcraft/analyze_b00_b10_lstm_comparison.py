@@ -139,6 +139,8 @@ def collect_marl_rows(files: list[Path], baselines: set[str]) -> list[dict[str, 
             "MARL Evaluation/eval_real_reward_point_count",
             "MARL Training/imagination_external_world_model_used",
             "MARL Training/training_imagined_reward",
+            "MARL Training/imagined_batch_size",
+            "MARL Training/imagination_used_for_training",
             "MARL Evaluation/eval_imagined_reward",
             "MARL Evaluation/real_imagined_reward_gap",
         ):
@@ -241,6 +243,8 @@ def main() -> None:
             "MARL Evaluation/real_imagined_reward_gap",
             "MARL Evaluation/eval_imagined_reward",
             "MARL Training/training_imagined_reward",
+            "MARL Training/imagined_batch_size",
+            "MARL Training/imagination_used_for_training",
         ),
     )
     acceptance_rows = acceptance(policy_rows, args.main_mode, baselines)

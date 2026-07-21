@@ -147,6 +147,7 @@ def main() -> None:
     parser.add_argument("--mb-imagined-horizon", type=int, default=3)
     parser.add_argument("--mb-imagined-branches", type=int, default=4)
     parser.add_argument("--mb-lambda-imagined", type=float, default=0.5)
+    parser.add_argument("--mambpo-imagination-mode", choices=("enabled", "disabled"), default="enabled")
     parser.add_argument("--marl-hpo-core-reused", type=float, default=0.0)
     parser.add_argument("--marl-hpo-core-score", type=float, default=None)
     parser.add_argument("--marl-hpo-core-config-path", default=None)
@@ -156,6 +157,10 @@ def main() -> None:
     parser.add_argument("--marl-hpo-core-stage", default=None)
     parser.add_argument("--marl-hpo-imagination-stage", default=None)
     parser.add_argument("--marl-hpo-imagination-checkpoint-checksum", default=None)
+    parser.add_argument("--marl-hpo-strict-mode", type=float, default=0.0)
+    parser.add_argument("--wm-external-reused", type=float, default=0.0)
+    parser.add_argument("--wm-external-run-dir", default=None)
+    parser.add_argument("--wm-external-checkpoint-checksum", default=None)
     args = parser.parse_args()
     resolve_entropy_profile(args)
     warn_legacy_marl_names(args.algorithm)
@@ -223,6 +228,9 @@ def main() -> None:
         algorithm_config.imagined_rollouts.real_ratio = max(
             0.0, min(1.0, 1.0 - args.mb_lambda_imagined)
         )
+        if args.mambpo_imagination_mode == "disabled":
+            algorithm_config.imagined_rollouts.real_ratio = 1.0
+            algorithm_config.imagined_rollouts.model_batch_size = 0
         if args.wm_run_dir:
             ns_variant, ns_coverage = infer_ns_settings(args.baseline_id)
             enabled_pstr_rules = active_rules_for_baseline(args.baseline_id)
@@ -338,6 +346,14 @@ def main() -> None:
                 "marl_hpo_core_stage": args.marl_hpo_core_stage,
                 "marl_hpo_imagination_stage": args.marl_hpo_imagination_stage,
                 "marl_hpo_imagination_checkpoint_checksum": args.marl_hpo_imagination_checkpoint_checksum,
+                "marl_hpo_strict_mode": args.marl_hpo_strict_mode,
+                "wm_external_reused": args.wm_external_reused,
+                "wm_external_run_dir": args.wm_external_run_dir,
+                "wm_external_checkpoint_checksum": args.wm_external_checkpoint_checksum,
+                "mambpo_imagination_mode": args.mambpo_imagination_mode,
+                "mambpo_imagination_used_for_training": int(
+                    args.algorithm == "mambpo" and args.mambpo_imagination_mode != "disabled" and args.mb_lambda_imagined > 0.0
+                ),
                 "marl_lr": args.marl_lr,
                 "marl_gamma": args.marl_gamma,
                 "marl_polyak_tau": args.marl_polyak_tau,
@@ -366,6 +382,7 @@ def main() -> None:
                 "mb_imagined_horizon": args.mb_imagined_horizon,
                 "mb_imagined_branches": args.mb_imagined_branches,
                 "mb_lambda_imagined": args.mb_lambda_imagined,
+                "mambpo_imagination_mode": args.mambpo_imagination_mode,
             },
         }
     save_folder = (ROOT / "gridcraft" / args.save_folder).resolve()
@@ -734,6 +751,7 @@ def canonical_mambpo_key(key):
         "model_batch_size": "model_batch_size",
         "real_batch_size": "real_batch_size",
         "imagined_batch_size": "imagined_batch_size",
+        "imagination_used_for_training": "imagination_used_for_training",
     }
     return mapping.get(name, f"imagination_{canonical_benchmarl_key(name)}")
 

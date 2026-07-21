@@ -547,6 +547,7 @@ def main() -> None:
     export.add_argument("--required-stage", choices=tuple(HPO_STAGE_RANK), default=None)
     export.add_argument("--num-agents", type=int)
     export.add_argument("--required-model-type", choices=("mlp", "lstm"))
+    export.add_argument("--allow-missing-imagination", action="store_true")
 
     validate = sub.add_parser("validate")
     validate.add_argument("--family", required=True, choices=MARL_HPO_FAMILIES)
@@ -588,7 +589,7 @@ def main() -> None:
             best = load_best_config(family, args.root)
             if best is None:
                 message = f"[marl-hpo] no best_config.json found for {family} at {best_config_path(family, args.root)}"
-                if args.require:
+                if args.require and not (family == "mambpo_imagination" and args.allow_missing_imagination):
                     print(message, file=sys.stderr)
                     raise SystemExit(2)
                 print(f"echo {json.dumps(message)} >&2")
@@ -602,7 +603,7 @@ def main() -> None:
                 )
                 if not valid:
                     message = f"[marl-hpo] incompatible config for {family}: {reason}"
-                    if args.require:
+                    if args.require and not (family == "mambpo_imagination" and args.allow_missing_imagination):
                         print(message, file=sys.stderr)
                         raise SystemExit(2)
                     print(f"echo {json.dumps(message)} >&2")

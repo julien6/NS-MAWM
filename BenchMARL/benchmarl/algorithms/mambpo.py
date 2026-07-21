@@ -417,6 +417,19 @@ class Mambpo(Masac):
 
         if not self.world_model.enabled or not self.imagined_rollouts.enabled:
             return batch
+        if self.imagined_rollouts.real_ratio >= 1.0:
+            self.latest_metrics.update(
+                {
+                    "mambpo/real_ratio": torch.tensor(1.0, device=self.device),
+                    "mambpo/imagined_ratio": torch.tensor(0.0, device=self.device),
+                    "mambpo/imagined_batch_size": torch.tensor(0.0, device=self.device),
+                    "mambpo/imagination_used_for_training": torch.tensor(
+                        0.0, device=self.device
+                    ),
+                    "mambpo/model_batch_size": torch.tensor(0.0, device=self.device),
+                }
+            )
+            return batch
 
         data = self._extract_model_data(group, batch)
         if data is None:
@@ -477,6 +490,9 @@ class Mambpo(Masac):
                         "mambpo/model_batch_size": torch.tensor(
                             float(self.imagined_rollouts.model_batch_size),
                             device=self.device,
+                        ),
+                        "mambpo/imagination_used_for_training": torch.tensor(
+                            1.0, device=self.device
                         ),
                     }
                 )

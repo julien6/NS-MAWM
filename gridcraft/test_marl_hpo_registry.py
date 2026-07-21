@@ -79,6 +79,61 @@ def test_export_env_cli(tmp_path):
     assert "export MARL_HPO_IMAGINATION_REUSED='1'" in result.stdout
 
 
+def test_export_env_requires_masac_core_even_when_imagination_can_be_missing(tmp_path):
+    root = tmp_path / "marl"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "marl_hpo_registry.py",
+            "export-env",
+            "--baseline-id",
+            "B11_structured_neural_k0.0",
+            "--downstream-algo",
+            "mambpo",
+            "--root",
+            str(root),
+            "--require",
+            "--allow-missing-imagination",
+        ],
+        cwd=Path(__file__).resolve().parent,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert "masac_core" in result.stderr
+
+
+def test_export_env_allows_missing_imagination_for_disabled_ablation(tmp_path):
+    root = tmp_path / "marl"
+    core_dir = root / "masac_core"
+    core_dir.mkdir(parents=True)
+    (core_dir / "best_config.json").write_text(
+        json.dumps({"score": 12.0, "hyperparameters": {"model_type": "lstm", "lr": 0.0001}})
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "marl_hpo_registry.py",
+            "export-env",
+            "--baseline-id",
+            "B11_structured_neural_k0.0",
+            "--downstream-algo",
+            "mambpo",
+            "--root",
+            str(root),
+            "--require",
+            "--allow-missing-imagination",
+        ],
+        cwd=Path(__file__).resolve().parent,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "export MARL_HPO_CORE_REUSED='1'" in result.stdout
+    assert "mambpo_imagination" in result.stdout
+    assert "no best_config.json found" in result.stdout
+
+
 def test_mambpo_validation_tracks_external_world_model(tmp_path):
     checkpoint_dir = tmp_path / "checkpoints"
     checkpoint_dir.mkdir()
