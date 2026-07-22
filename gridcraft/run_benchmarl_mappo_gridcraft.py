@@ -22,6 +22,22 @@ from vgridcraft.env import ACTION_SUCCESS_EVENTS, EVENT_INDEX, EVENT_NAMES, REWA
 from pstr_profiles import active_rules_for_baseline, profile_name_from_baseline, rules_to_csv
 from benchmarl.experiment.callback import Callback
 
+
+def normalize_wandb_tags(tags, max_len=64):
+    normalized = []
+    seen = set()
+    for tag in tags:
+        text = str(tag).strip()
+        if not text:
+            continue
+        if len(text) > max_len:
+            text = text[:max_len]
+        if text not in seen:
+            normalized.append(text)
+            seen.add(text)
+    return normalized
+
+
 ACTION_NAMES = [
     "stay",
     "move_n",
@@ -333,13 +349,13 @@ def main() -> None:
             **({"id": args.wandb_id, "resume": "allow"} if args.wandb_id else {}),
             **({"name": args.wandb_name} if args.wandb_name else {}),
             **({"group": args.wandb_group} if args.wandb_group else {}),
-            "tags": [
+            "tags": normalize_wandb_tags([
                 "gridcraft",
                 args.algorithm,
                 "real-vgridcraft",
                 args.baseline_id or "baseline-unknown",
                 *([f"comparison:{args.comparison_id}"] if args.comparison_id else []),
-            ],
+            ]),
             "config": {
                 "baseline_id": args.baseline_id,
                 "comparison_id": args.comparison_id,
@@ -910,13 +926,13 @@ def log_marl_evaluation_video(args, policy=None, iteration=None):
             resume="allow" if args.wandb_id else None,
             name=args.wandb_name,
             group=args.wandb_group,
-            tags=[
+            tags=normalize_wandb_tags([
                 "gridcraft",
                 args.algorithm,
                 "real-vgridcraft",
                 args.baseline_id or "baseline-unknown",
                 *([f"comparison:{args.comparison_id}"] if args.comparison_id else []),
-            ],
+            ]),
             config={"baseline_id": args.baseline_id, "comparison_id": args.comparison_id},
         )
         created_run = True

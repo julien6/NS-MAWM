@@ -14,7 +14,7 @@ fi
 
 NUM_AGENTS="${NUM_AGENTS:-3}"
 SEEDS="${SEEDS:-1 2 3}"
-COMPARISON_ID="${COMPARISON_ID:-final_b00_masac_lstm_vs_b11_structured_mambpo_lstm_$(date -u +%Y%m%d_%H%M%S)}"
+COMPARISON_ID="${COMPARISON_ID:-b00_b11_final_$(date -u +%Y%m%d_%H%M%S)}"
 WANDB_GROUP="${WANDB_GROUP:-${COMPARISON_ID}}"
 WANDB_FLAG="${WANDB_FLAG:---wandb}"
 DRY_RUN="${DRY_RUN:-0}"
