@@ -53,6 +53,13 @@ def as_float(value: Any, default: float | None = None) -> float | None:
         return float(value)
     if isinstance(value, (int, float)) and math.isfinite(float(value)):
         return float(value)
+    if isinstance(value, str):
+        try:
+            parsed = float(value)
+        except ValueError:
+            return default
+        if math.isfinite(parsed):
+            return parsed
     return default
 
 

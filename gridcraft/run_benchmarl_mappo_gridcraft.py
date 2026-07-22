@@ -520,12 +520,25 @@ def write_marl_run_summary(args, experiment) -> None:
     save_root = (ROOT / "gridcraft" / args.save_folder).resolve()
     save_root.mkdir(parents=True, exist_ok=True)
     run_name = args.wandb_name or f"{args.algorithm}_{args.baseline_id or 'baseline'}_seed{args.seed}"
+    checkpoint_candidates = sorted(
+        save_root.rglob("checkpoints/checkpoint_*.pt"),
+        key=lambda path: path.stat().st_mtime,
+    )
+    checkpoint_path = str(checkpoint_candidates[-1]) if checkpoint_candidates else None
     path = save_root / f"{run_name}_marl_summary.json"
     with path.open("w") as handle:
         json.dump(
             {
                 "baseline_id": args.baseline_id,
                 "algorithm": args.algorithm,
+                "seed": args.seed,
+                "config": {
+                    "baseline_id": args.baseline_id,
+                    "algorithm": args.algorithm,
+                    "seed": args.seed,
+                    "save_folder": args.save_folder,
+                    "checkpoint_path": checkpoint_path,
+                },
                 "environment_dynamics_version": VGridcraftConfig.environment_dynamics_version,
                 "reward_schema_version": VGridcraftConfig.reward_schema_version,
                 "metrics": metrics,

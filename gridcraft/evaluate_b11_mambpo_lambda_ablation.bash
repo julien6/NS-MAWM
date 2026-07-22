@@ -32,7 +32,26 @@ from pathlib import Path
 root = Path(sys.argv[1])
 baseline_id = sys.argv[2]
 seed = int(sys.argv[3])
-candidates = []
+
+def payload_matches(payload: object, path: Path) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    config = payload.get("config", {})
+    if not isinstance(config, dict):
+        config = {}
+    found_baseline = config.get("baseline_id") or payload.get("baseline_id")
+    found_seed = config.get("seed") or payload.get("seed")
+    if found_seed is None:
+        marker = f"_seed{seed}"
+        found_seed = seed if marker in path.name or marker in str(path.parent) else None
+    try:
+        found_seed_int = int(found_seed)
+    except Exception:
+        found_seed_int = -1
+    return found_baseline == baseline_id and found_seed_int == seed
+
+summary_candidates: list[Path] = []
+checkpoint_candidates: list[tuple[float, Path]] = []
 for checkpoint in root.rglob("checkpoints/checkpoint_*.pt"):
     run_dir = checkpoint.parent.parent
     matched = False
@@ -41,15 +60,54 @@ for checkpoint in root.rglob("checkpoints/checkpoint_*.pt"):
             payload = json.loads(summary.read_text())
         except Exception:
             continue
-        config = payload.get("config", {}) if isinstance(payload, dict) else {}
-        if config.get("baseline_id") == baseline_id and int(config.get("seed", -1)) == seed:
+        if payload_matches(payload, summary):
             matched = True
             break
     if matched:
-        candidates.append((checkpoint.stat().st_mtime, checkpoint))
-if not candidates:
-    raise SystemExit(1)
-print(max(candidates, key=lambda row: row[0])[1])
+        checkpoint_candidates.append((checkpoint.stat().st_mtime, checkpoint))
+if checkpoint_candidates:
+    print(max(checkpoint_candidates, key=lambda row: row[0])[1])
+    raise SystemExit(0)
+
+for summary in root.rglob("*_marl_summary.json"):
+    try:
+        payload = json.loads(summary.read_text())
+    except Exception:
+        continue
+    if not payload_matches(payload, summary):
+        continue
+    config = payload.get("config", {}) if isinstance(payload, dict) else {}
+    checkpoint_path = config.get("checkpoint_path") if isinstance(config, dict) else None
+    if checkpoint_path:
+        checkpoint = Path(checkpoint_path)
+        if checkpoint.exists():
+            print(checkpoint)
+            raise SystemExit(0)
+        rel_checkpoint = root / checkpoint_path
+        if rel_checkpoint.exists():
+            print(rel_checkpoint)
+            raise SystemExit(0)
+    summary_candidates.append(summary)
+
+if summary_candidates:
+    summary = max(summary_candidates, key=lambda path: path.stat().st_mtime)
+    summary_time = summary.stat().st_mtime
+    nearby: list[tuple[float, float, Path]] = []
+    for checkpoint in root.rglob("checkpoints/checkpoint_*.pt"):
+        delta = abs(checkpoint.stat().st_mtime - summary_time)
+        if delta <= 1800:
+            nearby.append((delta, checkpoint.stat().st_mtime, checkpoint))
+    if nearby:
+        nearby.sort(key=lambda row: (row[0], -row[1]))
+        print(nearby[0][2])
+        raise SystemExit(0)
+
+print(
+    f"No checkpoint found for baseline={baseline_id} seed={seed} under {root}. "
+    f"matching_summaries={len(summary_candidates)}",
+    file=sys.stderr,
+)
+raise SystemExit(1)
 PY
 }
 
