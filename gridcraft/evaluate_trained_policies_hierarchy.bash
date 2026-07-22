@@ -47,6 +47,40 @@ def payload_matches(payload: object, path: Path) -> bool:
         found_seed = -1
     return found_baseline == baseline_id and found_seed == seed
 
+def text_file_matches(path: Path) -> bool:
+    try:
+        text = path.read_text(errors="ignore")
+    except Exception:
+        return False
+    if baseline_id not in text:
+        return False
+    seed_markers = (
+        f"seed{seed}",
+        f"seed_{seed}",
+        f"seed: {seed}",
+        f"seed: '{seed}'",
+        f"seed: \"{seed}\"",
+        f'"seed": {seed}',
+        f"'seed': {seed}",
+    )
+    return any(marker in text for marker in seed_markers)
+
+def run_dir_text_matches(run_dir: Path) -> bool:
+    candidate_patterns = (
+        "*.json",
+        "*.yaml",
+        "*.yml",
+        "wandb/**/*.json",
+        "wandb/**/*.yaml",
+        "wandb/**/*.yml",
+        "wandb/**/*.txt",
+    )
+    for pattern in candidate_patterns:
+        for path in run_dir.glob(pattern):
+            if path.is_file() and text_file_matches(path):
+                return True
+    return False
+
 checkpoint_candidates: list[tuple[float, Path]] = []
 for checkpoint in root.rglob("checkpoints/checkpoint_*.pt"):
     run_dir = checkpoint.parent.parent
@@ -59,6 +93,8 @@ for checkpoint in root.rglob("checkpoints/checkpoint_*.pt"):
         if payload_matches(payload, summary):
             matched = True
             break
+    if not matched and run_dir_text_matches(run_dir):
+        matched = True
     if matched:
         checkpoint_candidates.append((checkpoint.stat().st_mtime, checkpoint))
 if checkpoint_candidates:
