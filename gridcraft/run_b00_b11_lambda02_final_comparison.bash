@@ -24,6 +24,8 @@ WANDB_FLAG="${WANDB_FLAG:---wandb}"
 DRY_RUN="${DRY_RUN:-0}"
 HPO_RESULTS_DIR="${HPO_RESULTS_DIR:-hpo_results/world_model}"
 MARL_HPO_RESULTS_DIR="${MARL_HPO_RESULTS_DIR:-hpo_results/marl}"
+COMPARISON_ID="${COMPARISON_ID:-b00_b11_lambda02_final_$(date -u +%Y%m%d_%H%M%S)}"
+WANDB_GROUP="${WANDB_GROUP:-${COMPARISON_ID}}"
 
 MARL_MAX_ITERS="${MARL_MAX_ITERS:-500}"
 MARL_NUM_ENVS="${MARL_NUM_ENVS:-256}"
@@ -94,6 +96,7 @@ echo "  seeds:        ${SEEDS}"
 echo "  agents:       ${NUM_AGENTS}"
 echo "  B11 lambda:   ${B11_LAMBDA}"
 echo "  B11 baseline: ${B11_BASELINE_ID}"
+echo "  comparison:   ${COMPARISON_ID}"
 echo "  external WM:  ${EXTERNAL_WM_RUN_DIR}"
 echo "  run B00:      ${RUN_B00}"
 echo "  run B11:      ${RUN_B11}"
@@ -125,6 +128,8 @@ if [[ "$RUN_B00" == "1" ]]; then
       MARL_EVAL_EVERY_ITERS="$MARL_EVAL_EVERY_ITERS" \
       MARL_EVAL_EPISODES="$MARL_EVAL_EPISODES" \
       MARL_VIDEO_EVERY_ITERS="$MARL_VIDEO_EVERY_ITERS" \
+      COMPARISON_ID="$COMPARISON_ID" \
+      WANDB_GROUP="$WANDB_GROUP" \
       WANDB_FLAG="$WANDB_FLAG" \
       ./run_full_benchmarl_baseline.bash
   done
@@ -164,7 +169,8 @@ if [[ "$RUN_B11" == "1" ]]; then
       MARL_EVAL_EVERY_ITERS="$MARL_EVAL_EVERY_ITERS" \
       MARL_EVAL_EPISODES="$MARL_EVAL_EPISODES" \
       MARL_VIDEO_EVERY_ITERS="$MARL_VIDEO_EVERY_ITERS" \
-      WANDB_GROUP="${WANDB_GROUP:-B00_B11_lambda02_final_comparison}" \
+      COMPARISON_ID="$COMPARISON_ID" \
+      WANDB_GROUP="$WANDB_GROUP" \
       WANDB_FLAG="$WANDB_FLAG" \
       ./run_full_benchmarl_baseline.bash
   done
@@ -182,6 +188,7 @@ if [[ "$RUN_POLICY_EVAL" == "1" ]]; then
     EVAL_POLICY_MODES="$EVAL_POLICY_MODES" \
     EVAL_EPISODES="$EVAL_EPISODES" \
     EVAL_MAX_STEPS="$EVAL_MAX_STEPS" \
+    COMPARISON_ID="$COMPARISON_ID" \
     WANDB_FLAG="$WANDB_FLAG" \
     ./evaluate_trained_policies_hierarchy.bash
 
@@ -194,6 +201,7 @@ if [[ "$RUN_POLICY_EVAL" == "1" ]]; then
     EVAL_POLICY_MODES="$EVAL_POLICY_MODES" \
     EVAL_EPISODES="$EVAL_EPISODES" \
     EVAL_MAX_STEPS="$EVAL_MAX_STEPS" \
+    COMPARISON_ID="$COMPARISON_ID" \
     WANDB_FLAG="$WANDB_FLAG" \
     ./evaluate_b11_mambpo_lambda_ablation.bash
 else
@@ -205,6 +213,9 @@ if [[ "$RUN_ANALYSIS" == "1" ]]; then
   run_cmd "$PYTHON_BIN" analyze_b00_b10_lstm_comparison.py \
     --eval-root policy_hierarchy_eval \
     --baselines "B00_model-free-control,${B11_BASELINE_ID}" \
+    --comparison-id "$COMPARISON_ID" \
+    --latest-per-baseline-seed \
+    --require-seeds 3 \
     --main-mode "temp_0.5" \
     --out-dir "$ANALYSIS_OUT_DIR"
 

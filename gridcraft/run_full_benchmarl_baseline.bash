@@ -10,6 +10,7 @@ WANDB_FLAG="${WANDB_FLAG---wandb}"
 RUN_NAME="${RUN_NAME:-${BASELINE_ID}_a${NUM_AGENTS}_full_seed${SEED}}"
 WANDB_RUN_ID="${WANDB_RUN_ID:-${RUN_NAME}_$(date +%Y%m%d_%H%M%S)}"
 WANDB_GROUP="${WANDB_GROUP:-${BASELINE_ID}}"
+COMPARISON_ID="${COMPARISON_ID:-}"
 DRY_RUN="${DRY_RUN:-0}"
 EXTERNAL_WM_RUN_DIR="${EXTERNAL_WM_RUN_DIR:-${WM_RUN_DIR:-}}"
 WM_EXTERNAL_REUSED=0
@@ -602,6 +603,7 @@ if [[ "${MARL_CMD[1]}" == "run_benchmarl_marl_gridcraft.py" ]]; then
     --wm-external-run-dir "${EXTERNAL_WM_RUN_DIR:-}"
     --wm-external-checkpoint-checksum "$WM_EXTERNAL_CHECKPOINT_CHECKSUM"
     --mambpo-imagination-mode "$MAMBPO_IMAGINATION_MODE"
+    --comparison-id "$COMPARISON_ID"
   )
   if [[ "$MARL_LSTM_COMPILE" == "1" ]]; then
     MARL_CMD+=(--marl-lstm-compile)

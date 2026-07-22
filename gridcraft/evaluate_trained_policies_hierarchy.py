@@ -174,6 +174,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wandb-project", default=os.environ.get("WANDB_PROJECT", "ns-mawm-gridcraft"))
     parser.add_argument("--wandb-name", default=None)
     parser.add_argument("--wandb-group", default=None)
+    parser.add_argument("--comparison-id", default=os.environ.get("COMPARISON_ID", ""))
     return parser.parse_args()
 
 
@@ -268,8 +269,15 @@ def log_wandb(args: argparse.Namespace, rows: list[dict[str, Any]], out_dir: Pat
         project=args.wandb_project,
         name=args.wandb_name or f"{args.baseline_id}_policy_hierarchy_eval_seed{args.seed}",
         group=args.wandb_group,
+        tags=[
+            "gridcraft",
+            "policy-hierarchy-eval",
+            args.baseline_id,
+            *([f"comparison:{args.comparison_id}"] if args.comparison_id else []),
+        ],
         config={
             "baseline_id": args.baseline_id,
+            "comparison_id": args.comparison_id,
             "seed": args.seed,
             "num_agents": args.num_agents,
             "checkpoint": args.checkpoint,
@@ -342,6 +350,7 @@ def main() -> None:
         row = evaluate_mode(experiment, mode=mode, episodes=args.episodes, max_steps=args.max_steps)
         row.update({
             "baseline_id": args.baseline_id,
+            "comparison_id": args.comparison_id,
             "seed": args.seed,
             "num_agents": args.num_agents,
             "checkpoint": str(checkpoint),

@@ -17,6 +17,7 @@ WANDB_PROJECT="${WANDB_PROJECT:-ns-mawm-gridcraft}"
 OUT_DIR="${OUT_DIR:-policy_hierarchy_eval}"
 CHECKPOINT_ROOT="${CHECKPOINT_ROOT:-runs_benchmarl/native_marl}"
 ALLOW_CHECKPOINT_FALLBACK="${ALLOW_CHECKPOINT_FALLBACK:-0}"
+COMPARISON_ID="${COMPARISON_ID:-}"
 
 find_latest_checkpoint() {
   local seed="$1"
@@ -188,6 +189,7 @@ for seed in $SEEDS; do
     --wandb-project "$WANDB_PROJECT" \
     --wandb-name "${BASELINE_ID}_a${NUM_AGENTS}_seed${seed}_policy_hierarchy_eval" \
     --wandb-group "${BASELINE_ID}_policy_hierarchy_eval" \
+    --comparison-id "$COMPARISON_ID" \
     $WANDB_FLAG
 done
 

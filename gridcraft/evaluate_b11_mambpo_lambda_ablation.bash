@@ -12,6 +12,7 @@ EVAL_POLICY_MODES="${EVAL_POLICY_MODES:-deterministic,mode,temp_1.0,temp_0.5,tem
 WANDB_FLAG="${WANDB_FLAG---wandb}"
 CHECKPOINT_ROOT="${CHECKPOINT_ROOT:-runs_benchmarl/native_marl}"
 OUT_DIR="${OUT_DIR:-policy_hierarchy_eval}"
+COMPARISON_ID="${COMPARISON_ID:-}"
 
 lambda_suffix() {
   "$PYTHON_BIN" - "$1" <<'PY'
@@ -135,6 +136,7 @@ for lambda_value in $LAMBDA_VALUES; do
     EVAL_POLICY_MODES="$EVAL_POLICY_MODES" \
     EVAL_EPISODES="$EVAL_EPISODES" \
     OUT_DIR="$OUT_DIR" \
+    COMPARISON_ID="$COMPARISON_ID" \
     WANDB_FLAG="$WANDB_FLAG" \
     "${checkpoint_args[@]}" \
     ./evaluate_trained_policies_hierarchy.bash

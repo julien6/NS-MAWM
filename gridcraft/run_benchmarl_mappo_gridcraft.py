@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -133,6 +134,7 @@ def main() -> None:
     parser.add_argument("--wandb-name", default=None)
     parser.add_argument("--wandb-group", default=None)
     parser.add_argument("--wandb-project", default=os.environ.get("WANDB_PROJECT", "ns-mawm-gridcraft"))
+    parser.add_argument("--comparison-id", default=os.environ.get("COMPARISON_ID", ""))
     parser.add_argument("--wandb-step-offset", type=int, default=int(os.environ.get("WANDB_STEP_OFFSET", "0")))
     parser.add_argument("--wandb-videos", action="store_true", default=True)
     parser.add_argument("--no-wandb-videos", dest="wandb_videos", action="store_false")
@@ -331,9 +333,16 @@ def main() -> None:
             **({"id": args.wandb_id, "resume": "allow"} if args.wandb_id else {}),
             **({"name": args.wandb_name} if args.wandb_name else {}),
             **({"group": args.wandb_group} if args.wandb_group else {}),
-            "tags": ["gridcraft", args.algorithm, "real-vgridcraft", args.baseline_id or "baseline-unknown"],
+            "tags": [
+                "gridcraft",
+                args.algorithm,
+                "real-vgridcraft",
+                args.baseline_id or "baseline-unknown",
+                *([f"comparison:{args.comparison_id}"] if args.comparison_id else []),
+            ],
             "config": {
                 "baseline_id": args.baseline_id,
+                "comparison_id": args.comparison_id,
                 "algorithm": args.algorithm,
                 "environment_dynamics_version": VGridcraftConfig.environment_dynamics_version,
                 "reward_schema_version": VGridcraftConfig.reward_schema_version,
@@ -525,6 +534,32 @@ def write_marl_run_summary(args, experiment) -> None:
         key=lambda path: path.stat().st_mtime,
     )
     checkpoint_path = str(checkpoint_candidates[-1]) if checkpoint_candidates else None
+    required_metric_keys = (
+        "MARL Evaluation/eval_real_reward_auc",
+        "MARL Evaluation/eval_real_reward_curve_mean",
+        "MARL Evaluation/eval_real_reward_stability_std",
+        "MARL Evaluation/eval_real_reward_point_count",
+        "MARL Evaluation/eval_imagined_reward",
+        "MARL Evaluation/real_imagined_reward_gap",
+        "MARL Training/imagined_batch_size",
+        "MARL Training/imagination_used_for_training",
+    )
+    if "MARL Evaluation/eval_real_reward_point_count" not in metrics:
+        n_iters = metrics.get("n_iters_performed")
+        if isinstance(n_iters, (int, float)):
+            metrics["MARL Evaluation/eval_real_reward_point_count"] = float(n_iters)
+    if args.algorithm == "mambpo":
+        imagination_used = int(args.mambpo_imagination_mode == "enabled" and args.mb_lambda_imagined > 0.0)
+        metrics.setdefault("MARL Training/imagination_used_for_training", imagination_used)
+        metrics.setdefault(
+            "MARL Training/imagined_batch_size",
+            0.0 if not imagination_used else float(args.mb_world_model_batch_size),
+        )
+    missing_marl_metrics = [key for key in required_metric_keys if key not in metrics]
+    for key in missing_marl_metrics:
+        metrics[key] = None
+    created_at = datetime.now(timezone.utc).isoformat()
+    external_wm_run_dir = args.wm_external_run_dir or args.wm_run_dir
     path = save_root / f"{run_name}_marl_summary.json"
     with path.open("w") as handle:
         json.dump(
@@ -532,12 +567,26 @@ def write_marl_run_summary(args, experiment) -> None:
                 "baseline_id": args.baseline_id,
                 "algorithm": args.algorithm,
                 "seed": args.seed,
+                "comparison_id": args.comparison_id,
+                "created_at": created_at,
+                "checkpoint_path": checkpoint_path,
+                "marl_model": args.marl_model,
+                "external_wm_run_dir": external_wm_run_dir,
+                "mb_lambda_imagined": args.mb_lambda_imagined,
+                "imagination_used_for_training": metrics.get("MARL Training/imagination_used_for_training"),
+                "missing_marl_metrics": missing_marl_metrics,
                 "config": {
                     "baseline_id": args.baseline_id,
+                    "comparison_id": args.comparison_id,
                     "algorithm": args.algorithm,
                     "seed": args.seed,
+                    "marl_model": args.marl_model,
                     "save_folder": args.save_folder,
                     "checkpoint_path": checkpoint_path,
+                    "created_at": created_at,
+                    "external_wm_run_dir": external_wm_run_dir,
+                    "mb_lambda_imagined": args.mb_lambda_imagined,
+                    "imagination_used_for_training": metrics.get("MARL Training/imagination_used_for_training"),
                 },
                 "environment_dynamics_version": VGridcraftConfig.environment_dynamics_version,
                 "reward_schema_version": VGridcraftConfig.reward_schema_version,
@@ -861,6 +910,14 @@ def log_marl_evaluation_video(args, policy=None, iteration=None):
             resume="allow" if args.wandb_id else None,
             name=args.wandb_name,
             group=args.wandb_group,
+            tags=[
+                "gridcraft",
+                args.algorithm,
+                "real-vgridcraft",
+                args.baseline_id or "baseline-unknown",
+                *([f"comparison:{args.comparison_id}"] if args.comparison_id else []),
+            ],
+            config={"baseline_id": args.baseline_id, "comparison_id": args.comparison_id},
         )
         created_run = True
     try:
