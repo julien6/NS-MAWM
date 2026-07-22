@@ -270,7 +270,8 @@ def main() -> None:
             final_eval_step = args.rnn_steps + 1
             logger.log(metrics, step=final_eval_step, namespace="wm_evaluation")
             log_pstr_rvr_table(logger, pstr_rows, step=final_eval_step)
-            print("=== World Model phase 3/3: structured video skipped in v1 ===", flush=True)
+            print("=== World Model phase 3/3: final structured video ===", flush=True)
+            log_structured_world_model_video(logger, args, config, structured, device, step=final_eval_step)
             logger.log_summary(metrics, namespace="wm_evaluation")
         else:
             print("=== World Model phase 1/5: VAE training/cache ===", flush=True)
@@ -1037,6 +1038,9 @@ def train_structured_world_model(data, args, device, checkpoint_dir: Path, eval_
                 f"step={step} grid_mismatch={metrics.get('grid_mismatch', float('nan')):.4f} "
                 f"reward_mae={metrics.get('reward_mae', float('nan')):.4f}"
             )
+            if args.video_every and step % args.video_every == 0:
+                progress.write(f"[structured wm] logging comparison video step={step}")
+                log_structured_world_model_video(logger, args, args_to_config(args), model, device, step=step)
     torch.save(model.state_dict(), checkpoint_dir / "structured_wm.pt")
     save_world_model_config(checkpoint_dir, args)
     print(f"[structured wm] saved final checkpoint to {checkpoint_dir / 'structured_wm.pt'}", flush=True)
@@ -1882,6 +1886,96 @@ def record_world_model_video(args, config, vae, rnn, device):
             z = vae.encode(projected, sample=False)
         else:
             z = pred_z
+        if episode_done:
+            break
+    env.close()
+    return frames
+
+
+@torch.no_grad()
+def log_structured_world_model_video(logger, args, config, model, device, step=None):
+    if not should_log_wandb_videos(args):
+        return
+    try:
+        frames = record_structured_world_model_video(args, config, model, device)
+        logged = logger.log_video(
+            "video_real_vs_imagined",
+            frames,
+            fps=args.video_fps,
+            step=step,
+            namespace="wm_evaluation",
+        )
+        logger.log(
+            {
+                "video_real_vs_imagined_logged": int(bool(logged)),
+                "video_real_vs_imagined_frame_count": int(len(frames)),
+            },
+            step=step,
+            namespace="wm_evaluation",
+        )
+    except Exception as exc:
+        logger.log(
+            {
+                "video_real_vs_imagined_logged": 0,
+                "video_real_vs_imagined_generation_failed": 1,
+                "video_real_vs_imagined_error": str(exc),
+            },
+            step=step,
+            namespace="wm_evaluation",
+        )
+
+
+@torch.no_grad()
+def record_structured_world_model_video(args, config, model, device):
+    env = VectorizedGridcraftEnv(num_envs=1, num_agents=config.num_agents, device=device, seed=args.seed + 9100, config=config)
+    generator = torch.Generator(device=device)
+    generator.manual_seed(args.seed + 9101)
+    frames = []
+    real_obs = env.reset()
+    imagined_obs = real_obs["vector"].to(device)
+    imagined_tabular = observation_to_joint_tabular(imagined_obs[0])
+    hidden = None
+    cumulative_reward = 0.0
+    max_steps = max(1, int(args.video_max_steps))
+    initial_frame = env.render(
+        env_index=0,
+        mode="rgb_array",
+        tabular_observations=imagined_tabular,
+        overlay_info={
+            "step": 0,
+            "action": "initial",
+            "reward": 0.0,
+            "cumulative_reward": 0.0,
+            "done": False,
+        },
+    )
+    frames.append(initial_frame[:, :, :3] if initial_frame.shape[-1] == 4 else initial_frame)
+    for step_index in range(max_steps):
+        action = torch.randint(0, config.action_size, (1, config.num_agents), generator=generator, device=device)
+        outputs, hidden = model.step(imagined_obs.float(), action.long(), hidden)
+        imagined_obs = model.decode_to_obs_vector(outputs).detach()
+        imagined_tabular = observation_to_joint_tabular(imagined_obs[0])
+        real_obs, reward, done, truncated, _ = env.step(action)
+        joint_action = {
+            f"agent_{agent_idx}": int(action[0, agent_idx].detach().cpu())
+            for agent_idx in range(config.num_agents)
+        }
+        reward_value = float(reward.mean().detach().cpu())
+        cumulative_reward += reward_value
+        episode_done = bool((done | truncated).all())
+        frame = env.render(
+            env_index=0,
+            mode="rgb_array",
+            tabular_observations=imagined_tabular,
+            overlay_info={
+                "step": step_index + 1,
+                "action": format_joint_action(joint_action),
+                "reward": reward_value,
+                "cumulative_reward": cumulative_reward,
+                "done": episode_done,
+            },
+        )
+        frames.append(frame[:, :, :3] if frame.shape[-1] == 4 else frame)
         if episode_done:
             break
     env.close()

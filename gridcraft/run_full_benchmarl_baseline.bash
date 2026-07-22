@@ -365,6 +365,7 @@ WM_CMD=(
   --wandb-id "$WANDB_RUN_ID"
   --wandb-name "$RUN_NAME"
   --wandb-group "$WANDB_GROUP"
+  --comparison-id "$COMPARISON_ID"
   "${VAE_CACHE_ARGS[@]}"
 )
 if [[ -n "${WM_HPO_SCORE:-}" ]]; then

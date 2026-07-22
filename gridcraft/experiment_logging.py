@@ -123,6 +123,7 @@ def add_wandb_args(parser):
   parser.add_argument("--wandb-id", default=os.environ.get("WANDB_RUN_ID"))
   parser.add_argument("--wandb-mode", default=os.environ.get("WANDB_MODE"))
   parser.add_argument("--wandb-tags", nargs="*", default=[])
+  parser.add_argument("--comparison-id", default=os.environ.get("COMPARISON_ID", ""))
   panel_group = parser.add_mutually_exclusive_group()
   panel_group.add_argument("--wandb-info-panels", dest="wandb_info_panels", action="store_true", default=True)
   panel_group.add_argument("--no-wandb-info-panels", dest="wandb_info_panels", action="store_false")
@@ -140,6 +141,14 @@ def should_log_wandb_videos(args):
 
 def logger_from_args(args, config=None, default_group=None, default_name=None, tags=None, info_sections=None, out_dir=None):
   merged_tags = list(tags or []) + list(getattr(args, "wandb_tags", []) or [])
+  comparison_id = getattr(args, "comparison_id", "")
+  if comparison_id:
+    merged_tags.append(f"comparison:{comparison_id}")
+  full_config = {**(config or {})}
+  if comparison_id:
+    full_config["comparison_id"] = comparison_id
+  if getattr(args, "wandb_id", None):
+    full_config["wandb_id"] = getattr(args, "wandb_id", None)
   return ExperimentLogger(
     enabled=bool(getattr(args, "wandb", False)),
     project=getattr(args, "wandb_project", "ns-mawm-gridcraft"),
@@ -147,7 +156,7 @@ def logger_from_args(args, config=None, default_group=None, default_name=None, t
     group=getattr(args, "wandb_group", None) or default_group,
     name=getattr(args, "wandb_name", None) or default_name,
     tags=merged_tags,
-    config={**(config or {}), **({"wandb_id": getattr(args, "wandb_id", None)} if getattr(args, "wandb_id", None) else {})},
+    config=full_config,
     mode=getattr(args, "wandb_mode", None),
     out_dir=out_dir or "trainlog",
     info_panels=bool(getattr(args, "wandb_info_panels", True)),
