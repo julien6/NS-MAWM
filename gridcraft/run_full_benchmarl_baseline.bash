@@ -140,6 +140,7 @@ MARL_FINETUNE_ITERS="${MARL_FINETUNE_ITERS:-0}"
 MARL_MEMORY_SIZE="${MARL_MEMORY_SIZE:-1000000}"
 MARL_HPO_RESULTS_DIR="${MARL_HPO_RESULTS_DIR:-hpo_results/marl}"
 REUSE_MARL_HPO_CONFIG="${REUSE_MARL_HPO_CONFIG:-1}"
+REUSE_MAMBPO_IMAGINATION_HPO="${REUSE_MAMBPO_IMAGINATION_HPO:-1}"
 REQUIRE_MARL_HPO="${REQUIRE_MARL_HPO:-0}"
 REQUIRED_MARL_HPO_STAGE="${REQUIRED_MARL_HPO_STAGE:-}"
 MARL_HPO_CORE_REUSED="${MARL_HPO_CORE_REUSED:-0}"
@@ -260,6 +261,9 @@ fi
 
 if [[ "$REUSE_MARL_HPO_CONFIG" == "1" ]]; then
   MARL_HPO_EXPORT_CMD=("$PYTHON_BIN" marl_hpo_registry.py export-env --baseline-id "$BASELINE_ID" --downstream-algo "$MODEL_BASED_DOWNSTREAM_ALGO" --root "$MARL_HPO_RESULTS_DIR")
+  if [[ "$MODEL_BASED" == "1" && "$MODEL_BASED_DOWNSTREAM_ALGO" == "mambpo" && "$REUSE_MAMBPO_IMAGINATION_HPO" != "1" ]]; then
+    MARL_HPO_EXPORT_CMD+=(--family masac_core)
+  fi
   if [[ "$REQUIRE_MARL_HPO" == "1" ]]; then
     MARL_HPO_EXPORT_CMD+=(--require)
   fi
@@ -284,7 +288,7 @@ if [[ "$REUSE_MARL_HPO_CONFIG" == "1" ]]; then
     echo "[marl-hpo] using mambpo_imagination config: ${MARL_HPO_IMAGINATION_CONFIG_PATH} (score=${MARL_HPO_IMAGINATION_SCORE})"
   fi
 fi
-echo "[marl-hpo] strict=${REQUIRE_MARL_HPO} core_reused=${MARL_HPO_CORE_REUSED:-0} imagination_reused=${MARL_HPO_IMAGINATION_REUSED:-0} imagination_mode=${MAMBPO_IMAGINATION_MODE}"
+echo "[marl-hpo] strict=${REQUIRE_MARL_HPO} core_reused=${MARL_HPO_CORE_REUSED:-0} imagination_reused=${MARL_HPO_IMAGINATION_REUSED:-0} reuse_imagination_hpo=${REUSE_MAMBPO_IMAGINATION_HPO} imagination_mode=${MAMBPO_IMAGINATION_MODE}"
 
 print_cmd() {
   printf '[dry-run]'
