@@ -111,6 +111,18 @@ if [[ -z "${MARL_HPO_WM_RUN_DIR:-}" ]]; then
 fi
 
 config_for_family() {
+  if [[ "${MARL_HPO_CENTERED:-0}" == "1" ]]; then
+    case "$1" in
+      masac_core)
+        echo "sweeps/marl_masac_core_centered_hpo.yaml"
+        return 0
+        ;;
+      mambpo_imagination)
+        echo "sweeps/marl_mambpo_imagination_centered_hpo.yaml"
+        return 0
+        ;;
+    esac
+  fi
   case "$1" in
     masac_core) echo "sweeps/marl_masac_core_hpo.yaml" ;;
     mambpo_imagination) echo "sweeps/marl_mambpo_imagination_hpo.yaml" ;;

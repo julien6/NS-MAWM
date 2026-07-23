@@ -1,0 +1,70 @@
+program: sweep_benchmarl_marl_hpo.py
+method: bayes
+metric:
+  name: marl_hpo_score
+  goal: maximize
+parameters:
+  hpo_family:
+    value: mambpo_imagination
+  baseline_id:
+    value: B11_structured_neural_k0.0
+  num_agents:
+    value: 3
+  device:
+    value: cuda
+  seed:
+    values: [1]
+  num_envs:
+    value: 128
+  max_steps:
+    value: 500
+  max_iters:
+    value: 200
+  eval_every_iters:
+    value: 10
+  eval_episodes:
+    value: 4
+  video_every_iters:
+    value: 0
+  frames_per_batch:
+    value: 4096
+  train_batch_size:
+    value: 512
+  optimizer_steps:
+    value: 4
+  model_type:
+    value: lstm
+  hidden_size:
+    value: 256
+  lstm_layers:
+    value: 1
+  lstm_dropout:
+    value: 0.0
+  lr:
+    value: 0.00005
+  gamma:
+    value: 0.99
+  polyak_tau:
+    value: 0.005
+  alpha_init:
+    value: 0.05
+  discrete_target_entropy_weight:
+    value: 0.01
+  entropy_profile:
+    value: low_entropy_finetune
+  memory_size:
+    value: 200000
+  mb_imagined_horizon:
+    values: [1, 3]
+  mb_imagined_branches:
+    values: [2, 4]
+  mb_lambda_imagined:
+    values: [0.1, 0.2, 0.3]
+  mb_world_model_batch_size:
+    values: [512, 1024]
+  mb_world_model_train_epochs:
+    value: 0
+command:
+  - ${env}
+  - ../.venv/bin/python
+  - ${program}

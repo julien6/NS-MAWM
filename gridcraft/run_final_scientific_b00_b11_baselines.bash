@@ -102,16 +102,16 @@ validate_marl_hpo() {
 }
 
 run_missing_hpo_if_requested() {
-  if validate_wm_hpo; then
+  if [[ "${FORCE_WM_HPO:-0}" != "1" ]] && validate_wm_hpo; then
     echo "[preflight] structured_neural_k0.0 WM HPO ${REQUIRED_WM_HPO_STAGE} config is valid."
   elif [[ "$RUN_HPO_IF_MISSING" == "1" ]]; then
     echo "[preflight] structured WM HPO is missing/invalid; running screen -> promote -> final."
     run_cmd env AUTO_RESOURCE_PROFILE="${AUTO_RESOURCE_PROFILE:-0}" RESOURCE_PROFILE="${RESOURCE_PROFILE:-spark_max}" \
-      HPO_STAGE=screen HPO_FAMILIES="structured_neural_k0.0" ./run_world_model_hpo_pipeline.bash
+      HPO_CENTERED="${HPO_CENTERED:-1}" HPO_STAGE=screen HPO_FAMILIES="structured_neural_k0.0" ./run_world_model_hpo_pipeline.bash
     run_cmd env AUTO_RESOURCE_PROFILE="${AUTO_RESOURCE_PROFILE:-0}" RESOURCE_PROFILE="${RESOURCE_PROFILE:-spark_max}" \
-      HPO_STAGE=promote HPO_FAMILIES="structured_neural_k0.0" ./run_world_model_hpo_pipeline.bash
+      HPO_CENTERED="${HPO_CENTERED:-1}" HPO_STAGE=promote HPO_FAMILIES="structured_neural_k0.0" ./run_world_model_hpo_pipeline.bash
     run_cmd env AUTO_RESOURCE_PROFILE="${AUTO_RESOURCE_PROFILE:-0}" RESOURCE_PROFILE="${RESOURCE_PROFILE:-spark_max}" \
-      HPO_STAGE=final HPO_FAMILIES="structured_neural_k0.0" HPO_SEEDS="$SEEDS" HPO_VIDEO_EVERY="$WM_VIDEO_EVERY" ./run_world_model_hpo_pipeline.bash
+      HPO_CENTERED="${HPO_CENTERED:-1}" HPO_STAGE=final HPO_FAMILIES="structured_neural_k0.0" HPO_SEEDS="$SEEDS" HPO_VIDEO_EVERY="$WM_VIDEO_EVERY" ./run_world_model_hpo_pipeline.bash
   elif [[ "$DRY_RUN" == "1" ]]; then
     echo "[dry-run] Missing or invalid final StructuredWM HPO config; continuing to print commands."
   else
@@ -135,16 +135,16 @@ PY
   require_file "${EXTERNAL_WM_RUN_DIR%/}/checkpoints/structured_wm.pt" \
     "EXTERNAL_WM_RUN_DIR=${EXTERNAL_WM_RUN_DIR} does not contain checkpoints/structured_wm.pt"
 
-  if validate_marl_hpo masac_core; then
+  if [[ "${FORCE_MARL_HPO:-0}" != "1" ]] && validate_marl_hpo masac_core; then
     echo "[preflight] masac_core MARL HPO ${REQUIRED_MARL_HPO_STAGE} ${MARL_MODEL} config is valid."
   elif [[ "$RUN_HPO_IF_MISSING" == "1" ]]; then
     echo "[preflight] MASAC-core HPO is missing/invalid; running screen -> promote -> final."
     run_cmd env AUTO_RESOURCE_PROFILE="${AUTO_RESOURCE_PROFILE:-0}" RESOURCE_PROFILE="${RESOURCE_PROFILE:-spark_max}" \
-      MARL_HPO_STAGE=screen MARL_HPO_FAMILIES="masac_core" MARL_HPO_MODEL="$MARL_MODEL" ./run_marl_hpo_pipeline.bash
+      MARL_HPO_CENTERED="${MARL_HPO_CENTERED:-1}" MARL_HPO_STAGE=screen MARL_HPO_FAMILIES="masac_core" MARL_HPO_MODEL="$MARL_MODEL" ./run_marl_hpo_pipeline.bash
     run_cmd env AUTO_RESOURCE_PROFILE="${AUTO_RESOURCE_PROFILE:-0}" RESOURCE_PROFILE="${RESOURCE_PROFILE:-spark_max}" \
-      MARL_HPO_STAGE=promote MARL_HPO_FAMILIES="masac_core" MARL_HPO_MODEL="$MARL_MODEL" ./run_marl_hpo_pipeline.bash
+      MARL_HPO_CENTERED="${MARL_HPO_CENTERED:-1}" MARL_HPO_STAGE=promote MARL_HPO_FAMILIES="masac_core" MARL_HPO_MODEL="$MARL_MODEL" ./run_marl_hpo_pipeline.bash
     run_cmd env AUTO_RESOURCE_PROFILE="${AUTO_RESOURCE_PROFILE:-0}" RESOURCE_PROFILE="${RESOURCE_PROFILE:-spark_max}" \
-      MARL_HPO_STAGE=final MARL_HPO_FAMILIES="masac_core" MARL_HPO_MODEL="$MARL_MODEL" MARL_HPO_SEEDS="$SEEDS" ./run_marl_hpo_pipeline.bash
+      MARL_HPO_CENTERED="${MARL_HPO_CENTERED:-1}" MARL_HPO_STAGE=final MARL_HPO_FAMILIES="masac_core" MARL_HPO_MODEL="$MARL_MODEL" MARL_HPO_SEEDS="$SEEDS" ./run_marl_hpo_pipeline.bash
   elif [[ "$DRY_RUN" == "1" ]]; then
     echo "[dry-run] Missing or invalid final masac_core MARL HPO config for ${MARL_MODEL}; continuing to print commands."
   else
@@ -153,18 +153,18 @@ PY
   fi
 
   if [[ "$B11_USE_MAMBPO_HPO" == "1" ]]; then
-    if validate_marl_hpo mambpo_imagination --external-checkpoint-dir "${EXTERNAL_WM_RUN_DIR%/}/checkpoints"; then
+    if [[ "${FORCE_MARL_HPO:-0}" != "1" ]] && validate_marl_hpo mambpo_imagination --external-checkpoint-dir "${EXTERNAL_WM_RUN_DIR%/}/checkpoints"; then
       echo "[preflight] mambpo_imagination MARL HPO ${REQUIRED_MARL_HPO_STAGE} config is valid for the selected WM."
     elif [[ "$RUN_HPO_IF_MISSING" == "1" ]]; then
       echo "[preflight] MAMBPO-imagination HPO is missing/invalid; running screen -> promote -> final."
       run_cmd env AUTO_RESOURCE_PROFILE="${AUTO_RESOURCE_PROFILE:-0}" RESOURCE_PROFILE="${RESOURCE_PROFILE:-spark_max}" \
-        MARL_HPO_STAGE=screen MARL_HPO_FAMILIES="mambpo_imagination" MARL_HPO_BASELINE_ID="B11_structured_neural_k0.0" \
+        MARL_HPO_CENTERED="${MARL_HPO_CENTERED:-1}" MARL_HPO_STAGE=screen MARL_HPO_FAMILIES="mambpo_imagination" MARL_HPO_BASELINE_ID="B11_structured_neural_k0.0" \
         MARL_HPO_WM_RUN_DIR="$EXTERNAL_WM_RUN_DIR" MARL_HPO_MODEL="$MARL_MODEL" ./run_marl_hpo_pipeline.bash
       run_cmd env AUTO_RESOURCE_PROFILE="${AUTO_RESOURCE_PROFILE:-0}" RESOURCE_PROFILE="${RESOURCE_PROFILE:-spark_max}" \
-        MARL_HPO_STAGE=promote MARL_HPO_FAMILIES="mambpo_imagination" MARL_HPO_BASELINE_ID="B11_structured_neural_k0.0" \
+        MARL_HPO_CENTERED="${MARL_HPO_CENTERED:-1}" MARL_HPO_STAGE=promote MARL_HPO_FAMILIES="mambpo_imagination" MARL_HPO_BASELINE_ID="B11_structured_neural_k0.0" \
         MARL_HPO_WM_RUN_DIR="$EXTERNAL_WM_RUN_DIR" MARL_HPO_MODEL="$MARL_MODEL" ./run_marl_hpo_pipeline.bash
       run_cmd env AUTO_RESOURCE_PROFILE="${AUTO_RESOURCE_PROFILE:-0}" RESOURCE_PROFILE="${RESOURCE_PROFILE:-spark_max}" \
-        MARL_HPO_STAGE=final MARL_HPO_FAMILIES="mambpo_imagination" MARL_HPO_BASELINE_ID="B11_structured_neural_k0.0" \
+        MARL_HPO_CENTERED="${MARL_HPO_CENTERED:-1}" MARL_HPO_STAGE=final MARL_HPO_FAMILIES="mambpo_imagination" MARL_HPO_BASELINE_ID="B11_structured_neural_k0.0" \
         MARL_HPO_WM_RUN_DIR="$EXTERNAL_WM_RUN_DIR" MARL_HPO_MODEL="$MARL_MODEL" MARL_HPO_SEEDS="$SEEDS" ./run_marl_hpo_pipeline.bash
     elif [[ "$DRY_RUN" == "1" ]]; then
       echo "[dry-run] Missing or invalid final mambpo_imagination HPO config for this WM; continuing to print commands."

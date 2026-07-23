@@ -97,6 +97,14 @@ export HPO_VIDEO_EVERY="${HPO_VIDEO_EVERY:-0}"
 export HPO_CURRENT_STAGE="$HPO_STAGE"
 
 config_for_family() {
+  if [[ "${HPO_CENTERED:-0}" == "1" ]]; then
+    case "$1" in
+      structured_neural_k0.0)
+        echo "sweeps/world_model_structured_neural_centered_hpo.yaml"
+        return 0
+        ;;
+    esac
+  fi
   case "$1" in
     neural_k0.0) echo "sweeps/world_model_neural_hpo.yaml" ;;
     structured_neural_k0.0) echo "sweeps/world_model_structured_neural_hpo.yaml" ;;
