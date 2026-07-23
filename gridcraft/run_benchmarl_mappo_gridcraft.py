@@ -446,6 +446,7 @@ def main() -> None:
         config=experiment_config,
         callbacks=[MarlEvaluationVideoCallback(args)] if args.wandb else None,
     )
+    log_wandb_reference_metadata(args)
     if args.wandb and os.environ.get("WANDB_MODE") == "offline":
         print(
             "[wandb] offline mode may create one local directory per process even when "
@@ -454,7 +455,64 @@ def main() -> None:
             flush=True,
         )
     experiment.run()
+    log_wandb_reference_metadata(args)
     write_marl_run_summary(args, experiment)
+
+
+def log_wandb_reference_metadata(args) -> None:
+    if not args.wandb:
+        return
+    try:
+        import wandb
+    except ImportError:
+        return
+    if wandb.run is None:
+        return
+    external_wm_run_dir = args.wm_external_run_dir or args.wm_run_dir or ""
+    external_wm_checkpoint_dir = (
+        str(Path(external_wm_run_dir) / "checkpoints") if external_wm_run_dir else ""
+    )
+    payload = {
+        "comparison_id": args.comparison_id,
+        "baseline_id": args.baseline_id,
+        "algorithm": args.algorithm,
+        "seed": args.seed,
+        "marl_model": args.marl_model,
+        "marl_hpo_core_reused": args.marl_hpo_core_reused,
+        "marl_hpo_core_score": args.marl_hpo_core_score,
+        "marl_hpo_core_config_path": args.marl_hpo_core_config_path,
+        "marl_hpo_core_stage": args.marl_hpo_core_stage,
+        "marl_hpo_imagination_reused": args.marl_hpo_imagination_reused,
+        "marl_hpo_imagination_score": args.marl_hpo_imagination_score,
+        "marl_hpo_imagination_config_path": args.marl_hpo_imagination_config_path,
+        "marl_hpo_imagination_stage": args.marl_hpo_imagination_stage,
+        "marl_hpo_strict_mode": args.marl_hpo_strict_mode,
+        "wm_external_reused": args.wm_external_reused,
+        "wm_external_run_dir": external_wm_run_dir,
+        "wm_external_checkpoint_dir": external_wm_checkpoint_dir,
+        "wm_external_checkpoint_checksum": args.wm_external_checkpoint_checksum,
+        "imagination_external_world_model_used": int(
+            bool(args.wm_run_dir) and args.algorithm in {"mambpo", "mb_mappo"}
+        ),
+        "mambpo_imagination_mode": args.mambpo_imagination_mode,
+        "mb_lambda_imagined": args.mb_lambda_imagined,
+        "imagination_used_for_training": int(
+            args.algorithm == "mambpo"
+            and args.mambpo_imagination_mode == "enabled"
+            and args.mb_lambda_imagined > 0.0
+        ),
+    }
+    clean_payload = {
+        key: value for key, value in payload.items()
+        if value is not None and value != ""
+    }
+    try:
+        wandb.run.config.update(clean_payload, allow_val_change=True)
+    except TypeError:
+        wandb.run.config.update(clean_payload)
+    for key, value in clean_payload.items():
+        wandb.run.summary[f"General/{key}"] = value
+    wandb.log({f"General/{key}": value for key, value in clean_payload.items()}, step=0, commit=False)
 
 
 def warn_legacy_marl_names(algorithm: str) -> None:
