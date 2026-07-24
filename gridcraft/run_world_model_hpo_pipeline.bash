@@ -31,7 +31,11 @@ case "$HPO_STAGE" in
   standard) HPO_STAGE="promote" ;;
   serious) HPO_STAGE="final" ;;
 esac
+USER_SET_HPO_TOP_K="${HPO_TOP_K+x}"
 HPO_TOP_K="${HPO_TOP_K:-3}"
+if [[ "${HPO_CENTERED:-0}" == "1" && -z "$USER_SET_HPO_TOP_K" ]]; then
+  HPO_TOP_K=1
+fi
 HPO_SEEDS="${HPO_SEEDS:-${HPO_SEED:-${SEED:-1}}}"
 HPO_BENCHMARK_FIRST="${HPO_BENCHMARK_FIRST:-0}"
 FORCE_WM_HPO="${FORCE_WM_HPO:-0}"
@@ -52,33 +56,62 @@ fi
 case "$HPO_STAGE" in
   screen)
     HPO_COUNT="${HPO_COUNT:-3}"
-    export HPO_EPISODES="${HPO_EPISODES:-512}"
-    export HPO_MAX_STEPS="${HPO_MAX_STEPS:-64}"
-    export HPO_NUM_ENVS="${HPO_NUM_ENVS:-128}"
-    export HPO_VAE_STEPS="${HPO_VAE_STEPS:-1000}"
-    export HPO_RNN_STEPS="${HPO_RNN_STEPS:-1000}"
-    export HPO_EVAL_EVERY="${HPO_EVAL_EVERY:-500}"
+    if [[ "${HPO_CENTERED:-0}" == "1" ]]; then
+      export HPO_EPISODES="${HPO_EPISODES:-512}"
+      export HPO_MAX_STEPS="${HPO_MAX_STEPS:-64}"
+      export HPO_NUM_ENVS="${HPO_NUM_ENVS:-128}"
+      export HPO_VAE_STEPS="${HPO_VAE_STEPS:-1000}"
+      export HPO_RNN_STEPS="${HPO_RNN_STEPS:-1000}"
+      export HPO_EVAL_EVERY="${HPO_EVAL_EVERY:-500}"
+    else
+      export HPO_EPISODES="${HPO_EPISODES:-512}"
+      export HPO_MAX_STEPS="${HPO_MAX_STEPS:-64}"
+      export HPO_NUM_ENVS="${HPO_NUM_ENVS:-128}"
+      export HPO_VAE_STEPS="${HPO_VAE_STEPS:-1000}"
+      export HPO_RNN_STEPS="${HPO_RNN_STEPS:-1000}"
+      export HPO_EVAL_EVERY="${HPO_EVAL_EVERY:-500}"
+    fi
     export HPO_HORIZONS="${HPO_HORIZONS:-1 5 10}"
     ;;
   promote)
     HPO_COUNT="${HPO_COUNT:-${HPO_TOP_K}}"
-    export HPO_EPISODES="${HPO_EPISODES:-4096}"
-    export HPO_MAX_STEPS="${HPO_MAX_STEPS:-256}"
-    export HPO_NUM_ENVS="${HPO_NUM_ENVS:-256}"
-    export HPO_VAE_STEPS="${HPO_VAE_STEPS:-10000}"
-    export HPO_RNN_STEPS="${HPO_RNN_STEPS:-10000}"
-    export HPO_EVAL_EVERY="${HPO_EVAL_EVERY:-2500}"
-    export HPO_HORIZONS="${HPO_HORIZONS:-1 5 10 25}"
+    if [[ "${HPO_CENTERED:-0}" == "1" ]]; then
+      export HPO_EPISODES="${HPO_EPISODES:-2048}"
+      export HPO_MAX_STEPS="${HPO_MAX_STEPS:-128}"
+      export HPO_NUM_ENVS="${HPO_NUM_ENVS:-128}"
+      export HPO_VAE_STEPS="${HPO_VAE_STEPS:-2000}"
+      export HPO_RNN_STEPS="${HPO_RNN_STEPS:-2000}"
+      export HPO_EVAL_EVERY="${HPO_EVAL_EVERY:-1000}"
+      export HPO_HORIZONS="${HPO_HORIZONS:-1 5 10 25}"
+    else
+      export HPO_EPISODES="${HPO_EPISODES:-4096}"
+      export HPO_MAX_STEPS="${HPO_MAX_STEPS:-256}"
+      export HPO_NUM_ENVS="${HPO_NUM_ENVS:-256}"
+      export HPO_VAE_STEPS="${HPO_VAE_STEPS:-10000}"
+      export HPO_RNN_STEPS="${HPO_RNN_STEPS:-10000}"
+      export HPO_EVAL_EVERY="${HPO_EVAL_EVERY:-2500}"
+      export HPO_HORIZONS="${HPO_HORIZONS:-1 5 10 25}"
+    fi
     ;;
   final)
     HPO_COUNT="${HPO_COUNT:-${HPO_TOP_K}}"
-    export HPO_EPISODES="${HPO_EPISODES:-30000}"
-    export HPO_MAX_STEPS="${HPO_MAX_STEPS:-500}"
-    export HPO_NUM_ENVS="${HPO_NUM_ENVS:-1024}"
-    export HPO_VAE_STEPS="${HPO_VAE_STEPS:-50000}"
-    export HPO_RNN_STEPS="${HPO_RNN_STEPS:-50000}"
-    export HPO_EVAL_EVERY="${HPO_EVAL_EVERY:-5000}"
-    export HPO_HORIZONS="${HPO_HORIZONS:-1 5 10 25 50 100}"
+    if [[ "${HPO_CENTERED:-0}" == "1" ]]; then
+      export HPO_EPISODES="${HPO_EPISODES:-4096}"
+      export HPO_MAX_STEPS="${HPO_MAX_STEPS:-256}"
+      export HPO_NUM_ENVS="${HPO_NUM_ENVS:-128}"
+      export HPO_VAE_STEPS="${HPO_VAE_STEPS:-3000}"
+      export HPO_RNN_STEPS="${HPO_RNN_STEPS:-3000}"
+      export HPO_EVAL_EVERY="${HPO_EVAL_EVERY:-1500}"
+      export HPO_HORIZONS="${HPO_HORIZONS:-1 5 10 25 50}"
+    else
+      export HPO_EPISODES="${HPO_EPISODES:-30000}"
+      export HPO_MAX_STEPS="${HPO_MAX_STEPS:-500}"
+      export HPO_NUM_ENVS="${HPO_NUM_ENVS:-1024}"
+      export HPO_VAE_STEPS="${HPO_VAE_STEPS:-50000}"
+      export HPO_RNN_STEPS="${HPO_RNN_STEPS:-50000}"
+      export HPO_EVAL_EVERY="${HPO_EVAL_EVERY:-5000}"
+      export HPO_HORIZONS="${HPO_HORIZONS:-1 5 10 25 50 100}"
+    fi
     ;;
   *)
     echo "Unsupported HPO_STAGE=${HPO_STAGE}; expected screen, promote, final, auto, quick, standard, or serious." >&2
