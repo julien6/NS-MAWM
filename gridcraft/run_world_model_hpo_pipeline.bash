@@ -213,15 +213,7 @@ PY
       echo "[wm-hpo] ${family}: compatible ${HPO_STAGE} config found at ${best_config}; skipping."
       continue
     fi
-    echo "[wm-hpo] ${family}: existing config is not valid for stage=${HPO_STAGE}, agents=${HPO_NUM_AGENTS}; archiving pre-fix results."
-    archive_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-    archive_root="${HPO_RESULTS_DIR}/pre_reward_hierarchy_fix/${archive_stamp}/${family}"
-    mkdir -p "$archive_root"
-    mv "$best_config" "${archive_root}/best_config.json"
-    if [[ -d "${HPO_TRIALS_DIR}/${family}" ]]; then
-      mv "${HPO_TRIALS_DIR}/${family}" "${archive_root}/trials"
-    fi
-    mkdir -p "${HPO_TRIALS_DIR}/${family}"
+    echo "[wm-hpo] ${family}: existing config is not valid for stage=${HPO_STAGE}, agents=${HPO_NUM_AGENTS}; keeping prior trials and continuing stage promotion."
   fi
 
   trial_glob_count="$(find "${HPO_TRIALS_DIR}/${family}" -name hpo_trial_summary.json 2>/dev/null | wc -l | tr -d ' ')"
