@@ -21,12 +21,6 @@ world_model:
   batch_size: 256
   predict_delta_obs: true
   predict_done: false
-  external_model_type: "mlp"
-  external_checkpoint_dir: null
-  external_ns_variant: "neural"
-  external_ns_coverage: 0.0
-  external_num_agents: 1
-  external_enabled_pstr_rules: ""
 
 imagined_rollouts:
   enabled: true

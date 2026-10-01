@@ -1,131 +1,58 @@
-# Python bytecode and caches
+# Python and build artifacts
 __pycache__/
 *.py[cod]
-*$py.class
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.pyre/
-.pytype/
-.hypothesis/
-
-# Packaging and build artifacts
 *.egg-info/
 .eggs/
 build/
 dist/
-wheelhouse/
-pip-wheel-metadata/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.ipynb_checkpoints/
 
-# Virtual environments
-venv/
+# Local environments and secrets
 .venv/
-env/
-.env/
-envs/venv/
-
-# Local environment variables and secrets
+.venv_*/
+venv/
+.env
 .env.*
 !.env.example
 *.local
 
-# Experiment outputs
-runs/
+# Generated experiment data
 outputs/
+runs/
 multirun/
-experiments/runs/
-
-# Gridcraft World Models generated data
-gridcraft/record/
-gridcraft/series/
-gridcraft/tf_models/
-gridcraft/tf_vae/
-gridcraft/tf_rnn/
-gridcraft/tf_initial_z/
-gridcraft/log/
-gridcraft/trainlog/
-gridcraft/runs_benchmarl/
-gridcraft/runs_benchmarl_hpo/
-gridcraft/runs_benchmarl_marl_hpo/
-gridcraft/datasets/
-gridcraft/shared_models/
-gridcraft/shared_models_hpo/
-gridcraft/hpo_results/
-gridcraft/*.npz
-gridcraft/*.npy
-
-# World Models generated data
-carracing/record/
-carracing/series/
-carracing/tf_vae/
-carracing/tf_rnn/
-carracing/tf_initial_z/
-carracing/trainlog/
-doomrnn/record/
-doomrnn/series/
-doomrnn/tf_vae/
-doomrnn/tf_rnn/
-doomrnn/tf_initial_z/
-doomrnn/trainlog/
 logs/
 artifacts/
 checkpoints/
-*.h5
-*.keras
-*.ckpt
-*.pt
-*.pth
-*.onnx
-
-# Tracking/logging backends
 wandb/
 tensorboard/
 tb_logs/
 events.out.tfevents.*
+*.pt
+*.pth
+*.ckpt
+*.onnx
 
-# Reproduction data and generated reports
-data/
-datasets/
-results/
-reports/
-figures/
-tables/
-*.npz.tmp
-*.npy.tmp
-*.csv.tmp
-*.jsonl
-
-# Installed external environments and third-party repos
+# Optional upstream renderer and StarCraft II installation
 Gridcraft/
-overcooked_ai/
-smac/
 StarCraftII/
-vizdoom_scenarios/
-envs/GridCraft/
-envs/overcooked_ai/
-envs/smac/
-envs/StarCraftII/
-
-# StarCraft / SMAC runtime byproducts
 Replays/
 *.SC2Replay
 stableid.json
 
-# Native and compiler artifacts
+# Native artifacts and editor files
 *.so
 *.dylib
 *.dll
 *.o
 *.a
-
-# Notebook and coverage artifacts
-.ipynb_checkpoints/
-.coverage
-.coverage.*
-htmlcov/
-coverage.xml
-
-# OS and editor noise
 .DS_Store
 Thumbs.db
 *.swp
@@ -133,8 +60,6 @@ Thumbs.db
 *~
 .idea/
 .vscode/
-
-# Temporary files
 tmp/
 temp/
 *.tmp

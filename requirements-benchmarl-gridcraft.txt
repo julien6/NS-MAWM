@@ -1,8 +1,0 @@
-torch
-torchrl
-tensordict
-numpy
-wandb
-moviepy
-imageio
-imageio-ffmpeg

@@ -1,0 +1,2600 @@
+[
+  {
+    "id": "FR-LLM-12",
+    "priority": "M",
+    "requirement": "- **FR-LLM-12 (M) \\[NEW C9\\]** A leakage audit shall compare prompt text against the environment source tree (token n-gram overlap, n = 8) and report any match. The audit result is printed in the results appendix.",
+    "implementation": [
+      "ns_mawm/refinement.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/data.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-SCH-1",
+    "priority": "M",
+    "requirement": "- **FR-SCH-1 (M) \\[BASE\\]** Each environment shall declare a schema: an ordered list of `BlockSpec` covering every encoded entry of the joint observation exactly once.",
+    "implementation": [
+      "ns_mawm/schema.py"
+    ],
+    "checks": [
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-SCH-2",
+    "priority": "M",
+    "requirement": "- **FR-SCH-2 (M) \\[BASE\\]** A categorical block (e.g. one terrain cell) shall count as one semantic block regardless of its one-hot width.",
+    "implementation": [
+      "ns_mawm/schema.py"
+    ],
+    "checks": [
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-SCH-3",
+    "priority": "M",
+    "requirement": "- **FR-SCH-3 (M) \\[BASE\\]** Each scalar block shall declare its unit, training-set scaling (mean, std), evaluation tolerance \u03b5\\_b in native units, and a separate composition tolerance.",
+    "implementation": [
+      "ns_mawm/schema.py"
+    ],
+    "checks": [
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-SCH-4",
+    "priority": "S",
+    "requirement": "- **FR-SCH-4 (S) \\[NEW C7\\]** Each block shall declare an `owner` (agent index or `shared`) so diagnostics can be grouped by individual vs. cross-agent content.",
+    "implementation": [
+      "ns_mawm/schema.py"
+    ],
+    "checks": [
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-IF-1",
+    "priority": "M",
+    "requirement": "- **FR-IF-1 (M) \\[BASE\\]** A guard returning `UNKNOWN` shall be treated as abstention (empty mask).",
+    "implementation": [
+      "ns_mawm/rules.py",
+      "ns_mawm/sandbox.py"
+    ],
+    "checks": [
+      "tests/test_rule_validation.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-IF-2",
+    "priority": "M",
+    "requirement": "- **FR-IF-2 (M) \\[BASE\\]** Effects shall not mutate the context, access files, network, simulator objects or future labels. The engine shall enforce this by passing frozen copies and executing rule code in a restricted namespace.",
+    "implementation": [
+      "ns_mawm/rules.py",
+      "ns_mawm/sandbox.py"
+    ],
+    "checks": [
+      "tests/test_rule_validation.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-IF-3",
+    "priority": "M",
+    "requirement": "- **FR-IF-3 (M) \\[BASE\\]** Every assignment shall be validated for: known block name, finite value, legal category, complete categorical block, and membership in the rule's declared `writes`.",
+    "implementation": [
+      "ns_mawm/rules.py",
+      "ns_mawm/sandbox.py"
+    ],
+    "checks": [
+      "tests/test_rule_validation.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-IF-4",
+    "priority": "M",
+    "requirement": "- **FR-IF-4 (M) \\[BASE\\]** A predicate that only bounds a value (\"speed \u2264 v\\_max\") is not a PSTR and shall be rejected at load time unless it assigns an exact value.",
+    "implementation": [
+      "ns_mawm/rules.py",
+      "ns_mawm/sandbox.py"
+    ],
+    "checks": [
+      "tests/test_rule_validation.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-IF-5",
+    "priority": "M",
+    "requirement": "- **FR-IF-5 (M) \\[BASE\\]** Any change to guard, effect, reads or writes shall create a new version; identifiers stay stable.",
+    "implementation": [
+      "ns_mawm/rules.py",
+      "ns_mawm/sandbox.py"
+    ],
+    "checks": [
+      "tests/test_rule_validation.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-PSWM-1",
+    "priority": "M",
+    "requirement": "- **FR-PSWM-1 (M) \\[BASE\\]** Memory update m\\_t = U(m\\_{t\u22121}, \u03c9^j\\_t, a^j\\_{t\u22121}) shall run before rule execution. At t = 0 the previous action is a null symbol. U incorporates the current observation, invalidates contradicted facts and keeps only facts whose persistence is justified.",
+    "implementation": [
+      "ns_mawm/rules.py",
+      "ns_mawm/sandbox.py"
+    ],
+    "checks": [
+      "tests/test_rule_validation.py",
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-PSWM-2",
+    "priority": "M",
+    "requirement": "- **FR-PSWM-2 (M) \\[BASE\\]** Each cached fact shall carry its coordinate frame, age in steps, source step and source rule. A configurable maximum age shall expire facts.",
+    "implementation": [
+      "ns_mawm/rules.py",
+      "ns_mawm/sandbox.py"
+    ],
+    "checks": [
+      "tests/test_rule_validation.py",
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-PSWM-3",
+    "priority": "M",
+    "requirement": "- **FR-PSWM-3 (M) \\[BASE\\]** Rules shall run in the order of a declared acyclic stage graph. Within a stage, all rules read the same immutable snapshot. Derived facts become visible only to later stages. A cycle shall be a load-time error.",
+    "implementation": [
+      "ns_mawm/rules.py",
+      "ns_mawm/sandbox.py"
+    ],
+    "checks": [
+      "tests/test_rule_validation.py",
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-PSWM-4",
+    "priority": "M",
+    "requirement": "- **FR-PSWM-4 (M) \\[BASE\\]** Memory updates and derived facts shall be logged separately from next-observation assignments and shall not receive RVR.",
+    "implementation": [
+      "ns_mawm/rules.py",
+      "ns_mawm/sandbox.py"
+    ],
+    "checks": [
+      "tests/test_rule_validation.py",
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-PSWM-5",
+    "priority": "M",
+    "requirement": "- **FR-PSWM-5 (M) \\[BASE\\]** The engine shall return `PSWMOutput` (Section 3.2), including unaggregated proposals.",
+    "implementation": [
+      "ns_mawm/rules.py",
+      "ns_mawm/sandbox.py"
+    ],
+    "checks": [
+      "tests/test_rule_validation.py",
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-PSWM-6",
+    "priority": "M",
+    "requirement": "- **FR-PSWM-6 (M) \\[BASE\\]** Default policy is conservative block rejection: a block is accepted only if all applicable proposals agree (categorical: same category; scalar: within the composition tolerance). The canonical value is taken from the lowest rule id. Disagreeing blocks stay uncovered and are logged in `conflicts`.",
+    "implementation": [
+      "ns_mawm/rules.py",
+      "ns_mawm/sandbox.py"
+    ],
+    "checks": [
+      "tests/test_rule_validation.py",
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-PSWM-7",
+    "priority": "S",
+    "requirement": "- **FR-PSWM-7 (S) \\[BASE\\]** An alternative policy shall reject an entire library that produces any conflict on its validation cases. The active policy is stored in the library manifest.",
+    "implementation": [
+      "ns_mawm/rules.py",
+      "ns_mawm/sandbox.py"
+    ],
+    "checks": [
+      "tests/test_rule_validation.py",
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-PSWM-8",
+    "priority": "M",
+    "requirement": "- **FR-PSWM-8 (M) \\[BASE\\]** Partial categorical assignments shall be rejected; padding shall never be decoded as a category.",
+    "implementation": [
+      "ns_mawm/rules.py",
+      "ns_mawm/sandbox.py"
+    ],
+    "checks": [
+      "tests/test_rule_validation.py",
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-PSWM-9",
+    "priority": "M",
+    "requirement": "- **FR-PSWM-9 (M) \\[NEW C6\\]** The engine shall count, per rule and per block type: proposed blocks, accepted blocks, blocks rejected by conflict, and blocks abstained. These counts feed the conflict rate and the proposed-vs-accepted coverage reported in Section 6.",
+    "implementation": [
+      "ns_mawm/rules.py",
+      "ns_mawm/sandbox.py"
+    ],
+    "checks": [
+      "tests/test_rule_validation.py",
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-PSWM-10",
+    "priority": "M",
+    "requirement": "- **FR-PSWM-10 (M) \\[BASE\\]** Loading a library shall run: parse; type checks; schema checks on reads/writes; DAG check; sandbox check; and each rule's test cases (applicable, inapplicable, unknown-premise). Failures produce a structured report usable by prompt P2.",
+    "implementation": [
+      "ns_mawm/rules.py",
+      "ns_mawm/sandbox.py"
+    ],
+    "checks": [
+      "tests/test_rule_validation.py",
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-PSWM-11",
+    "priority": "M",
+    "requirement": "- **FR-PSWM-11 (M) \\[BASE\\]** An order-invariance test shall execute each library under at least three random rule orders within stages and assert identical `(Y, M)`.",
+    "implementation": [
+      "ns_mawm/rules.py",
+      "ns_mawm/sandbox.py"
+    ],
+    "checks": [
+      "tests/test_rule_validation.py",
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-PSWM-12",
+    "priority": "M",
+    "requirement": "- **FR-PSWM-12 (M) \\[NEW C7\\]** A rule filter shall enable or disable rules by id, by scope (individual / joint) or by tag, without editing rule code. The filter is part of the run configuration and the library hash.",
+    "implementation": [
+      "ns_mawm/rules.py",
+      "ns_mawm/sandbox.py"
+    ],
+    "checks": [
+      "tests/test_rule_validation.py",
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-PSWM-13",
+    "priority": "M",
+    "requirement": "- **FR-PSWM-13 (M) \\[NEW C4\\]** A standalone symbolic predictor mode shall return a full observation: accepted symbolic values on covered blocks and a declared fallback (copy of the current observation block, or the training-set mode/mean) on uncovered blocks. It implements the PSWM-only baseline.",
+    "implementation": [
+      "ns_mawm/rules.py",
+      "ns_mawm/sandbox.py"
+    ],
+    "checks": [
+      "tests/test_rule_validation.py",
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-PSWM-14",
+    "priority": "S",
+    "requirement": "- **FR-PSWM-14 (S) \\[BASE\\]** The engine shall support batched execution over many contexts. Rule code may be per-context Python; a vectorized path is optional (see NFR-PERF).",
+    "implementation": [
+      "ns_mawm/rules.py",
+      "ns_mawm/sandbox.py"
+    ],
+    "checks": [
+      "tests/test_rule_validation.py",
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-NN-1",
+    "priority": "M",
+    "requirement": "- **FR-NN-1 (M) \\[NEW C4\\]** Every backbone shall implement `init_state(prefix)`, `step(state, obs, joint_action, extra=None) \u2192 (block_outputs, state)` and expose per-block outputs (logits for categorical blocks, values for scalars). `extra` carries (M\\_t, Y\\_t) for Residual. Any backbone meeting this interface can be combined with all three strategies.",
+    "implementation": [
+      "ns_mawm/models.py",
+      "ns_mawm/mamba.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_pipeline.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-NN-2",
+    "priority": "M",
+    "requirement": "- **FR-NN-2 (M) \\[BASE\\]** Reference backbone (JOPM): z\\_t = Enc(flatten \u03c9^j\\_t); h\u0303\\_t = LSTM(h\u0303\\_{t\u22121}, \\[z\\_t, flatten a^j\\_t\\]); \u1e91\\_{t+1} = g(h\u0303\\_t); outputs = Dec(\u1e91\\_{t+1}). Enc, g and Dec are MLPs.",
+    "implementation": [
+      "ns_mawm/models.py",
+      "ns_mawm/mamba.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_pipeline.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-NN-3",
+    "priority": "M",
+    "requirement": "- **FR-NN-3 (M) \\[NEW C8\\]** All sizes shall live in configuration and be printed in the results appendix. Defaults: Enc 2\u00d7256, LSTM 256, g 2\u00d7256, Dec 2\u00d7256, ReLU, Adam lr 3e\u22124, batch 32 sequences \u00d7 50 steps, burn-in 10 steps.",
+    "implementation": [
+      "ns_mawm/models.py",
+      "ns_mawm/mamba.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_pipeline.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-NN-4",
+    "priority": "M",
+    "requirement": "- **FR-NN-4 (M) \\[NEW C8\\]** \"Update\" shall mean one optimizer step on one minibatch. Epochs, dataset passes and the number of updates per run shall be reported separately; checkpoints are indexed by update.",
+    "implementation": [
+      "ns_mawm/models.py",
+      "ns_mawm/mamba.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_pipeline.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-NN-5",
+    "priority": "M",
+    "requirement": "- **FR-NN-5 (M) \\[BASE\\]** Reward and termination heads shall condition on the recurrent state, use identical architectures and losses across all variants, and be trained only when policy learning is enabled.",
+    "implementation": [
+      "ns_mawm/models.py",
+      "ns_mawm/mamba.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_pipeline.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-NN-6",
+    "priority": "M",
+    "requirement": "- **FR-NN-6 (M) \\[BASE\\]** Scalar block loss: squared error in training-set-scaled units. Categorical block loss: cross-entropy (training); Brier-style error \u2016p\\_b \u2212 onehot(y\\_b)\u2016\u00b2/2 (evaluation).",
+    "implementation": [
+      "ns_mawm/models.py",
+      "ns_mawm/mamba.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_pipeline.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-NN-7",
+    "priority": "M",
+    "requirement": "- **FR-NN-7 (M) \\[BASE\\]** The data loss averages block losses over all blocks; every semantic block weighs the same regardless of encoding width.",
+    "implementation": [
+      "ns_mawm/models.py",
+      "ns_mawm/mamba.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_pipeline.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-INT-1",
+    "priority": "M",
+    "requirement": "- **FR-INT-1 (M) \\[BASE\\]** The neural model is trained on the data loss only. At inference, accepted symbolic blocks overwrite neural outputs.",
+    "implementation": [
+      "ns_mawm/models.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_pipeline.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-INT-2",
+    "priority": "M",
+    "requirement": "- **FR-INT-2 (M) \\[BASE\\]** The pre-enforcement output N\\_\u03b8(x\\_t) shall remain accessible for diagnostics (RVR\\_pre).",
+    "implementation": [
+      "ns_mawm/models.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_pipeline.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-INT-3",
+    "priority": "M",
+    "requirement": "- **FR-INT-3 (M) \\[BASE\\]** Corrected observations feed the next imagined step; the neural hidden state is not reset.",
+    "implementation": [
+      "ns_mawm/models.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_pipeline.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-INT-4",
+    "priority": "M",
+    "requirement": "- **FR-INT-4 (M) \\[BASE\\]** G\\_\u03b8 receives the full observation, the mask and the zero-padded symbolic target, so that an assigned zero is distinguishable from abstention.",
+    "implementation": [
+      "ns_mawm/models.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_pipeline.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-INT-5",
+    "priority": "M",
+    "requirement": "- **FR-INT-5 (M) \\[BASE\\]** The observation loss averages over uncovered blocks only; it is zero when every block is covered.",
+    "implementation": [
+      "ns_mawm/models.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_pipeline.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-INT-6",
+    "priority": "M",
+    "requirement": "- **FR-INT-6 (M) \\[BASE\\]** Output slots are dense (full shape). A fixed reduced-output implementation, if added, shall be a separately named variant.",
+    "implementation": [
+      "ns_mawm/models.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_pipeline.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-INT-7",
+    "priority": "M",
+    "requirement": "- **FR-INT-7 (M) \\[BASE\\]** Each accepted block contributes once to the symbolic loss, even when several rules assign it. Symbolic targets are constants with respect to \u03b8.",
+    "implementation": [
+      "ns_mawm/models.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_pipeline.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-INT-8",
+    "priority": "M",
+    "requirement": "- **FR-INT-8 (M) \\[BASE\\]** At inference, Regularization runs the PSWM only when diagnostics are requested.",
+    "implementation": [
+      "ns_mawm/models.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_pipeline.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-INT-9",
+    "priority": "M",
+    "requirement": "- **FR-INT-9 (M) \\[NEW C8\\]** \u03bb shall be swept over {0, 0.1, 0.3, 1, 3} on D\\_select. The selected value and the full sweep curve (MSE\\_25 and RVR per \u03bb) shall be reported.",
+    "implementation": [
+      "ns_mawm/models.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_pipeline.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-INT-10",
+    "priority": "M",
+    "requirement": "- **FR-INT-10 (M) \\[BASE\\]** A control model shall upweight covered blocks in the data loss by the same effective weight as Regularization (1 + \u03bb times the per-block share), using observed targets instead of symbolic ones. It isolates the effect of reweighting from the effect of rule content.",
+    "implementation": [
+      "ns_mawm/models.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_pipeline.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-ROLL-1",
+    "priority": "M",
+    "requirement": "- **FR-ROLL-1 (M) \\[BASE\\]** A rollout initializes neural state and symbolic memory from the same real prefix, then uses only imagined observations and replayed (evaluation) or sampled (policy learning) joint actions.",
+    "implementation": [
+      "ns_mawm/models.py"
+    ],
+    "checks": [
+      "tests/test_pipeline.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-ROLL-2",
+    "priority": "M",
+    "requirement": "- **FR-ROLL-2 (M) \\[BASE\\]** Predictions shall be decoded and re-encoded before being fed back; accepted assignments are preserved where the strategy enforces them.",
+    "implementation": [
+      "ns_mawm/models.py"
+    ],
+    "checks": [
+      "tests/test_pipeline.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-ROLL-3",
+    "priority": "M",
+    "requirement": "- **FR-ROLL-3 (M) \\[BASE\\]** Rules shall never read hidden state or real future observations to repair an imagined trajectory. Imagined contexts carry `origin = \"imagined\"`.",
+    "implementation": [
+      "ns_mawm/models.py"
+    ],
+    "checks": [
+      "tests/test_pipeline.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-ROLL-4",
+    "priority": "M",
+    "requirement": "- **FR-ROLL-4 (M) \\[BASE\\]** Rollouts stop at the horizon or at predicted termination.",
+    "implementation": [
+      "ns_mawm/models.py"
+    ],
+    "checks": [
+      "tests/test_pipeline.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-DIAG-1",
+    "priority": "M",
+    "requirement": "- **FR-DIAG-1 (M) \\[BASE\\]** RVR and RDD shall be computed per rule version from integer counts (violations, support). Zero support reports N/A, never 0.",
+    "implementation": [
+      "ns_mawm/diagnostics.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_rule_validation.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-DIAG-2",
+    "priority": "M",
+    "requirement": "- **FR-DIAG-2 (M) \\[BASE\\]** RVR uses each rule's own unaggregated proposals, so overlapping rules are diagnosed separately.",
+    "implementation": [
+      "ns_mawm/diagnostics.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_rule_validation.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-DIAG-3",
+    "priority": "M",
+    "requirement": "- **FR-DIAG-3 (M) \\[BASE\\]** A fixed diagnostic library R\\_eval shall be applied to every predictor, including those trained without rules.",
+    "implementation": [
+      "ns_mawm/diagnostics.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_rule_validation.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-DIAG-4",
+    "priority": "M",
+    "requirement": "- **FR-DIAG-4 (M) \\[BASE\\]** For Projection, both RVR\\_pre (on N\\_\u03b8) and RVR\\_out (on F\\_proj) shall be reported. Residual reports RVR\\_out only. When enforcement and diagnostic libraries coincide, RVR\\_out = 0 shall be labelled \"structural\" in every output table.",
+    "implementation": [
+      "ns_mawm/diagnostics.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_rule_validation.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-DIAG-5",
+    "priority": "S",
+    "requirement": "- **FR-DIAG-5 (S) \\[BASE\\]** An application-level variant (an application is violated if any assigned block disagrees) and macro, micro and union-mask aggregates shall be available, each named distinctly.",
+    "implementation": [
+      "ns_mawm/diagnostics.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_rule_validation.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-DIAG-6",
+    "priority": "M",
+    "requirement": "- **FR-DIAG-6 (M) \\[NEW C6\\]** For every evaluation set and library, the system shall report: proposed coverage, accepted coverage, fraction rejected by conflict, and per-rule conflict involvement.",
+    "implementation": [
+      "ns_mawm/diagnostics.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_rule_validation.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-DIAG-7",
+    "priority": "M",
+    "requirement": "- **FR-DIAG-7 (M) \\[NEW C6\\]** MSE\\_H shall be decomposed into covered-block error and uncovered-block error, using the accepted mask of a fixed reference library on the real context at each step. The decomposition shall be reported for every strategy, every rule source and every refinement version.",
+    "implementation": [
+      "ns_mawm/diagnostics.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_rule_validation.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-DIAG-8",
+    "priority": "M",
+    "requirement": "- **FR-DIAG-8 (M) \\[NEW C6\\]** To separate \"better predictions\" from \"abstaining on hard blocks\", the system shall also report MSE on a fixed block set: the union of blocks covered by any compared library version, evaluated identically for all versions.",
+    "implementation": [
+      "ns_mawm/diagnostics.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_rule_validation.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-DIAG-9",
+    "priority": "M",
+    "requirement": "- **FR-DIAG-9 (M) \\[BASE\\]** The principal cross-model comparison uses identical real contexts, recurrent warm-up, rule versions and masks.",
+    "implementation": [
+      "ns_mawm/diagnostics.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_rule_validation.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-DIAG-10",
+    "priority": "S",
+    "requirement": "- **FR-DIAG-10 (S) \\[BASE\\]** A second mode evaluates rules on each model's own imagined history and reports coverage per rollout step, flagging premises taken from imagined contexts.",
+    "implementation": [
+      "ns_mawm/diagnostics.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_rule_validation.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-DIAG-11",
+    "priority": "M",
+    "requirement": "- **FR-DIAG-11 (M) \\[BASE\\]** Rates shall be computed per run before aggregation across runs.",
+    "implementation": [
+      "ns_mawm/diagnostics.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_rule_validation.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-DIAG-12",
+    "priority": "M",
+    "requirement": "- **FR-DIAG-12 (M) \\[NEW C7\\]** Every rate and coverage figure shall be groupable by rule scope (individual vs joint) and by block owner (own agent vs other agent vs shared), so the contribution of cross-agent knowledge is visible.",
+    "implementation": [
+      "ns_mawm/diagnostics.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_rule_validation.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-DIAG-13",
+    "priority": "M",
+    "requirement": "- **FR-DIAG-13 (M) \\[BASE\\]** Each diagnostic report shall attach up to k (default 5) counterexamples per flagged rule from D\\_rev: rule version, context origin, guard result, assigned blocks, symbolic target, neural prediction, recorded observation.",
+    "implementation": [
+      "ns_mawm/diagnostics.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_rule_validation.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-DIAG-14",
+    "priority": "S",
+    "requirement": "- **FR-DIAG-14 (S) \\[NEW C1\\]** A rule-level dashboard (HTML export) shall show, per rule: support, RVR per model, RDD, coverage, conflicts and counterexamples, so the diagnostic contribution can be shown as a figure in the paper.",
+    "implementation": [
+      "ns_mawm/diagnostics.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_rule_validation.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-LLM-1",
+    "priority": "M",
+    "requirement": "- **FR-LLM-1 (M) \\[BASE\\]** Complete episodes shall be split before any training into D\\_train, D\\_rev, D\\_select and D\\_test (default 60/15/10/15 %). The split manifest (episode ids, seeds, hash) is stored and referenced by every run.",
+    "implementation": [
+      "ns_mawm/refinement.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/data.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-LLM-2",
+    "priority": "M",
+    "requirement": "- **FR-LLM-2 (M) \\[BASE\\]** D\\_test shall be inaccessible to prompts, revision, selection and hyperparameter tuning. The orchestrator enforces this with a read lock released only after the library and all hyperparameters are frozen.",
+    "implementation": [
+      "ns_mawm/refinement.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/data.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-LLM-3",
+    "priority": "M",
+    "requirement": "- **FR-LLM-3 (M) \\[BASE\\]** Every response shall follow one JSON schema: base\\_library\\_version, candidate\\_version, rule\\_id, rule\\_version, operation (add / revise / remove / retain), read\\_blocks, write\\_blocks, dependencies, guard\\_code, effect\\_code, assumptions, evidence\\_ids, change\\_summary, test\\_cases. Invalid JSON triggers a schema-repair retry that counts against the budget.",
+    "implementation": [
+      "ns_mawm/refinement.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/data.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-LLM-4",
+    "priority": "M",
+    "requirement": "- **FR-LLM-4 (M) \\[BASE\\]** P3 shall instruct the model not to lower RVR by copying neural outputs or by removing coverage without evidence; it may answer \"no change\".",
+    "implementation": [
+      "ns_mawm/refinement.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/data.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-LLM-5",
+    "priority": "M",
+    "requirement": "- **FR-LLM-5 (M) \\[BASE\\]** Counterexamples sent to P3 come from D\\_rev only and state whether premises came from a real or imagined context.",
+    "implementation": [
+      "ns_mawm/refinement.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/data.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-LLM-6",
+    "priority": "M",
+    "requirement": "- **FR-LLM-6 (M) \\[BASE\\]** Each executable candidate trains a Regularization model on D\\_train from the same seed-specific initialization and the same update budget as other candidates. Warm-starting, if used, is a separate variant with an equal-total-updates control.",
+    "implementation": [
+      "ns_mawm/refinement.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/data.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-LLM-7",
+    "priority": "M",
+    "requirement": "- **FR-LLM-7 (M) \\[BASE\\]** A candidate is admissible if it passes validation, its conflict rate \u2264 \u03c4\\_c, every enforced rule has RDD \u2264 \u03c4\\_rdd with support \u2265 S\\_min, and accepted coverage on D\\_select \u2265 the coverage floor. Defaults: \u03c4\\_c = 5 %, \u03c4\\_rdd = 10 %, S\\_min = 50, floor = 50 % of the handcrafted library's coverage. Rules below S\\_min are marked unvalidated and excluded from enforcement.",
+    "implementation": [
+      "ns_mawm/refinement.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/data.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-LLM-8",
+    "priority": "M",
+    "requirement": "- **FR-LLM-8 (M) \\[BASE\\]** Selection minimizes MSE\\_25 on D\\_select among admissible candidates; ties go to fewer rules, then lower generation cost.",
+    "implementation": [
+      "ns_mawm/refinement.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/data.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-LLM-9",
+    "priority": "M",
+    "requirement": "- **FR-LLM-9 (M) \\[BASE\\]** Budget: K revision rounds producing at most 4 candidates (default), plus a token budget. If no candidate is admissible, the system reports failure and falls back to the purely neural model.",
+    "implementation": [
+      "ns_mawm/refinement.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/data.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-LLM-10",
+    "priority": "M",
+    "requirement": "- **FR-LLM-10 (M) \\[BASE\\]** Every attempt, including failures and repair calls, is archived with code, diagnostics, prompts, responses, costs and the decision.",
+    "implementation": [
+      "ns_mawm/refinement.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/data.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-LLM-11",
+    "priority": "M",
+    "requirement": "- **FR-LLM-11 (M) \\[NEW C9\\]** Each prompt section shall carry a source tag: `public_docs`, `expert_statement`, `paper_description` or `simulator_source`. The default configuration forbids `simulator_source`.",
+    "implementation": [
+      "ns_mawm/refinement.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/data.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-LLM-13",
+    "priority": "S",
+    "requirement": "- **FR-LLM-13 (S) \\[NEW C9\\]** For Gridcraft, an additional run shall use a prompt written by a person who did not write the environment, from public documentation only.",
+    "implementation": [
+      "ns_mawm/refinement.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/data.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": true,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-LLM-14",
+    "priority": "M",
+    "requirement": "- **FR-LLM-14 (M) \\[BASE\\]** Human edits to LLM rules shall be saved as new versions with `source = \"human_edited\"` and counted in the results.",
+    "implementation": [
+      "ns_mawm/refinement.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/data.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-LLM-15",
+    "priority": "M",
+    "requirement": "- **FR-LLM-15 (M) \\[NEW C8\\]** A cost ledger shall record per call: model id and version, serving format, decoding settings, date, prompt and completion tokens, latency and GPU-seconds. Per-library and per-environment totals are reported alongside final-model training cost.",
+    "implementation": [
+      "ns_mawm/refinement.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/data.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-LLM-16",
+    "priority": "S",
+    "requirement": "- **FR-LLM-16 (S) \\[NEW C5\\]** The full refinement loop shall be repeated with at least 3 LLM sampling seeds per environment, so the variance of the generated library itself is measured, not only the variance of neural training.",
+    "implementation": [
+      "ns_mawm/refinement.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/data.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": true,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-ENV-1",
+    "priority": "M",
+    "requirement": "- **FR-ENV-1 (M) \\[BASE\\]** Each adapter maps native observations and actions to the schema, records episodes (joint observations, joint actions, rewards, termination flags, seeds) and reproduces an episode from its seed.",
+    "implementation": [
+      "ns_mawm/environments.py",
+      "ns_mawm/libraries.py",
+      "ns_mawm/validation.py"
+    ],
+    "checks": [
+      "tests/test_pipeline.py",
+      "tests/test_smac_contract.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-ENV-2",
+    "priority": "M",
+    "requirement": "- **FR-ENV-2 (M) \\[NEW C3\\]** Each adapter shall pin the benchmark repository commit, scenario or layout names, and any wrapper version. These appear in the run manifest.",
+    "implementation": [
+      "ns_mawm/environments.py",
+      "ns_mawm/libraries.py",
+      "ns_mawm/validation.py"
+    ],
+    "checks": [
+      "tests/test_pipeline.py",
+      "tests/test_smac_contract.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-ENV-3",
+    "priority": "M",
+    "requirement": "- **FR-ENV-3 (M) \\[NEW C3\\]** Each adapter shall document action-resolution semantics used by rules (collision handling, simultaneity, order of effects) and cite where each was taken from (FR-LLM-11 tags apply).",
+    "implementation": [
+      "ns_mawm/environments.py",
+      "ns_mawm/libraries.py",
+      "ns_mawm/validation.py"
+    ],
+    "checks": [
+      "tests/test_pipeline.py",
+      "tests/test_smac_contract.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-ENV-4",
+    "priority": "M",
+    "requirement": "- **FR-ENV-4 (M) \\[NEW C3\\]** The system shall generate a rule-library card per environment and rule source: number of PSTRs by scope, blocks written, proposed and accepted coverage, conflict rate, support and RDD per rule.",
+    "implementation": [
+      "ns_mawm/environments.py",
+      "ns_mawm/libraries.py",
+      "ns_mawm/validation.py"
+    ],
+    "checks": [
+      "tests/test_pipeline.py",
+      "tests/test_smac_contract.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-ENV-5",
+    "priority": "M",
+    "requirement": "- **FR-ENV-5 (M) \\[BASE\\]** Predator\u2013Prey uses a cooperative predator team against a fixed, declared prey controller, so the setting remains a Dec-POMDP.",
+    "implementation": [
+      "ns_mawm/environments.py",
+      "ns_mawm/libraries.py",
+      "ns_mawm/validation.py"
+    ],
+    "checks": [
+      "tests/test_pipeline.py",
+      "tests/test_smac_contract.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-ENV-6",
+    "priority": "M",
+    "requirement": "- **FR-ENV-6 (M) \\[NEW C3\\]** Each handcrafted rule shall have RDD measured on D\\_rev before use. A rule with RDD > \u03c4\\_rdd is fixed or removed, and the decision is logged.",
+    "implementation": [
+      "ns_mawm/environments.py",
+      "ns_mawm/libraries.py",
+      "ns_mawm/validation.py"
+    ],
+    "checks": [
+      "tests/test_pipeline.py",
+      "tests/test_smac_contract.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-ENV-7",
+    "priority": "M",
+    "requirement": "- **FR-ENV-7 (M) \\[NEW C3, C7\\]** Each environment shall have at least one joint rule, so the joint-rule ablation (FR-BASE-6) is defined everywhere.",
+    "implementation": [
+      "ns_mawm/environments.py",
+      "ns_mawm/libraries.py",
+      "ns_mawm/validation.py"
+    ],
+    "checks": [
+      "tests/test_pipeline.py",
+      "tests/test_smac_contract.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-BASE-6",
+    "priority": "M",
+    "requirement": "- **FR-BASE-6 (M) \\[NEW C7\\]** A5 shall report MSE\\_25 overall and on blocks owned by other agents or shared, plus RVR and coverage for the removed joint rules computed on the individual-only model.",
+    "implementation": [
+      "ns_mawm/experiments.py",
+      "ns_mawm/tuning.py",
+      "ns_mawm/campaign.py"
+    ],
+    "checks": [
+      "tests/test_completion.py",
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-ENV-8",
+    "priority": "S",
+    "requirement": "- **FR-ENV-8 (S) \\[NEW C3\\]** Low expected coverage (likely in SMACv2) shall be reported, not hidden: the paper table carries coverage next to MSE for every environment.",
+    "implementation": [
+      "ns_mawm/environments.py",
+      "ns_mawm/libraries.py",
+      "ns_mawm/validation.py"
+    ],
+    "checks": [
+      "tests/test_pipeline.py",
+      "tests/test_smac_contract.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-MB-1",
+    "priority": "M",
+    "requirement": "- **FR-MB-1 (M) \\[BASE\\]** The learner is multi-agent soft actor\u2013critic with centralized recurrent twin critics and local recurrent actors (BenchMARL MASAC/MAMBPO pipeline). A\\_MF uses real transitions only; A\\_MB adds imagined replay.",
+    "implementation": [
+      "ns_mawm/benchmarl.py",
+      "ns_mawm/mamba_control.py",
+      "ns_mawm/policies.py"
+    ],
+    "checks": [
+      "tests/test_benchmarl_bridge.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-MB-2",
+    "priority": "M",
+    "requirement": "- **FR-MB-2 (M) \\[BASE\\]** Critic target and actor objective:",
+    "implementation": [
+      "ns_mawm/benchmarl.py",
+      "ns_mawm/mamba_control.py",
+      "ns_mawm/policies.py"
+    ],
+    "checks": [
+      "tests/test_benchmarl_bridge.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-MB-3",
+    "priority": "M",
+    "requirement": "- **FR-MB-3 (M) \\[BASE\\]** Algorithm per iteration: collect real joint transitions; fit observation, reward and termination heads for a fixed number of updates; sample real prefixes; rebuild neural state and symbolic memory; generate imagined branches up to the rollout cap; update policies and critics from a fixed real/imagined replay ratio; evaluate in the real environment.",
+    "implementation": [
+      "ns_mawm/benchmarl.py",
+      "ns_mawm/mamba_control.py",
+      "ns_mawm/policies.py"
+    ],
+    "checks": [
+      "tests/test_benchmarl_bridge.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-MB-4",
+    "priority": "M",
+    "requirement": "- **FR-MB-4 (M) \\[BASE\\]** Entropy coefficient, target averaging rate, burn-in, update counts, rollout cap and replay ratio are identical across variants and stored in the run configuration. Defaults: rollout cap 5, real:imagined ratio 1:1.",
+    "implementation": [
+      "ns_mawm/benchmarl.py",
+      "ns_mawm/mamba_control.py",
+      "ns_mawm/policies.py"
+    ],
+    "checks": [
+      "tests/test_benchmarl_bridge.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-MB-5",
+    "priority": "M",
+    "requirement": "- **FR-MB-5 (M) \\[BASE\\]** Imagined transitions never count toward the real-interaction budget. Evaluation checkpoints every 25,000 real steps up to 10^6.",
+    "implementation": [
+      "ns_mawm/benchmarl.py",
+      "ns_mawm/mamba_control.py",
+      "ns_mawm/policies.py"
+    ],
+    "checks": [
+      "tests/test_benchmarl_bridge.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-MB-6",
+    "priority": "M",
+    "requirement": "- **FR-MB-6 (M) \\[BASE\\]** Reported metrics: return at the final budget, normalized AUC, and interactions to a return threshold reached at three consecutive checkpoints; non-attainment is counted explicitly.",
+    "implementation": [
+      "ns_mawm/benchmarl.py",
+      "ns_mawm/mamba_control.py",
+      "ns_mawm/policies.py"
+    ],
+    "checks": [
+      "tests/test_benchmarl_bridge.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-MB-7",
+    "priority": "S",
+    "requirement": "- **FR-MB-7 (S) \\[NEW C3\\]** The control experiment shall run on Gridcraft and on at least one additional environment (Overcooked recommended, being cheapest), so the downstream claim is not single-environment.",
+    "implementation": [
+      "ns_mawm/benchmarl.py",
+      "ns_mawm/mamba_control.py",
+      "ns_mawm/policies.py"
+    ],
+    "checks": [
+      "tests/test_benchmarl_bridge.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": true,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-MB-8",
+    "priority": "S",
+    "requirement": "- **FR-MB-8 (S) \\[NEW C4\\]** The control experiment shall include an external model-based MARL baseline (MAMBA) at the same real-interaction budget, run with its published hyperparameters.",
+    "implementation": [
+      "ns_mawm/benchmarl.py",
+      "ns_mawm/mamba_control.py",
+      "ns_mawm/policies.py"
+    ],
+    "checks": [
+      "tests/test_benchmarl_bridge.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": true,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-MB-9",
+    "priority": "M",
+    "requirement": "- **FR-MB-9 (M) \\[BASE\\]** Wall-clock time to each checkpoint shall be logged, so sample efficiency and compute cost can be reported together.",
+    "implementation": [
+      "ns_mawm/benchmarl.py",
+      "ns_mawm/mamba_control.py",
+      "ns_mawm/policies.py"
+    ],
+    "checks": [
+      "tests/test_benchmarl_bridge.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-BASE-1",
+    "priority": "M",
+    "requirement": "- **FR-BASE-1 (M) \\[NEW C4\\]** Every baseline shall use the same episode splits, the same evaluation protocol (MSE\\_25, covered/uncovered split) and an equal hyperparameter-tuning allowance (default 12 configurations on D\\_select).",
+    "implementation": [
+      "ns_mawm/experiments.py",
+      "ns_mawm/tuning.py",
+      "ns_mawm/campaign.py"
+    ],
+    "checks": [
+      "tests/test_completion.py",
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-BASE-2",
+    "priority": "M",
+    "requirement": "- **FR-BASE-2 (M) \\[NEW C4\\]** External baselines shall be wrapped to output the schema's semantic blocks, so the same block error applies. If a baseline predicts in a latent space, its decoder is trained to the schema.",
+    "implementation": [
+      "ns_mawm/experiments.py",
+      "ns_mawm/tuning.py",
+      "ns_mawm/campaign.py"
+    ],
+    "checks": [
+      "tests/test_completion.py",
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-BASE-3",
+    "priority": "M",
+    "requirement": "- **FR-BASE-3 (M) \\[BASE\\]** Iterative refinement conditions share the same candidate budget (4) and the same neural update budget.",
+    "implementation": [
+      "ns_mawm/experiments.py",
+      "ns_mawm/tuning.py",
+      "ns_mawm/campaign.py"
+    ],
+    "checks": [
+      "tests/test_completion.py",
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-BASE-4",
+    "priority": "M",
+    "requirement": "- **FR-BASE-4 (M) \\[NEW C1\\]** The paper's primary claim set shall be tied to A1, A2, A9 and A5 (diagnostics and multi-agent value); strategy comparisons are secondary.",
+    "implementation": [
+      "ns_mawm/experiments.py",
+      "ns_mawm/tuning.py",
+      "ns_mawm/campaign.py"
+    ],
+    "checks": [
+      "tests/test_completion.py",
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-BASE-5",
+    "priority": "M",
+    "requirement": "- **FR-BASE-5 (M) \\[NEW C6\\]** A9 shall be applied to Table-3-style results: each strategy and rule source is also scored on the fixed union block set (FR-DIAG-8).",
+    "implementation": [
+      "ns_mawm/experiments.py",
+      "ns_mawm/tuning.py",
+      "ns_mawm/campaign.py"
+    ],
+    "checks": [
+      "tests/test_completion.py",
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-EXP-1",
+    "priority": "M",
+    "requirement": "- **FR-EXP-1 (M) \\[BASE\\]** Runs are defined by YAML configuration. A run id is the hash of (configuration, library hash, split hash, seed, code commit).",
+    "implementation": [
+      "ns_mawm/campaign.py",
+      "ns_mawm/experiments.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-EXP-2",
+    "priority": "M",
+    "requirement": "- **FR-EXP-2 (M) \\[BASE\\]** Ten seeds per configuration, with separate random streams for initialization, data sampling and environment interaction. Seed i uses the same split and initialization stream across configurations, enabling paired comparisons.",
+    "implementation": [
+      "ns_mawm/campaign.py",
+      "ns_mawm/experiments.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-EXP-3",
+    "priority": "M",
+    "requirement": "- **FR-EXP-3 (M) \\[NEW C8\\]** Offline datasets shall be described and reported per environment: collection policies (mixture of random, scripted and partially trained MASAC policies, with proportions), number of episodes and transitions per split, and episode length. Default minimum: 1,000 episodes per environment.",
+    "implementation": [
+      "ns_mawm/campaign.py",
+      "ns_mawm/experiments.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-EXP-4",
+    "priority": "M",
+    "requirement": "- **FR-EXP-4 (M) \\[BASE\\]** Prediction uses H = 25 open-loop rollouts from held-out prefixes with replayed joint actions. Per-step error curves and per-run 25-step averages are both stored.",
+    "implementation": [
+      "ns_mawm/campaign.py",
+      "ns_mawm/experiments.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-EXP-5",
+    "priority": "M",
+    "requirement": "- **FR-EXP-5 (M) \\[BASE\\]** Training measurements: seconds per update, updates and seconds to a validation target (three consecutive checkpoints), inference latency per joint step. All timings on one declared hardware profile, warm-up excluded.",
+    "implementation": [
+      "ns_mawm/campaign.py",
+      "ns_mawm/experiments.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-EXP-6",
+    "priority": "M",
+    "requirement": "- **FR-EXP-6 (M) \\[NEW C8\\]** Total development cost = final-model training + LLM generation and refinement (ledger, FR-LLM-15) + candidate training. It is reported per environment.",
+    "implementation": [
+      "ns_mawm/campaign.py",
+      "ns_mawm/experiments.py",
+      "ns_mawm/training.py"
+    ],
+    "checks": [
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-STAT-1",
+    "priority": "M",
+    "requirement": "- **FR-STAT-1 (M) \\[NEW C5\\]** The independent unit is the seed. Results report mean, SD and a 95 % bootstrap confidence interval (10,000 resamples, percentile) of the mean.",
+    "implementation": [
+      "ns_mawm/statistics.py",
+      "ns_mawm/experiments.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-STAT-2",
+    "priority": "M",
+    "requirement": "- **FR-STAT-2 (M) \\[NEW C5\\]** Pairwise comparisons use the paired difference across seeds: Wilcoxon signed-rank test (primary) and paired t-test (secondary), plus Hedges' g and a bootstrap CI of the mean difference. Unpaired comparisons use Welch's t-test.",
+    "implementation": [
+      "ns_mawm/statistics.py",
+      "ns_mawm/experiments.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-STAT-3",
+    "priority": "M",
+    "requirement": "- **FR-STAT-3 (M) \\[NEW C5\\]** Comparisons are declared in advance per research question (RQ1 prediction, RQ2 refinement, RQ3 robustness/cost, RQ4 control). Holm\u2013Bonferroni correction is applied within each RQ family.",
+    "implementation": [
+      "ns_mawm/statistics.py",
+      "ns_mawm/experiments.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-STAT-4",
+    "priority": "M",
+    "requirement": "- **FR-STAT-4 (M) \\[NEW C5\\]** The report generator shall enforce wording: \"outperforms\" or \"reduces\" only when the Holm-adjusted p < 0.05; otherwise \"lower mean, not significant\". \"Confirms\" is never generated.",
+    "implementation": [
+      "ns_mawm/statistics.py",
+      "ns_mawm/experiments.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-STAT-5",
+    "priority": "S",
+    "requirement": "- **FR-STAT-5 (S) \\[NEW C5\\]** If a pre-declared primary comparison has a CI width above a declared tolerance after 10 seeds, the protocol allows extension to 20 seeds for all arms of that comparison; the extension rule is fixed before test access.",
+    "implementation": [
+      "ns_mawm/statistics.py",
+      "ns_mawm/experiments.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-STAT-6",
+    "priority": "M",
+    "requirement": "- **FR-STAT-6 (M) \\[BASE\\]** Threshold-crossing statistics use attained runs only and report attainment counts; no extrapolation beyond the budget.",
+    "implementation": [
+      "ns_mawm/statistics.py",
+      "ns_mawm/experiments.py"
+    ],
+    "checks": [
+      "tests/test_core.py",
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-REP-1",
+    "priority": "M",
+    "requirement": "- **FR-REP-1 (M) \\[BASE\\]** `raw_runs.csv` (one row per experiment, configuration, run, checkpoint, metric) is the single source; all tables and figures are rebuilt from it by one command.",
+    "implementation": [
+      "ns_mawm/reporting.py",
+      "ns_mawm/experiments.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-REP-2",
+    "priority": "M",
+    "requirement": "- **FR-REP-2 (M) \\[NEW C10\\]** Table notes shall be generated from metadata: when a Projection-pre row equals the purely neural row, the note states that Projection trains the same network on the same data and seeds; structural zero RVR rows carry the \"structural\" label.",
+    "implementation": [
+      "ns_mawm/reporting.py",
+      "ns_mawm/experiments.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-REP-3",
+    "priority": "M",
+    "requirement": "- **FR-REP-3 (M) \\[NEW C10\\]** For version traces, the table states which library was used for MSE: the full final library with only the traced rule swapped to the listed version. The harness shall build those swapped libraries automatically.",
+    "implementation": [
+      "ns_mawm/reporting.py",
+      "ns_mawm/experiments.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-REP-4",
+    "priority": "M",
+    "requirement": "- **FR-REP-4 (M) \\[NEW C3, C6\\]** The main prediction table shall carry, per environment, coverage and covered/uncovered error next to MSE\\_25, plus the significance marks from FR-STAT-3.",
+    "implementation": [
+      "ns_mawm/reporting.py",
+      "ns_mawm/experiments.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-REP-5",
+    "priority": "S",
+    "requirement": "- **FR-REP-5 (S) \\[NEW C1\\]** A rule-level figure (from FR-DIAG-14) shall be producible for the paper: RVR per model vs RDD per rule, sized by support.",
+    "implementation": [
+      "ns_mawm/reporting.py",
+      "ns_mawm/experiments.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-REPRO-1",
+    "priority": "M",
+    "requirement": "- **FR-REPRO-1 (M) \\[NEW C8\\]** Each run writes a manifest: run id, code commit, configuration, library hash, split hash, seeds, benchmark commits, hardware, start/end times, and output file hashes.",
+    "implementation": [
+      "ns_mawm/artifacts.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-REPRO-2",
+    "priority": "M",
+    "requirement": "- **FR-REPRO-2 (M) \\[NEW C8\\]** Each row of `raw_runs.csv` carries its run id, so measurements map to configurations without manual bookkeeping.",
+    "implementation": [
+      "ns_mawm/artifacts.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-REPRO-3",
+    "priority": "M",
+    "requirement": "- **FR-REPRO-3 (M) \\[BASE\\]** All rule versions, including rejected and failed candidates and human edits, are archived with code hash, parent version and evidence ids.",
+    "implementation": [
+      "ns_mawm/artifacts.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-REPRO-4",
+    "priority": "M",
+    "requirement": "- **FR-REPRO-4 (M) \\[NEW C8, C9\\]** Full prompts and responses, decoding settings, dates, token counts and the knowledge-source tags are archived per call.",
+    "implementation": [
+      "ns_mawm/artifacts.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-REPRO-5",
+    "priority": "S",
+    "requirement": "- **FR-REPRO-5 (S) \\[BASE\\]** PyTorch deterministic algorithms shall be enabled where available. Rerunning a run on the same hardware shall reproduce MSE\\_25 within 1 % relative; differences beyond that are logged as a reproducibility defect.",
+    "implementation": [
+      "ns_mawm/artifacts.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_core.py"
+    ],
+    "external_validation_required": true,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-REPRO-6",
+    "priority": "M",
+    "requirement": "- **FR-REPRO-6 (M) \\[BASE\\]** The PSWM engine is deterministic: the same context and library always produce the same output.",
+    "implementation": [
+      "ns_mawm/artifacts.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-REPRO-7",
+    "priority": "M",
+    "requirement": "- **FR-REPRO-7 (M) \\[NEW\\]** An export command shall build a double-blind package: it strips user names, home paths, git remotes and author metadata from code, configs, CSVs, notebooks and PDFs, and replaces own-repository URLs (e.g. the Gridcraft repository) with an anonymous mirror URL.",
+    "implementation": [
+      "ns_mawm/artifacts.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-REPRO-8",
+    "priority": "M",
+    "requirement": "- **FR-REPRO-8 (M) \\[NEW\\]** The export shall fail if a deny-list of strings (author names, usernames, institution names, own GitHub handle) appears anywhere in the package.",
+    "implementation": [
+      "ns_mawm/artifacts.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-REPRO-9",
+    "priority": "M",
+    "requirement": "- **FR-REPRO-9 (M) \\[NEW C3\\]** References to external benchmarks shall carry pinned commits; placeholders such as \"commit remains to be pinned\" shall make the export fail.",
+    "implementation": [
+      "ns_mawm/artifacts.py",
+      "ns_mawm/provenance.py",
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_refinement_reporting.py",
+      "tests/test_core.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "NFR-SEC-1",
+    "priority": "M",
+    "requirement": "| NFR-SEC-1 | Security | LLM rule code runs in a restricted namespace: no imports beyond an allow-list (math, numpy), no I/O, no network, CPU and time limit per call (default 50 ms per context) | M |",
+    "implementation": [
+      "ns_mawm/sandbox.py",
+      "ns_mawm/rules.py"
+    ],
+    "checks": [
+      "tests/test_rule_validation.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "NFR-SEC-2",
+    "priority": "M",
+    "requirement": "| NFR-SEC-2 | Security | Simulator objects are never passed to rule code; only frozen schema-level views | M |",
+    "implementation": [
+      "ns_mawm/sandbox.py",
+      "ns_mawm/rules.py"
+    ],
+    "checks": [
+      "tests/test_rule_validation.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "NFR-PERF-1",
+    "priority": "S",
+    "requirement": "| NFR-PERF-1 | Performance | PSWM execution adds \u2264 1 ms per joint step at batch 1 on Gridcraft (current: +0.35 ms for Projection) | S |",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [],
+    "external_validation_required": true,
+    "artifact_checks": [
+      "performance.NFR-PERF-1"
+    ]
+  },
+  {
+    "id": "NFR-PERF-2",
+    "priority": "S",
+    "requirement": "| NFR-PERF-2 | Performance | Batched diagnostic evaluation of 10^5 contexts per rule library completes in \u2264 10 min on one CPU node | S |",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [],
+    "external_validation_required": true,
+    "artifact_checks": [
+      "performance.NFR-PERF-2"
+    ]
+  },
+  {
+    "id": "NFR-PERF-3",
+    "priority": "S",
+    "requirement": "| NFR-PERF-3 | Performance | The full prediction grid (4 envs \u00d7 all conditions \u00d7 10 seeds) fits in \u2264 2,000 GPU-hours; the planner reports the estimate before launch | S |",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [],
+    "external_validation_required": true,
+    "artifact_checks": []
+  },
+  {
+    "id": "NFR-EXT-1",
+    "priority": "M",
+    "requirement": "| NFR-EXT-1 | Extensibility | A new environment needs only a schema, an adapter and a rule library; no core code changes | M |",
+    "implementation": [
+      "ns_mawm/extensions.py",
+      "ns_mawm/contracts.py",
+      "ns_mawm/api.py"
+    ],
+    "checks": [
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "NFR-EXT-2",
+    "priority": "M",
+    "requirement": "| NFR-EXT-2 | Extensibility | A new backbone needs only the FR-NN-1 interface | M |",
+    "implementation": [
+      "ns_mawm/extensions.py",
+      "ns_mawm/contracts.py",
+      "ns_mawm/api.py"
+    ],
+    "checks": [
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "NFR-EXT-3",
+    "priority": "S",
+    "requirement": "| NFR-EXT-3 | Extensibility | A new integration strategy registers through a plugin entry point | S |",
+    "implementation": [
+      "ns_mawm/extensions.py",
+      "ns_mawm/contracts.py",
+      "ns_mawm/api.py"
+    ],
+    "checks": [
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "NFR-QUAL-1",
+    "priority": "M",
+    "requirement": "| NFR-QUAL-1 | Quality | \u2265 90 % line coverage on the rule engine and diagnostics modules | M |",
+    "implementation": [
+      "ns_mawm/contracts.py",
+      "ns_mawm/api.py",
+      "ns_mawm/verification.py"
+    ],
+    "checks": [],
+    "external_validation_required": false,
+    "artifact_checks": [
+      "tests"
+    ]
+  },
+  {
+    "id": "NFR-QUAL-2",
+    "priority": "S",
+    "requirement": "| NFR-QUAL-2 | Quality | Type-checked (mypy strict) public interfaces | S |",
+    "implementation": [
+      "ns_mawm/contracts.py",
+      "ns_mawm/api.py",
+      "ns_mawm/verification.py"
+    ],
+    "checks": [],
+    "external_validation_required": false,
+    "artifact_checks": [
+      "types"
+    ]
+  },
+  {
+    "id": "NFR-USE-1",
+    "priority": "M",
+    "requirement": "| NFR-USE-1 | Usability | One command per stage: `collect`, `generate-rules`, `refine`, `train`, `evaluate`, `control`, `report`, `export-anon` | M |",
+    "implementation": [
+      "ns_mawm/cli.py"
+    ],
+    "checks": [
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "NFR-DOC-1",
+    "priority": "M",
+    "requirement": "| NFR-DOC-1 | Documentation | Each environment ships a rule-library card and a semantics note (FR-ENV-3, FR-ENV-4) | M |",
+    "implementation": [
+      "ns_mawm/validation.py"
+    ],
+    "checks": [
+      "tests/test_pipeline.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-VER-1",
+    "priority": "M",
+    "requirement": "- **FR-VER-1 (M)** Tests T-01 to T-18 run in CI on every commit; T-19 and T-20 run before each paper-results freeze.",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "FR-VER-2",
+    "priority": "M",
+    "requirement": "- **FR-VER-2 (M)** A release is accepted only if every \"M\" requirement in Sections 3\u201312 is traced to at least one passing test or a generated report artifact.",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_completion.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "B1",
+    "priority": "M",
+    "requirement": "| B1 | Purely neural JOPM | Reference backbone | \u2014 | M | All |",
+    "implementation": [
+      "ns_mawm/experiments.py",
+      "ns_mawm/tuning.py",
+      "ns_mawm/campaign.py"
+    ],
+    "checks": [
+      "tests/test_completion.py",
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "B2",
+    "priority": "M",
+    "requirement": "| B2 | MAMBA-style multi-agent world model | Is the JOPM a weak backbone? | C4 | M | All |",
+    "implementation": [
+      "ns_mawm/experiments.py",
+      "ns_mawm/tuning.py",
+      "ns_mawm/campaign.py"
+    ],
+    "checks": [
+      "tests/test_completion.py",
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "B3",
+    "priority": "S",
+    "requirement": "| B3 | Centralized Dreamer-style latent model | Same, single-agent family | C4 | S | All |",
+    "implementation": [
+      "ns_mawm/experiments.py",
+      "ns_mawm/tuning.py",
+      "ns_mawm/campaign.py"
+    ],
+    "checks": [
+      "tests/test_completion.py",
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "B4",
+    "priority": "M",
+    "requirement": "| B4 | PSWM-only with fallback (FR-PSWM-13) | How much does the neural part add? | C4 | M | All |",
+    "implementation": [
+      "ns_mawm/experiments.py",
+      "ns_mawm/tuning.py",
+      "ns_mawm/campaign.py"
+    ],
+    "checks": [
+      "tests/test_completion.py",
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "B5",
+    "priority": "S",
+    "requirement": "| B5 | LLM-written full transition code, no neural part | Is a code world model enough? | C2, C4 | S | Gridcraft, Overcooked |",
+    "implementation": [
+      "ns_mawm/experiments.py",
+      "ns_mawm/tuning.py",
+      "ns_mawm/campaign.py"
+    ],
+    "checks": [
+      "tests/test_completion.py",
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "B6",
+    "priority": "S",
+    "requirement": "| B6 | Best strategy on the B2 backbone | Do gains transfer to another backbone? | C1, C4 | S | All |",
+    "implementation": [
+      "ns_mawm/experiments.py",
+      "ns_mawm/tuning.py",
+      "ns_mawm/campaign.py"
+    ],
+    "checks": [
+      "tests/test_completion.py",
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "A1",
+    "priority": "M",
+    "requirement": "| A1 | Feature-weighting control | Is Regularization just reweighting? | C1 | M | All |",
+    "implementation": [
+      "ns_mawm/experiments.py",
+      "ns_mawm/tuning.py",
+      "ns_mawm/campaign.py"
+    ],
+    "checks": [
+      "tests/test_completion.py",
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "A2",
+    "priority": "M",
+    "requirement": "| A2 | Refinement without RVR (RDD + counterexamples kept) | Does per-rule RVR help? | C1, C5 | M | All |",
+    "implementation": [
+      "ns_mawm/experiments.py",
+      "ns_mawm/tuning.py",
+      "ns_mawm/campaign.py"
+    ],
+    "checks": [
+      "tests/test_completion.py",
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "A3",
+    "priority": "S",
+    "requirement": "| A3 | Refinement with RVR only (no RDD) | Which signal matters? | C1 | S | Gridcraft |",
+    "implementation": [
+      "ns_mawm/experiments.py",
+      "ns_mawm/tuning.py",
+      "ns_mawm/campaign.py"
+    ],
+    "checks": [
+      "tests/test_completion.py",
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "A4",
+    "priority": "M",
+    "requirement": "| A4 | One-shot initial generation | Value of iteration | \u2014 | M | All |",
+    "implementation": [
+      "ns_mawm/experiments.py",
+      "ns_mawm/tuning.py",
+      "ns_mawm/campaign.py"
+    ],
+    "checks": [
+      "tests/test_completion.py",
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "A5",
+    "priority": "M",
+    "requirement": "| A5 | Individual-only library (joint rules off) | Value of cross-agent knowledge | C7 | M | All |",
+    "implementation": [
+      "ns_mawm/experiments.py",
+      "ns_mawm/tuning.py",
+      "ns_mawm/campaign.py"
+    ],
+    "checks": [
+      "tests/test_completion.py",
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "A6",
+    "priority": "S",
+    "requirement": "| A6 | Joint-only library | Same, reverse | C7 | S | All |",
+    "implementation": [
+      "ns_mawm/experiments.py",
+      "ns_mawm/tuning.py",
+      "ns_mawm/campaign.py"
+    ],
+    "checks": [
+      "tests/test_completion.py",
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "A7",
+    "priority": "M",
+    "requirement": "| A7 | \u03bb sweep {0, 0.1, 0.3, 1, 3} | Sensitivity of Regularization | C8 | M | All |",
+    "implementation": [
+      "ns_mawm/experiments.py",
+      "ns_mawm/tuning.py",
+      "ns_mawm/campaign.py"
+    ],
+    "checks": [
+      "tests/test_completion.py",
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "A8",
+    "priority": "M",
+    "requirement": "| A8 | Corruption: random values, wrong guards, overclaimed masks, 0\u201340 % | Robustness to bad rules | \u2014 | M | Gridcraft, Overcooked |",
+    "implementation": [
+      "ns_mawm/experiments.py",
+      "ns_mawm/tuning.py",
+      "ns_mawm/campaign.py"
+    ],
+    "checks": [
+      "tests/test_completion.py",
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "A9",
+    "priority": "M",
+    "requirement": "| A9 | Coverage-matched evaluation across rule versions | Is the gain from abstention? | C6 | M | All |",
+    "implementation": [
+      "ns_mawm/experiments.py",
+      "ns_mawm/tuning.py",
+      "ns_mawm/campaign.py"
+    ],
+    "checks": [
+      "tests/test_completion.py",
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "A10",
+    "priority": "S",
+    "requirement": "| A10 | Number of agents varied (2, 4, 6 where supported) | Does the joint-rule benefit grow with n? | C7 | S | Gridcraft, Predator\u2013Prey |",
+    "implementation": [
+      "ns_mawm/experiments.py",
+      "ns_mawm/tuning.py",
+      "ns_mawm/campaign.py"
+    ],
+    "checks": [
+      "tests/test_completion.py",
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "A11",
+    "priority": "S",
+    "requirement": "| A11 | Documentation-only prompt | Knowledge leakage | C9 | S | Gridcraft |",
+    "implementation": [
+      "ns_mawm/experiments.py",
+      "ns_mawm/tuning.py",
+      "ns_mawm/campaign.py"
+    ],
+    "checks": [
+      "tests/test_completion.py",
+      "tests/test_refinement_reporting.py"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "T-01",
+    "priority": "M",
+    "requirement": "| T-01 | FR-IF-1 | Guard returns UNKNOWN | Empty mask, no proposal |",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_core.py::test_t01_unknown"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "T-02",
+    "priority": "M",
+    "requirement": "| T-02 | FR-PSWM-6 | Two rules assign different categories to one block | Block uncovered; both proposals in conflict log; counters updated |",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_core.py::test_t02_conflict"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "T-03",
+    "priority": "M",
+    "requirement": "| T-03 | FR-PSWM-11 | Shuffle rule order within stages, 3 orders | Identical (Y, M) |",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_core.py::test_t03_order"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "T-04",
+    "priority": "M",
+    "requirement": "| T-04 | FR-SCH-2 | One-hot block with 1 wrong entry vs 3 wrong entries | Each counts as one violation |",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_core.py::test_t04_semantic_blocks"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "T-05",
+    "priority": "M",
+    "requirement": "| T-05 | FR-IF-2, NFR-SEC-1 | Rule code tries to import os, write a file, mutate context | Load rejected or call aborted; context unchanged |",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_core.py::test_t05_sandbox"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "T-06",
+    "priority": "M",
+    "requirement": "| T-06 | FR-DIAG-4 | Projection and Residual with R\\_eval = enforced library | RVR\\_out = 0 and labelled structural |",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_core.py::test_t06_structural"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "T-07",
+    "priority": "M",
+    "requirement": "| T-07 | FR-DIAG-1 | Rule with zero support | Reported N/A |",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_core.py::test_t07_zero_support"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "T-08",
+    "priority": "M",
+    "requirement": "| T-08 | FR-INT-4 | Residual input with assigned 0 vs abstention | Different network inputs |",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_core.py::test_t08_assigned_zero"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "T-09",
+    "priority": "M",
+    "requirement": "| T-09 | FR-INT-7 | \u03bb = 0 | Regularization equals purely neural within 1e\u22126 on same seed |",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_core.py::test_t09_t10_losses"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "T-10",
+    "priority": "M",
+    "requirement": "| T-10 | FR-INT-10 | Symbolic targets equal to data | Regularization and feature-weighting losses coincide |",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_core.py::test_t09_t10_losses"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "T-11",
+    "priority": "M",
+    "requirement": "| T-11 | FR-PSWM-2 | Fact older than max age | Fact expired; dependent rule abstains |",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_core.py::test_t11_memory"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "T-12",
+    "priority": "M",
+    "requirement": "| T-12 | FR-LLM-2 | Scan all prompts and selection inputs for D\\_test episode ids and transitions | Zero matches |",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_core.py::test_t12_split_lock"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "T-13",
+    "priority": "M",
+    "requirement": "| T-13 | FR-LLM-12 | Insert a simulator-source snippet into a prompt | Leakage audit flags it |",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_pipeline.py::test_t13_leakage"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "T-14",
+    "priority": "M",
+    "requirement": "| T-14 | FR-STAT-2/3 | Compare statistics module to SciPy on fixed data | Identical p-values to 1e\u22129; Holm order correct |",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_core.py::test_t14_statistics"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "T-15",
+    "priority": "M",
+    "requirement": "| T-15 | FR-STAT-4 | Non-significant difference in a generated table | Text says \"lower mean, not significant\" |",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_core.py::test_t15_wording"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "T-16",
+    "priority": "M",
+    "requirement": "| T-16 | FR-REPRO-8 | Plant an author name in a CSV | Export fails with location |",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_core.py::test_t16_export"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "T-17",
+    "priority": "M",
+    "requirement": "| T-17 | FR-DIAG-7/8 | Synthetic case with known covered and uncovered errors | Decomposition sums to MSE\\_H; fixed-set MSE independent of mask |",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_core.py::test_t17_split_error"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "T-18",
+    "priority": "M",
+    "requirement": "| T-18 | FR-PSWM-12 | Disable joint rules by scope filter | Only individual proposals; library hash changes |",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [
+      "tests/test_core.py::test_t18_filter"
+    ],
+    "external_validation_required": false,
+    "artifact_checks": []
+  },
+  {
+    "id": "T-19",
+    "priority": "M",
+    "requirement": "| T-19 | Regression | Re-run Gridcraft neural, three strategies \u00d7 refined rules, 10 seeds | Each mean MSE\\_25 within the original 95 % CI (e.g. Regularization refined 0.055) |",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [],
+    "external_validation_required": true,
+    "artifact_checks": []
+  },
+  {
+    "id": "T-20",
+    "priority": "M",
+    "requirement": "| T-20 | Regression | Re-run terrain.shift trace v0\u2013v3 | RVR, RDD, coverage within original CIs |",
+    "implementation": [
+      "ns_mawm/verification.py"
+    ],
+    "checks": [],
+    "external_validation_required": true,
+    "artifact_checks": []
+  }
+]

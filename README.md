@@ -1,154 +1,61 @@
-# NS-MAWM World Models Experiments
+# NS-MAWM
 
-This repository is currently organized around reproducing and extending the
-World Models experiments from Ha and Schmidhuber, 2018. It contains modernized
-CarRacing and DoomRNN experiments plus a new mono-agent Gridcraft experiment.
+Minimal implementation of the [software requirements specification](NS-MAWM%20%E2%80%94%20Software%20Requirements%20Specification.md): observation schemas, partial symbolic rules, neural world models, rule diagnostics and refinement, and multi-agent control.
 
-The code is intentionally close to the historical experiment layout:
+## Setup
 
-```text
-carracing/   CarRacing World Models experiment
-doomrnn/     DoomTakeCover World Models experiment
-gridcraft/   mono-agent Gridcraft World Models experiment
-scripts/     environment setup scripts
-```
-
-The original reference is the Otoro tutorial:
-
-https://blog.otoro.net/2018/06/09/world-models-experiments/
-
-## Environment
-
-Use the existing virtual environment from the repository root:
+Use Python 3.11 or 3.12. Run commands from the repository root.
 
 ```bash
-python3.10 -m venv .venv
-./scripts/setup_worldmodels_env.sh
-./scripts/setup_gridcraft_env.sh
+git submodule update --init Overcooked_AI
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-ns-mawm.txt
 ```
 
-Python 3.10 is the primary validated target. Python 3.12 can work on current
-Linux/aarch64 systems, but CarRacing needs `box2d-py` to be built locally, so
-`swig` must be installed.
+For Gridcraft prediction alone, `python -m pip install -e '.[test]'` is sufficient. Full setup adds the vendored BenchMARL learner, the pinned Overcooked submodule, MPE2 PredatorPrey, and SMACv2. Live SMACv2 runs additionally require a separately installed StarCraft II client and maps. LLM refinement requires a configured OpenAI-compatible endpoint.
 
-The World Models dependencies are pinned in:
-
-```text
-requirements-worldmodels.txt
-```
-
-`Gridcraft/` is an editable external checkout installed with:
+## Short checks
 
 ```bash
-pip install -e Gridcraft
+python -m pytest tests -q
+python -m ns_mawm collect --config configs/smoke.yaml
+python -m ns_mawm train --config configs/smoke.yaml
 ```
 
-That external checkout is ignored by the root git repository. The
-`setup_gridcraft_env.sh` script clones `https://github.com/julien6/Gridcraft.git`
-automatically if `Gridcraft/` is missing. If you change Gridcraft itself, commit
-or inspect those changes from inside `Gridcraft/`.
+The smoke configuration collects eight short episodes and runs two optimizer updates. Tests also exercise short control runs when BenchMARL dependencies are installed. These commands do not launch the full experimental campaign.
 
-## CarRacing
+Other CLI stages include `evaluate`, `control`, `generate-rules`, `refine`, `tune`, `freeze`, `plan`, `report`, and `export-anon`; use `python -m ns_mawm --help`. Larger example configurations are in `configs/`. Generated datasets, checkpoints, and reports belong under ignored `outputs/`.
 
-From `carracing/`, pretrained controller evaluation follows the historical
-style:
+## Source layout
+
+- `ns_mawm/`: the unified framework and CLI.
+- `vGridcraft/`: the vectorized Gridcraft simulator, packaged by the root `pyproject.toml`.
+- `BenchMARL/`: vendored learner code, including the NS-MAWM integration; retain its license.
+- `Overcooked_AI/`: pinned upstream environment submodule; retain its license.
+- `tests/`, `configs/`, `.github/`: regression tests, example configurations, and CI.
+
+Optional Gridcraft rendering uses the upstream simulator. It is not needed for training:
 
 ```bash
-cd carracing
-../.venv/bin/python model.py render log/carracing.cma.16.64.best.json
-../.venv/bin/python model.py norender log/carracing.cma.16.64.best.json
+python -m pip install 'gridcraft @ git+https://github.com/julien6/Gridcraft.git@fb00bb4f6229dfc1d1857b939f5cb42ee50096a2'
 ```
 
-See [carracing/README.md](carracing/README.md) for experiment-specific notes.
+Legacy World Models, VAE/MDN-RNN checkpoint integrations, and the old experiment launchers are no longer part of the supported code paths. Control uses the shared NS-MAWM semantic model through BenchMARL by default; the small reference learner remains available for isolated tests.
 
-## DoomRNN
-
-From `doomrnn/`, use the same modernized environment and run the DoomRNN entry
-points from that directory:
+## Campaigns and acceptance
 
 ```bash
-cd doomrnn
-../.venv/bin/python model.py render log/doomrnn.cma.16.64.best.json
-../.venv/bin/python model.py norender log/doomrnn.cma.16.64.best.json
+python -m ns_mawm campaign --config configs/campaign-smoke.yaml
+python -m ns_mawm verify --config configs/verify.yaml
 ```
 
-See [doomrnn/README.md](doomrnn/README.md) for Doom-specific commands.
+`campaign` executes a serial dependency graph and resumes only jobs whose configuration, code, and output hashes still match. `configs/campaign-smoke.yaml` runs two tiny conditions. Production prediction configs expand to the SRS conditions; `control-gridcraft.yaml` and `control-overcooked.yaml` expand to MASAC, MAMBPO, and the published MAMBA learner. These production commands are intentionally not run during code verification.
 
-## Gridcraft
+`tune` supports baseline hyperparameters, the five-value lambda sweep, and strategy selection. `generate-code` is the full-transition-code baseline and rejects partial programs. `trace` consumes archived rule files through `rules.trace_versions`. The independent documentation condition A11 requires `llm.sections` tagged `public_docs` and an `llm.independent_author` attestation; it cannot fabricate independent human authorship.
 
-Gridcraft is a structured-observation World Models experiment. The VAE sees a
-fixed vector built from the local tabular observation, not pixels:
+The MAMBA compatibility port is under `ns_mawm/vendor/mamba`, with its upstream license, pinned commit, original file hashes, and listed adaptations. Prediction uses its discrete RSSM; external control uses its learner and SMAC preset. Explicit `control.mamba` overrides are recorded and are intended for bounded smoke tests. The centralized Dreamer-style model is an architectural baseline, not DreamerV3 reproduction.
 
-- local grid planes: terrain, block, entity
-- agent state vector: hp, hunger, inventory counts
-- mono-agent setup: `GridcraftConfig(num_agents=1)`
+`verify` writes a machine-readable acceptance report and test log. Missing StarCraft II, an LLM endpoint, original regression confidence intervals, or a full performance measurement stays **unverified**. Set `verify.live: true` only to request bounded live checks. T-19/T-20 comparison input is a JSON `criteria` list with `env`, `config_hash`, `metric`, `ci95`, and `seeds`, supplied as `verify.reference_results`; `verify.baseline_results` points to the corresponding run-level CSV. No reference results are invented.
 
-Install Gridcraft support:
-
-```bash
-./scripts/setup_gridcraft_env.sh
-```
-
-Run a short smoke pipeline:
-
-```bash
-cd gridcraft
-../.venv/bin/python env.py --steps 10
-../.venv/bin/python extract.py --episodes 2 --max-steps 20
-../.venv/bin/python vae_train.py --steps 5 --batch-size 8
-../.venv/bin/python series.py --limit 2
-../.venv/bin/python rnn_train.py --steps 5
-../.venv/bin/python train.py --generations 1 --max_len 5
-```
-
-Launch the full training-only workflow:
-
-```bash
-cd gridcraft
-./train_world_model.bash
-```
-
-Evaluate after training:
-
-```bash
-../.venv/bin/python model.py gridcraftreal norender log/gridcraftrnn.cma.16.64.best.json
-../.venv/bin/python model.py gridcraftreal render log/gridcraftrnn.cma.16.64.best.json
-../.venv/bin/python model.py gridcraftrnn render log/gridcraftrnn.cma.16.64.best.json
-```
-
-See [gridcraft/README.md](gridcraft/README.md) for all Gridcraft commands and
-tunable training parameters.
-
-## Generated Files
-
-Experiment outputs are intentionally ignored:
-
-- rollout archives: `record/`
-- latent series: `series/`
-- TensorFlow/checkpoint-style folders: `tf_*`
-- controller logs: `log/`
-- training logs: `trainlog/`
-
-Baseline model JSON files under Gridcraft `vae/`, `rnn/`, and `initial_z/` are
-not ignored, so a small runnable baseline can be kept with the experiment code.
-
-## Citation
-
-If you use the original World Models work in an academic setting, cite:
-
-```latex
-@incollection{ha2018worldmodels,
-  title = {Recurrent World Models Facilitate Policy Evolution},
-  author = {Ha, David and Schmidhuber, J{\"u}rgen},
-  booktitle = {Advances in Neural Information Processing Systems 31},
-  pages = {2451--2463},
-  year = {2018},
-  publisher = {Curran Associates, Inc.},
-  url = {https://papers.nips.cc/paper/7512-recurrent-world-models-facilitate-policy-evolution},
-  note = "\url{https://worldmodels.github.io}",
-}
-```
-
-## License
-
-MIT, following the original World Models Experiments repository.
+The requirement map is `ns_mawm/requirements.json`. A passing test is evidence for its exercised behavior; the report keeps scientific validation separate. Public extension contracts and adapters are checked with strict mypy. Generated artifacts remain under ignored `outputs/`.

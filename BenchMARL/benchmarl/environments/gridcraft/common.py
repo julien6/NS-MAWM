@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import copy
-import sys
-from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from torchrl.data import Composite
@@ -11,12 +9,8 @@ from torchrl.envs import EnvBase
 from benchmarl.environments.common import Task, TaskClass
 from benchmarl.utils import DEVICE_TYPING
 
-ROOT = Path(__file__).resolve().parents[4]
-sys.path.insert(0, str(ROOT / "vGridcraft"))
-
-from vgridcraft import GridcraftDreamTorchRLEnv, VGridcraftConfig
-from vgridcraft.torchrl_env import GridcraftTorchRLEnv
-
+from vGridcraft.vgridcraft import VGridcraftConfig
+from vGridcraft.vgridcraft.torchrl_env import GridcraftTorchRLEnv
 
 class GridcraftClass(TaskClass):
     def get_env_fun(
@@ -27,23 +21,7 @@ class GridcraftClass(TaskClass):
         device: DEVICE_TYPING,
     ) -> Callable[[], EnvBase]:
         config_dict = copy.deepcopy(self.config)
-        env_kind = str(config_dict.pop("env_kind", "real"))
-        checkpoint_dir = config_dict.pop("checkpoint_dir", None)
-        ns_variant = config_dict.pop("ns_variant", "neural")
-        ns_coverage = float(config_dict.pop("ns_coverage", 0.0))
-        start_noise = float(config_dict.pop("start_noise", 1.0))
         config = VGridcraftConfig(**config_dict)
-        if env_kind == "dream":
-            return lambda: GridcraftDreamTorchRLEnv(
-                num_envs=num_envs,
-                device=device,
-                seed=seed,
-                config=config,
-                checkpoint_dir=checkpoint_dir,
-                ns_variant=ns_variant,
-                ns_coverage=ns_coverage,
-                start_noise=start_noise,
-            )
         return lambda: GridcraftTorchRLEnv(
             num_envs=num_envs,
             device=device,

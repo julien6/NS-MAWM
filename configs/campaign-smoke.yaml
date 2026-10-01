@@ -1,0 +1,56 @@
+run:
+  experiment: prediction
+  env: gridcraft
+  seed: 0
+environment:
+  agents: 2
+  max_steps: 6
+  view_size: 3
+collection:
+  episodes: 8
+  seed: 0
+  split_seed: 0
+data: outputs/smoke/data
+output: outputs/campaign-smoke
+threads: 1
+world_model:
+  backbone: jopm_lstm
+  strategy: regularization
+  lambda: 0.3
+  sizes:
+    enc:
+    - 16
+    lstm: 16
+    g:
+    - 16
+    dec:
+    - 16
+  optim:
+    lr: 0.0003
+    batch_seqs: 1
+    seq_len: 2
+    burn_in: 1
+    updates: 2
+evaluation:
+  horizon: 3
+  fixed_block_set: union_of_versions
+  diagnostics_mode: both
+rules:
+  filter:
+    scope:
+    - individual
+    - joint
+stats:
+  resamples: 10000
+seeds: 1
+campaign:
+  conditions:
+  - B1
+  - B4
+tuning:
+  learning_rates:
+  - 0.0003
+  widths:
+  - 8
+  sequence_lengths:
+  - 2

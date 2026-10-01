@@ -1,0 +1,81 @@
+collection:
+  episodes: 1000
+  seed: 20000
+  split_seed: 0
+control:
+  alpha: 0.2
+  burn_in: 10
+  checkpoint_interval: 25000
+  gamma: 0.99
+  real_ratio: 0.5
+  real_steps: 1000000
+  rollout_cap: 5
+  tau: 0.005
+  learner: benchmarl
+data: outputs/overcooked/data
+environment:
+  agents: 2
+  max_steps: 400
+  layout: cramped_room
+evaluation:
+  fixed_block_set: union_of_versions
+  horizon: 25
+llm:
+  allowed_sources:
+  - public_docs
+  - expert_statement
+  - paper_description
+  endpoint: http://localhost:8000/v1
+  max_candidates: 4
+  model: qwen3.6-35b-a3b-nvfp4
+  temperature: 0.2
+  token_budget: 400000
+output: outputs/overcooked/control
+rules:
+  filter:
+    scope:
+    - individual
+    - joint
+run:
+  env: overcooked
+  experiment: control
+  seed: 0
+seeds: 10
+stats:
+  comparisons:
+  - env: overcooked
+    left_condition: MAMBPO
+    right_condition: MASAC
+    metric: final_return
+    family: RQ4
+    lower_is_better: false
+  - env: overcooked
+    left_condition: MAMBA
+    right_condition: MASAC
+    metric: final_return
+    family: RQ4
+    lower_is_better: false
+  resamples: 10000
+threads: 1
+world_model:
+  backbone: jopm_lstm
+  lambda: 1.0
+  optim:
+    batch_seqs: 32
+    burn_in: 10
+    checkpoint_interval: 1000
+    lr: 0.0003
+    seq_len: 50
+    updates: 20000
+  sizes:
+    dec:
+    - 256
+    - 256
+    enc:
+    - 256
+    - 256
+    g:
+    - 256
+    - 256
+    lstm: 256
+  strategy: regularization

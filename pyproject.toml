@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ns-mawm"
+version = "2.0.0"
+requires-python = ">=3.10"
+dependencies = ["torch>=2.2", "numpy>=1.24", "scipy>=1.10", "PyYAML>=6", "matplotlib>=3.7"]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-cov>=5", "mypy>=1.10"]
+predator-prey = ["mpe2 @ git+https://github.com/Farama-Foundation/MPE2.git@147a8e88b669de9f0b06d1947c44d5c380c570bb"]
+export = ["pymupdf>=1.24"]
+
+[project.scripts]
+ns-mawm = "ns_mawm.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["ns_mawm*", "vGridcraft*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.package-data]
+ns_mawm = ["requirements.json", "vendor/mamba/LICENSE", "vendor/mamba/UPSTREAM.json"]

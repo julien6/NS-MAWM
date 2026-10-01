@@ -7,10 +7,8 @@
 from __future__ import annotations
 
 import math
-import sys
 import warnings
 from dataclasses import dataclass, field, MISSING
-from pathlib import Path
 from typing import Dict, List, Tuple, Type
 
 import torch
@@ -35,12 +33,6 @@ class WorldModelConfig:
     batch_size: int = 256
     predict_delta_obs: bool = True
     predict_done: bool = False
-    external_model_type: str = "mlp"
-    external_checkpoint_dir: str | None = None
-    external_ns_variant: str = "neural"
-    external_ns_coverage: float = 0.0
-    external_num_agents: int = 1
-    external_enabled_pstr_rules: str = ""
 
 
 @dataclass
@@ -213,7 +205,6 @@ class MBMappo(Mappo):
 
         self._world_models: Dict[str, WorldModel] = {}
         self._world_model_trainers: Dict[str, WorldModelTrainer] = {}
-        self._external_world_models: Dict[str, Dict] = {}
         self._pending_world_model_state: Dict = {}
         self.latest_metrics: Dict[str, torch.Tensor] = {}
 
@@ -235,22 +226,15 @@ class MBMappo(Mappo):
             if data is None:
                 return processed_batch
             obs, action, next_obs, reward, done = data
-            if self._uses_external_gridcraft_world_model():
-                metrics = {
-                    "mb_mappo/external_world_model_used": torch.tensor(1.0, device=self.device),
-                    "mb_mappo/world_model_loss": torch.tensor(0.0, device=self.device),
-                }
-                imagined_target = self._estimate_external_gridcraft_target(group, processed_batch, obs, action)
-            else:
-                trainer = self._get_world_model_trainer(group, obs, action)
-                metrics = trainer.train(obs, action, next_obs, reward, done)
-                imagined_target = self._estimate_imagined_target(
-                    group=group,
-                    batch=processed_batch,
-                    obs=obs,
-                    action=action,
-                    trainer=trainer,
-                )
+            trainer = self._get_world_model_trainer(group, obs, action)
+            metrics = trainer.train(obs, action, next_obs, reward, done)
+            imagined_target = self._estimate_imagined_target(
+                group=group,
+                batch=processed_batch,
+                obs=obs,
+                action=action,
+                trainer=trainer,
+            )
             if imagined_target is None:
                 return processed_batch
             self._mix_value_targets(group, processed_batch, imagined_target)
@@ -270,13 +254,6 @@ class MBMappo(Mappo):
                 UserWarning,
             )
         return processed_batch
-
-    def _uses_external_gridcraft_world_model(self) -> bool:
-        return (
-            self.world_model_config.enabled
-            and self.world_model_config.external_model_type == "gridcraft_vae_mdn_rnn"
-            and bool(self.world_model_config.external_checkpoint_dir)
-        )
 
     def _get_observation_keys(self, group: str):
         return list(self.observation_spec[group].keys(True, True))
@@ -355,45 +332,6 @@ class MBMappo(Mappo):
                 )
         return self._world_model_trainers[group]
 
-    def _get_external_gridcraft_world_model(self, group: str) -> Dict:
-        if group in self._external_world_models:
-            return self._external_world_models[group]
-        checkpoint_dir = Path(self.world_model_config.external_checkpoint_dir).expanduser()
-        if not checkpoint_dir.is_absolute():
-            checkpoint_dir = Path.cwd() / checkpoint_dir
-        vae_path = checkpoint_dir / "vae.pt"
-        rnn_path = checkpoint_dir / "rnn.pt"
-        if not vae_path.exists() or not rnn_path.exists():
-            raise FileNotFoundError(f"Missing external Gridcraft world model checkpoints: {vae_path} / {rnn_path}")
-        root = checkpoint_dir
-        for parent in checkpoint_dir.parents:
-            if (parent / "gridcraft").exists() and (parent / "vGridcraft").exists():
-                root = parent
-                break
-        gridcraft_dir = root / "gridcraft"
-        if str(gridcraft_dir) not in sys.path:
-            sys.path.insert(0, str(gridcraft_dir))
-        from torch_world_model import TorchGridcraftRNN, TorchGridcraftVAE
-        from run_benchmarl_dyna_gridcraft import apply_ns_mawm_to_latent_step
-
-        vae = TorchGridcraftVAE().to(self.device)
-        rnn = TorchGridcraftRNN().to(self.device)
-        vae.load_state_dict(torch.load(vae_path, map_location=self.device))
-        rnn.load_state_dict(torch.load(rnn_path, map_location=self.device), strict=False)
-        vae.eval()
-        rnn.eval()
-        for param in vae.parameters():
-            param.requires_grad_(False)
-        for param in rnn.parameters():
-            param.requires_grad_(False)
-        state = {
-            "vae": vae,
-            "rnn": rnn,
-            "apply_ns": apply_ns_mawm_to_latent_step,
-        }
-        self._external_world_models[group] = state
-        return state
-
     @torch.no_grad()
     def _estimate_imagined_target(
         self,
@@ -441,64 +379,6 @@ class MBMappo(Mappo):
         bootstrap_value = self._critic_value_from_flat_obs(group, batch, obs_rollout)
         returns = returns + discount * bootstrap_value
         returns = returns.reshape(env_batch, num_branches, n_agents, 1).mean(dim=1).reshape(env_batch * n_agents, 1)
-        return returns
-
-    @torch.no_grad()
-    def _estimate_external_gridcraft_target(
-        self,
-        group: str,
-        batch: TensorDictBase,
-        obs: torch.Tensor,
-        action: torch.Tensor,
-    ) -> torch.Tensor:
-        state = self._get_external_gridcraft_world_model(group)
-        vae = state["vae"]
-        rnn = state["rnn"]
-        apply_ns = state["apply_ns"]
-        horizon = self.imagined_rollouts_config.horizon
-        num_branches = max(1, self.imagined_rollouts_config.num_branches)
-        gamma = self.experiment_config.gamma
-        num_agents = max(1, int(self.world_model_config.external_num_agents))
-        env_batch, obs_rollout = _expand_env_branch_agent(
-            obs, n_agents=num_agents, num_branches=num_branches
-        )
-        z = vae.encode(obs_rollout, sample=False)
-        returns = torch.zeros(z.shape[0], 1, device=self.device)
-        discount = torch.ones_like(returns)
-        rnn_state = None
-        ns_memory = None
-        for _ in range(horizon):
-            current_obs = vae.decode(z)
-            action_rollout = self._sample_encoded_action_from_flat_obs(
-                group, batch, current_obs
-            )
-            if action_rollout.shape[-1] > 1:
-                action_index = action_rollout.argmax(dim=-1)
-            else:
-                action_index = action_rollout.reshape(-1).long()
-            next_z, reward, done_logit, rnn_state = rnn.step(z, action_index, rnn_state, deterministic=True)
-            if self.world_model_config.external_ns_variant in ("projection", "residual"):
-                next_z, ns_memory, _ = apply_ns(
-                    vae=vae,
-                    current_z=z,
-                    predicted_z=next_z,
-                    action=action_index,
-                    ns_memory=ns_memory,
-                    ns_variant=self.world_model_config.external_ns_variant,
-                    ns_coverage=float(self.world_model_config.external_ns_coverage),
-                    num_agents=num_agents,
-                    device=torch.device(self.device),
-                    enabled_pstr_rules=self.world_model_config.external_enabled_pstr_rules,
-                )
-            done_prob = torch.sigmoid(done_logit).reshape(-1, 1)
-            reward = reward.reshape(-1, 1)
-            returns = returns + discount * reward
-            discount = discount * gamma * (1.0 - done_prob)
-            z = next_z
-        imagined_obs = vae.decode(z)
-        bootstrap_value = self._critic_value_from_flat_obs(group, batch, imagined_obs)
-        returns = returns + discount * bootstrap_value
-        returns = returns.reshape(env_batch, num_branches, num_agents, 1).mean(dim=1).reshape(env_batch * num_agents, 1)
         return returns
 
     def _flat_obs_to_tensordict(

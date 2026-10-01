@@ -1,0 +1,29 @@
+{
+  "url": "https://github.com/jbr-ai-labs/mamba",
+  "commit": "2c97258f71bf1c421c40ce14fd2f7cc3fe7fe19f",
+  "files": {
+    "environments.py": "0c21414aa1a645cf0185cc429a324eab760f7f2046cce7a63f29dad03af09afa",
+    "configs/Config.py": "9fe92915b0d30348ad1b9d14ab4dcb2a255237ad5827132387a7892d9a120123",
+    "configs/dreamer/DreamerAgentConfig.py": "cdebd33c6421fbecd7661f3f768096cf307d969eeb5c1bd7c4f6d09d18e49161",
+    "configs/dreamer/optimal/starcraft/LearnerConfig.py": "81ed9390a9ed8911720609f19d681aeef6470930202e1ed4223ccc70378e269d",
+    "configs/dreamer/optimal/starcraft/AgentConfig.py": "047d017569d24314ee37e6240274084668b42f9696846c08966967317e508b95",
+    "networks/transformer/layers.py": "cb4ed00064226edfcda30ca0bb7b51637443d73b4fa50a6393862aec9fd7f0db",
+    "networks/dreamer/dense.py": "2d9df2de6a3be5a664c1f529537a7d06bf350dfc2651a38bfb6525345acbde7f",
+    "networks/dreamer/vae.py": "a5c1289d4f1f74d906bef8ff1b6ee91a20d0fba48c63def911d6cc4b3cf11364",
+    "networks/dreamer/critic.py": "d1082c90de91f099f9a5513294de3bef34b887509b3e529968574094f8f9d549",
+    "networks/dreamer/rnns.py": "9b3be1107cfef471a2924399c5302be5a2842b02c850e3b0578178bd6bf001e0",
+    "networks/dreamer/utils.py": "6dcf65b6786d2ee61f086f0c240e35eb31c18897d63f1c746bcf0bb9675fe3cf",
+    "networks/dreamer/action.py": "90fb8f6801668bc766a24a1be6edec89241085ba91deba0800927a41ebaf2078",
+    "agent/models/DreamerModel.py": "a6b12f68a722b1254f2fe4dd5b687a2cfdaea577f2526cf7089432165c88d534",
+    "agent/optim/loss.py": "bbdacb6c0f2334e25390ce43c5ed94c4683a4beff85947594df2b84cef032713",
+    "agent/optim/utils.py": "d1f70658ddefb4e7cf2058b1e9eb50e53342f837bd0d8b58399116adb8008b28",
+    "agent/utils/params.py": "52b59bc345a1086960a4892779eccb1dba3ad72b895326ce2992e8313a1bab7f",
+    "agent/memory/DreamerMemory.py": "68ecfc88f5fa9b631d1a94ea96cd10181540e6d80e6d2c4cf5d84e1c77bf7699",
+    "agent/learners/DreamerLearner.py": "f87bffe4c1d982904c97606aa548fb7d1323a6277264f5543982bcbbcf5184a1"
+  },
+  "changes": [
+    "Package-qualified imports",
+    "Local metric sink replaces mandatory W&B service",
+    "Disable PyTorch nested tensor optimization for compatibility"
+  ]
+}

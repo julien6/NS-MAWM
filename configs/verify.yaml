@@ -1,0 +1,10 @@
+output: outputs/verification
+verify:
+  checks:
+  - preflight
+  - traceability
+  - tests
+  - types
+  - performance
+  - regression
+  performance_contexts: 100

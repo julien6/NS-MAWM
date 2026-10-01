@@ -1,0 +1,6 @@
+-e .[test]
+-e ./BenchMARL
+mpe2 @ git+https://github.com/Farama-Foundation/MPE2.git@147a8e88b669de9f0b06d1947c44d5c380c570bb
+-e ./Overcooked_AI
+# Requires a separately installed StarCraft II client for live SMACv2 tests.
+smacv2 @ git+https://github.com/oxwhirl/smacv2.git@577ab5a2cff2391f8df582da5731ea9cd6adf3c6

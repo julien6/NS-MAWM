@@ -1,0 +1,108 @@
+run:
+  experiment: prediction
+  env: gridcraft
+  seed: 0
+environment:
+  agents: 2
+  max_steps: 500
+  view_size: 7
+collection:
+  episodes: 1000
+  seed: 20000
+  split_seed: 0
+data: outputs/gridcraft/data
+output: outputs/gridcraft/runs
+threads: 1
+seeds: 10
+world_model:
+  backbone: jopm_lstm
+  strategy: regularization
+  lambda: 1.0
+  sizes:
+    enc:
+    - 256
+    - 256
+    lstm: 256
+    g:
+    - 256
+    - 256
+    dec:
+    - 256
+    - 256
+  optim:
+    lr: 0.0003
+    batch_seqs: 32
+    seq_len: 50
+    burn_in: 10
+    updates: 20000
+    checkpoint_interval: 1000
+rules:
+  filter:
+    scope:
+    - individual
+    - joint
+evaluation:
+  horizon: 25
+  fixed_block_set: union_of_versions
+  diagnostics_mode: both
+llm:
+  endpoint: http://localhost:8000/v1
+  model: qwen3.6-35b-a3b-nvfp4
+  temperature: 0.2
+  max_candidates: 4
+  token_budget: 400000
+  allowed_sources:
+  - public_docs
+  - expert_statement
+  - paper_description
+  seeds:
+  - 0
+  - 1
+  - 2
+stats:
+  resamples: 10000
+  comparisons:
+  - env: gridcraft
+    left_condition: regularization
+    right_condition: B1
+    metric: mse
+    family: RQ1
+  - env: gridcraft
+    left_condition: B2
+    right_condition: B1
+    metric: mse
+    family: RQ1
+  - env: gridcraft
+    left_condition: B6
+    right_condition: B2
+    metric: mse
+    family: RQ1
+  - env: gridcraft
+    left_condition: regularization
+    right_condition: A1
+    metric: mse
+    family: RQ1
+  - env: gridcraft
+    left_condition: regularization
+    right_condition: A5
+    metric: mse
+    family: RQ1
+  - env: gridcraft
+    left_condition: refined
+    right_condition: A2
+    metric: mse
+    family: RQ2
+  - env: gridcraft
+    left_condition: refined
+    right_condition: A4
+    metric: mse
+    family: RQ2
+control:
+  real_steps: 1000000
+  checkpoint_interval: 25000
+  rollout_cap: 5
+  real_ratio: 0.5
+  gamma: 0.99
+  alpha: 0.2
+  tau: 0.005
+  burn_in: 10

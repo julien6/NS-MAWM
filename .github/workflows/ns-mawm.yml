@@ -1,0 +1,21 @@
+name: NS-MAWM code acceptance
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements-ns-mawm.txt
+      - run: python -m ns_mawm collect --config configs/smoke.yaml
+      - run: python -m ns_mawm train --config configs/smoke.yaml
+      - run: python -m ns_mawm campaign --config configs/campaign-smoke.yaml
+      - run: python -m ns_mawm verify --config configs/verify.yaml > /tmp/acceptance-summary.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: acceptance
+          path: outputs/verification/
